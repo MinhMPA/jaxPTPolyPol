@@ -1,0 +1,261 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.2' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[      9441,        251]
+NotebookOptionsPosition[      8866,        233]
+NotebookOutlinePosition[      9261,        249]
+CellTagsIndexPosition[      9218,        246]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+
+Cell[CellGroupData[{
+Cell[BoxData[{
+ RowBox[{
+  RowBox[{"Mu2Derivation", "[", 
+   RowBox[{"theta1_", ",", "theta12_", ",", "phi_"}], "]"}], ":=", 
+  RowBox[{"Module", "[", 
+   RowBox[{
+    RowBox[{"{", 
+     RowBox[{
+     "x", ",", "y", ",", "z", ",", "k2PrimeHat", ",", "Ry", ",", "k2Hat", ",",
+       "mu1", ",", "mu2"}], "}"}], ",", "\[IndentingNewLine]", 
+    RowBox[{"(*", 
+     RowBox[{"Set", " ", "up", " ", "the", " ", "coordinate", " ", "system"}],
+      "*)"}], "\[IndentingNewLine]", 
+    RowBox[{
+     RowBox[{
+      RowBox[{"x", "=", 
+       RowBox[{"{", 
+        RowBox[{"1", ",", "0", ",", "0"}], "}"}]}], ";", 
+      "\[IndentingNewLine]", 
+      RowBox[{"y", "=", 
+       RowBox[{"{", 
+        RowBox[{"0", ",", "1", ",", "0"}], "}"}]}], ";", 
+      "\[IndentingNewLine]", 
+      RowBox[{"z", "=", 
+       RowBox[{"{", 
+        RowBox[{"0", ",", "0", ",", "1"}], "}"}]}], ";", 
+      "\[IndentingNewLine]", 
+      RowBox[{"(*", 
+       RowBox[{
+        RowBox[{"We", " ", "assume", " ", "that"}], ",", " ", 
+        RowBox[{"at", " ", 
+         RowBox[{"first", ":", "\[IndentingNewLine]", 
+          RowBox[{
+           RowBox[{
+            RowBox[{"1", "/", " ", "k1"}], " ", "aligns", " ", "with", " ", 
+            "the", " ", "z"}], "-", "axis"}]}]}], ",", " ", 
+        RowBox[{
+         RowBox[{
+          RowBox[{"i", ".", "e", ".", " ", "k1PrimeHat"}], "=", "zhat"}], ";",
+          "\[IndentingNewLine]", "  ", 
+         RowBox[{
+          RowBox[{"2", "/", " ", "theta1"}], " ", "=", " ", 
+          RowBox[{
+           RowBox[{
+            RowBox[{"[", 
+             RowBox[{"k1PrimeHat", ",", "nhat"}], "]"}], " ", "with", " ", 
+            "the", " ", "LOS", " ", "direction", " ", "nhat", " ", "lies", " ",
+             "in", " ", "the", " ", "x"}], "-", 
+           RowBox[{"z", " ", "plane"}]}]}], ";", "\[IndentingNewLine]", "  ", 
+         
+         RowBox[{
+          RowBox[{"3", "/", " ", "theta12"}], " ", "=", " ", 
+          RowBox[{"[", 
+           RowBox[{"k1PrimeHat", ",", "k2PrimeHat"}], "]"}]}], ";", 
+         "\[IndentingNewLine]", "  ", 
+         RowBox[{
+          RowBox[{"4", "/", " ", "phi"}], " ", "is", " ", "the", " ", 
+          "azimuthal", " ", "angle", " ", "of", " ", "k2", " ", "revolving", " ",
+           "around", " ", "k1"}]}], ",", " ", 
+        RowBox[{
+         RowBox[{
+          RowBox[{"i", ".", "e", ".", " ", "around"}], " ", "the", " ", "z"}],
+          "-", 
+         RowBox[{"axis", "."}]}]}], "\[IndentingNewLine]", "*)"}], 
+      "\[IndentingNewLine]", 
+      RowBox[{"k2PrimeHat", "=", 
+       RowBox[{
+        RowBox[{
+         RowBox[{"Sin", "[", "theta12", "]"}], " ", 
+         RowBox[{"(", 
+          RowBox[{
+           RowBox[{
+            RowBox[{"Cos", "[", "phi", "]"}], " ", "x"}], "+", 
+           RowBox[{
+            RowBox[{"Sin", "[", "phi", "]"}], " ", "y"}]}], ")"}]}], "+", 
+        RowBox[{
+         RowBox[{"Cos", "[", "theta12", "]"}], " ", "z"}]}]}], ";", 
+      "\[IndentingNewLine]", 
+      RowBox[{"(*", 
+       RowBox[{
+        RowBox[{
+         RowBox[{
+         "Rotate", " ", "coordinate", " ", "system", " ", "around", " ", 
+          "y"}], "-", 
+         RowBox[{"axis", " ", "by", " ", "theta1"}]}], ",", " ", 
+        RowBox[{
+         RowBox[{"according", " ", "to", " ", "the", " ", "right"}], "-", 
+         RowBox[{"hand", " ", "rule"}]}], ",", " ", 
+        RowBox[{
+         RowBox[{
+         "to", " ", "align", " ", "nhat", " ", "with", " ", "the", " ", "z"}],
+          "-", 
+         RowBox[{
+          RowBox[{"axis", ".", "\[IndentingNewLine]", "The"}], " ", 
+          "coordinate", " ", "system", " ", "is", " ", "now", " ", "similar", 
+          " ", "to", " ", "that", " ", 
+          RowBox[{
+           RowBox[{"in", " ", "[", "1", "]"}], ".", "\[IndentingNewLine]", 
+           "\t", 
+           RowBox[{"[", "1", "]"}]}], " ", "Scoccimarro"}]}], ",", " ", 
+        "Couchman", ",", " ", 
+        RowBox[{
+         RowBox[{
+          RowBox[{"Frieman", " ", 
+           RowBox[{"(", 
+            RowBox[{"ApJ", ",", " ", "1998"}], ")"}]}], ":", " ", "https", 
+          ":"}], "//", 
+         RowBox[{
+          RowBox[{
+           RowBox[{
+            RowBox[{"arxiv", ".", "org"}], "/", "abs"}], "/", "astro"}], "-", 
+          
+          RowBox[{"ph", "/", "9808305."}]}]}]}], "\[IndentingNewLine]", 
+       "*)"}], "\[IndentingNewLine]", 
+      RowBox[{"Ry", "=", 
+       RowBox[{"{", 
+        RowBox[{
+         RowBox[{"{", 
+          RowBox[{
+           RowBox[{"Cos", "[", "theta1", "]"}], ",", "0", ",", 
+           RowBox[{"Sin", "[", "theta1", "]"}]}], "}"}], ",", 
+         RowBox[{"{", 
+          RowBox[{"0", ",", "1", ",", "0"}], "}"}], ",", 
+         RowBox[{"{", 
+          RowBox[{
+           RowBox[{"-", 
+            RowBox[{"Sin", "[", "theta1", "]"}]}], ",", "0", ",", 
+           RowBox[{"Cos", "[", "theta1", "]"}]}], "}"}]}], "}"}]}], ";", 
+      "\[IndentingNewLine]", 
+      RowBox[{"k2Hat", "=", 
+       RowBox[{"Ry", ".", "k2PrimeHat"}]}], ";", "\[IndentingNewLine]", 
+      RowBox[{"(*", 
+       RowBox[{
+        RowBox[{"Compute", " ", "mu2"}], "=", 
+        RowBox[{
+         RowBox[{
+          RowBox[{"cosine", "[", 
+           RowBox[{"k2Hat", ",", "nhat"}], "]"}], " ", "as", " ", "the", " ", 
+          "z"}], "-", 
+         RowBox[{
+         "component", " ", "of", " ", "the", " ", "rotated", " ", "vector", " ",
+           "k2Hat"}]}]}], "*)"}], 
+      RowBox[{"mu2", "=", 
+       RowBox[{"Collect", "[", 
+        RowBox[{
+         RowBox[{"Simplify", "[", 
+          RowBox[{"k2Hat", "[", 
+           RowBox[{"[", "3", "]"}], "]"}], "]"}], ",", 
+         RowBox[{"{", 
+          RowBox[{
+           RowBox[{"Cos", "[", "\[Theta]1", "]"}], ",", 
+           RowBox[{"Sin", "[", "\[Theta]1", "]"}], ",", 
+           RowBox[{"Cos", "[", "\[Theta]12", "]"}], ",", 
+           RowBox[{"Sin", "[", "\[Theta]12", "]"}], ",", 
+           RowBox[{"Cos", "[", "\[Phi]", "]"}], ",", 
+           RowBox[{"Sin", "[", "\[Phi]", "]"}]}], "}"}]}], "]"}]}], ";"}], ";",
+      "\[IndentingNewLine]", 
+     RowBox[{"{", "mu2", "}"}]}]}], "]"}]}], "\[IndentingNewLine]", 
+ RowBox[{"Mu2Derivation", "[", 
+  RowBox[{"\[Theta]1", ",", " ", "\[Theta]12", ",", " ", "\[Phi]"}], 
+  "]"}]}], "Input",
+ CellChangeTimes->{{3.95720661557889*^9, 3.9572066155822372`*^9}, {
+   3.9572069369324636`*^9, 3.957206971061571*^9}, {3.957207060059114*^9, 
+   3.957207226185012*^9}, {3.957207382049233*^9, 3.9572075025590897`*^9}, {
+   3.957207628710041*^9, 3.957207672532811*^9}, {3.957207709780821*^9, 
+   3.957207842983625*^9}, {3.957208181687796*^9, 3.957208248532058*^9}, {
+   3.9572084850152807`*^9, 3.957208537110015*^9}, 3.9572086507994003`*^9, {
+   3.957208685138871*^9, 3.957208696147709*^9}, {3.9572087823502083`*^9, 
+   3.957208982459325*^9}, {3.9572090575934553`*^9, 3.957209233642273*^9}, {
+   3.957209521919223*^9, 3.957209674139916*^9}, {3.9572098123731937`*^9, 
+   3.957209859510188*^9}, {3.957210942419463*^9, 3.957210971369172*^9}, {
+   3.957211008807323*^9, 
+   3.957211036123496*^9}},ExpressionUUID->"7ae95248-b7c7-42c2-8a6b-\
+b0a8beed254c"],
+
+Cell[BoxData[
+ RowBox[{"{", 
+  RowBox[{
+   RowBox[{
+    RowBox[{"Cos", "[", "\[Theta]1", "]"}], " ", 
+    RowBox[{"Cos", "[", "\[Theta]12", "]"}]}], "-", 
+   RowBox[{
+    RowBox[{"Cos", "[", "\[Phi]", "]"}], " ", 
+    RowBox[{"Sin", "[", "\[Theta]1", "]"}], " ", 
+    RowBox[{"Sin", "[", "\[Theta]12", "]"}]}]}], "}"}]], "Output",
+ CellChangeTimes->{3.957208696695045*^9, 3.95720924108881*^9},
+ CellLabel->
+  "Out[581]=",ExpressionUUID->"54562f8b-d37a-41d1-add0-d2d58fe09498"]
+}, Open  ]],
+
+Cell[BoxData[
+ RowBox[{"(*", 
+  RowBox[{
+   RowBox[{
+    RowBox[{"We", " ", "recover", " ", "the", " ", "expression", " ", "in", " ", 
+     RowBox[{"Eq", ".", 
+      RowBox[{"(", "18", ")"}]}], " ", 
+     RowBox[{"of", " ", "[", "1", "]"}], " ", "for", " ", 
+     RowBox[{"Cos", "[", "theta1", "]"}]}], "=", 
+    RowBox[{"\\", "mu"}]}], ",", " ", 
+   RowBox[{"theta12", "=", 
+    RowBox[{"\\", "theta"}]}], ",", " ", 
+   RowBox[{"phi", "=", 
+    RowBox[{"\\", 
+     RowBox[{"phi", "."}]}]}]}], "*)"}]], "Input",
+ CellChangeTimes->{
+  3.957209881971188*^9, {3.9572120202227182`*^9, 3.957212054181882*^9}, {
+   3.957212085878377*^9, 
+   3.9572121652541227`*^9}},ExpressionUUID->"1531c16b-95a1-425f-a6f6-\
+3c18fba8b674"]
+},
+WindowSize->{808, 758},
+WindowMargins->{{Automatic, 197}, {27, Automatic}},
+FrontEndVersion->"14.2 for Mac OS X ARM (64-bit) (March 16, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"c808121c-3880-4e3e-92fb-28700f03d960"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[CellGroupData[{
+Cell[576, 22, 7075, 173, 519, "Input",ExpressionUUID->"7ae95248-b7c7-42c2-8a6b-b0a8beed254c"],
+Cell[7654, 197, 476, 12, 33, "Output",ExpressionUUID->"54562f8b-d37a-41d1-add0-d2d58fe09498"]
+}, Open  ]],
+Cell[8145, 212, 717, 19, 49, "Input",ExpressionUUID->"1531c16b-95a1-425f-a6f6-3c18fba8b674"]
+}
+]
+*)
+
+(* End of internal cache information *)
+
