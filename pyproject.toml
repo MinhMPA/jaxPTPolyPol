@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jaxptpolypol"
+version = "0.1.0"
+description = "Modeling and Analysis of Power spectrum and Bispectrum Multipoles in Perturbation Theory and JAX"
+readme = "README.md"
+license = {text = "GPL-3.0"}
+requires-python = ">=3.9"
+dependencies = [
+    "jax>=0.4",
+    "jaxlib>=0.4",
+    "numpy",
+]
+
+[project.optional-dependencies]
+full = [
+    "cosmopower-jax",
+    "ps_1loop_jax",
+    "quadax",
+    "matplotlib",
+    "numdifftools",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
