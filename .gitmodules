@@ -1,0 +1,3 @@
+[submodule "ext_data/bao_data"]
+	path = ext_data/bao_data
+	url = git@github.com:CobayaSampler/bao_data.git
