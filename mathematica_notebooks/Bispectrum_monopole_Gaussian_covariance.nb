@@ -1,0 +1,597 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='Wolfram 14.2' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       154,          7]
+NotebookDataLength[         0,          0]
+NotebookOptionsPosition[         0,          0]
+NotebookOutlinePosition[         0,          0]
+CellTagsIndexPosition[         0,          0]
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+
+Cell["\<\
+Bispectrum monopole (\[ScriptL]=0) Gaussian covariance
+
+Derives the explicit expression for the angular integral in Eq. (B.3) of
+Ivanov, Simonovic, Zaldarriaga (JCAP 2020) [arXiv:1907.06666]:
+
+  C^{B,\[ScriptL]=0}_{TT'} = (2\[Pi])^3/V(z) \[Times] \[Pi] s_{123}/(dk1 dk2 dk3) \
+\[Times] \[Delta]_{TT'}/(k1 k2 k3) \[Times] I(k1,k2,k3)
+
+where I(k1,k2,k3) = 1/(4\[Pi]) \[Integral] d\[Phi] d\[Omega] sin\[Omega] \
+\[Product]_{a=1}^{3} [P_g(k_a,\[Mu]_a) + 1/nbar]
+
+The coordinate system follows Scoccimarro, Couchman, Frieman (ApJ 1999) \
+[arXiv:astro-ph/9808305], as derived in Bispectrum_mu2_derivation.nb.\
+\>", "Text",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell[BoxData[
+ RowBox[{
+  RowBox[{"(*", " ",
+   RowBox[{"Legendre", " ", "polynomial"}], " ", "*)"}],
+  "\[IndentingNewLine]",
+  RowBox[{
+   RowBox[{
+    RowBox[{
+     RowBox[{"L", "[",
+      RowBox[{"ell_", ",", "mu_"}], "]"}], ":=",
+     RowBox[{"LegendreP", "[",
+      RowBox[{"ell", ",", "mu"}], "]"}]}], ";"}], "\[IndentingNewLine]",
+   "\[IndentingNewLine]",
+   RowBox[{"(*", " ",
+    RowBox[{
+     RowBox[{"Direction", " ", "cosines", " ",
+      RowBox[{"w", ".", "r", ".", "t", "."}], " ", "the", " ", "line", " ",
+      "of", " ",
+      RowBox[{"sight", ".", "\[IndentingNewLine]", "\[Omega]"}]}], ":", " ",
+     RowBox[{
+      RowBox[{
+       RowBox[{"polar", " ", "angle", " ", "between", " ", "k1", " ", "and",
+        " ",
+        RowBox[{"LOS", ".", "\[IndentingNewLine]", "\[Phi]"}]}], ":", " ",
+       RowBox[{
+        RowBox[{
+         RowBox[{"azimuthal", " ", "angle", " ", "of", " ", "k2", " ",
+          "around", " ",
+          RowBox[{"k1", ".", "\[IndentingNewLine]", "\[Theta]12"}]}], ":",
+         " ",
+         RowBox[{"angle", " ", "between", " ", "k1", " ", "and", " ",
+          "k2"}]}], ",", " ",
+        RowBox[{
+         RowBox[{
+          RowBox[{"Cos", "[", "\[Theta]12", "]"}], "=",
+          RowBox[{
+           RowBox[{"(",
+            RowBox[{
+             RowBox[{"k3", "^", "2"}], "-",
+             RowBox[{"k1", "^", "2"}], "-",
+             RowBox[{"k2", "^", "2"}]}], ")"}], "/",
+           RowBox[{"(",
+            RowBox[{"2", " ", "k1", " ", "k2"}], ")"}]}]}], ".",
+         "\[IndentingNewLine]",
+         RowBox[{"\[Theta]13", ":", " ",
+          RowBox[{"angle", " ", "between", " ", "k1", " ", "and", " ",
+           "k3"}]}]}]}]}], ",", " ",
+      RowBox[{
+       RowBox[{
+        RowBox[{"Cos", "[", "\[Theta]13", "]"}], "=",
+        RowBox[{
+         RowBox[{"(",
+          RowBox[{
+           RowBox[{"k2", "^", "2"}], "-",
+           RowBox[{"k1", "^", "2"}], "-",
+           RowBox[{"k3", "^", "2"}]}], ")"}], "/",
+         RowBox[{"(",
+          RowBox[{"2", " ", "k1", " ", "k3"}], ")"}]}]}], ".",
+       "\[IndentingNewLine]",
+       RowBox[{"Sine", " ",
+        RowBox[{"rule", ":", " ",
+         RowBox[{
+          RowBox[{"k2", " ",
+           RowBox[{"Sin", "[", "\[Theta]12", "]"}]}], "=",
+          RowBox[{"k3", " ",
+           RowBox[{"Sin", "[", "\[Theta]13", "]"}]}]}]}]}]}]}]}], " ",
+    "*)"}], "\[IndentingNewLine]",
+   RowBox[{
+    RowBox[{"mu1", "=",
+     RowBox[{"Cos", "[", "\[Omega]", "]"}]}], ";"}], "\[IndentingNewLine]",
+   RowBox[{
+    RowBox[{"mu2", "=",
+     RowBox[{
+      RowBox[{
+       RowBox[{"Cos", "[", "\[Omega]", "]"}], " ",
+       RowBox[{"Cos", "[", "\[Theta]12", "]"}]}], "-",
+      RowBox[{
+       RowBox[{"Cos", "[", "\[Phi]", "]"}], " ",
+       RowBox[{"Sin", "[", "\[Omega]", "]"}], " ",
+       RowBox[{"Sin", "[", "\[Theta]12", "]"}]}]}]}], ";"}],
+   "\[IndentingNewLine]",
+   RowBox[{"(*", " ",
+    RowBox[{
+     RowBox[{"mu3", " ", "via", " ", "triangle", " ",
+      RowBox[{"closure", ":", " ",
+       RowBox[{
+        RowBox[{"k1", "+", "k2", "+", "k3"}], "=", "0"}]}]}], ",", " ",
+     RowBox[{
+      RowBox[{
+       RowBox[{"giving", " ", "mu3"}], "=",
+       RowBox[{
+        RowBox[{"-",
+         RowBox[{"(",
+          RowBox[{
+           RowBox[{"k1", " ", "mu1"}], "+",
+           RowBox[{"k2", " ", "mu2"}]}], ")"}]}], "/", "k3"}]}], ".",
+      "\[IndentingNewLine]",
+      RowBox[{"Using", " ", "the", " ", "sine", " ", "rule", " ", "this",
+       " ", "simplifies", " ",
+       RowBox[{"to", ":"}]}]}]}], " ", "*)"}], "\[IndentingNewLine]",
+   RowBox[{
+    RowBox[{"mu3", "=",
+     RowBox[{
+      RowBox[{
+       RowBox[{"Cos", "[", "\[Omega]", "]"}], " ",
+       RowBox[{"Cos", "[", "\[Theta]13", "]"}]}], "+",
+      RowBox[{
+       RowBox[{"Cos", "[", "\[Phi]", "]"}], " ",
+       RowBox[{"Sin", "[", "\[Omega]", "]"}], " ",
+       RowBox[{"Sin", "[", "\[Theta]13", "]"}]}]}]}], ";"}]}]}]], "Input",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell["\<\
+Verify that the mu3 expression is consistent with the triangle closure \
+condition mu3 = -(k1 mu1 + k2 mu2)/k3 under the substitution \
+Cos[\[Theta]13] = -(k1 + k2 Cos[\[Theta]12])/k3 and \
+Sin[\[Theta]13] = k2 Sin[\[Theta]12]/k3 (sine rule).\
+\>", "Text",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell[BoxData[{
+ RowBox[{
+  RowBox[{"mu3Direct", "=",
+   RowBox[{
+    RowBox[{"-",
+     RowBox[{"(",
+      RowBox[{
+       RowBox[{"k1", " ", "mu1"}], "+",
+       RowBox[{"k2", " ", "mu2"}]}], ")"}]}], "/", "k3"}]}], ";"}], "\n",
+ RowBox[{
+  RowBox[{"mu3Sub", "=",
+   RowBox[{"mu3", "/.",
+    RowBox[{"{",
+     RowBox[{
+      RowBox[{
+       RowBox[{"Cos", "[", "\[Theta]13", "]"}], "\[Rule]",
+       RowBox[{
+        RowBox[{"-",
+         RowBox[{"(",
+          RowBox[{"k1", "+",
+           RowBox[{"k2", " ",
+            RowBox[{"Cos", "[", "\[Theta]12", "]"}]}]}], ")"}]}], "/",
+        "k3"}]}], ",",
+      RowBox[{
+       RowBox[{"Sin", "[", "\[Theta]13", "]"}], "\[Rule]",
+       RowBox[{
+        RowBox[{"k2", " ",
+         RowBox[{"Sin", "[", "\[Theta]12", "]"}]}], "/", "k3"}]}]}],
+     "}"}]}]}], ";"}], "\n",
+ RowBox[{"FullSimplify", "[",
+  RowBox[{"mu3Direct", "-", "mu3Sub"}], "]"}]}], "Input",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell["\<\
+Define the D coefficients: angular-averaged products of Legendre polynomials.
+
+D_{l1,l2,l3}(\[Theta]12,\[Theta]13) = 1/(4\[Pi]) \[Integral]_0^{2\[Pi]} \
+d\[Phi] \[Integral]_0^{\[Pi]} d\[Omega] sin\[Omega] \
+L_{l1}(\[Mu]1) L_{l2}(\[Mu]2) L_{l3}(\[Mu]3)
+
+The full angular integral decomposes as:
+I(k1,k2,k3) = \[CapitalSigma]_{l1,l2,l3} D_{l1,l2,l3} \
+Pt_{l1}(k1) Pt_{l2}(k2) Pt_{l3}(k3)
+
+where Pt_0(k) = P_0(k) + 1/nbar absorbs the shot noise, and \
+Pt_2 = P_2, Pt_4 = P_4.\
+\>", "Text",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell[BoxData[{
+ RowBox[{
+  RowBox[{"ells", "=",
+   RowBox[{"{",
+    RowBox[{"0", ",", "2", ",", "4"}], "}"}]}], ";"}], "\n",
+ RowBox[{
+  RowBox[{
+   RowBox[{"DCoeff", "[",
+    RowBox[{"l1_", ",", "l2_", ",", "l3_"}], "]"}], ":=",
+   RowBox[{
+    RowBox[{"DCoeff", "[",
+     RowBox[{"l1", ",", "l2", ",", "l3"}], "]"}], "=",
+    RowBox[{"Module", "[",
+     RowBox[{
+      RowBox[{"{",
+       RowBox[{"integrand", ",", "phiResult"}], "}"}], ",",
+      "\[IndentingNewLine]",
+      RowBox[{
+       RowBox[{"integrand", "=",
+        RowBox[{
+         RowBox[{"L", "[",
+          RowBox[{"l1", ",", "mu1"}], "]"}], " ",
+         RowBox[{"L", "[",
+          RowBox[{"l2", ",", "mu2"}], "]"}], " ",
+         RowBox[{"L", "[",
+          RowBox[{"l3", ",", "mu3"}], "]"}]}]}], ";", "\[IndentingNewLine]",
+       RowBox[{"phiResult", "=",
+        RowBox[{"Integrate", "[",
+         RowBox[{"integrand", ",",
+          RowBox[{"{",
+           RowBox[{"\[Phi]", ",", "0", ",",
+            RowBox[{"2", " ", "Pi"}]}], "}"}]}], "]"}]}], ";",
+       "\[IndentingNewLine]",
+       RowBox[{"FullSimplify", "[",
+        RowBox[{
+         RowBox[{
+          FractionBox["1",
+           RowBox[{"4", " ", "Pi"}]], " ",
+          RowBox[{"Integrate", "[",
+           RowBox[{
+            RowBox[{"phiResult", " ",
+             RowBox[{"Sin", "[", "\[Omega]", "]"}]}], ",",
+            RowBox[{"{",
+             RowBox[{"\[Omega]", ",", "0", ",", "Pi"}], "}"}]}], "]"}]}],
+         ",",
+         RowBox[{"Assumptions", "\[Rule]",
+          RowBox[{"{",
+           RowBox[{
+            RowBox[{
+             RowBox[{"Sin", "[", "\[Theta]12", "]"}], ">", "0"}], ",",
+            RowBox[{
+             RowBox[{"Sin", "[", "\[Theta]13", "]"}], ">", "0"}]}],
+           "}"}]}]}], "]"}]}]}], "]"}]}]}], ";"}], "\n", "\n",
+ RowBox[{"(*", " ",
+  RowBox[{"Compute", " ", "and", " ", "display", " ", "non", "-",
+   RowBox[{"zero", " ", "D", " ", "coefficients"}]}], " ", "*)"}], "\n",
+ RowBox[{
+  RowBox[{"DResults", "=",
+   RowBox[{"Flatten", "[",
+    RowBox[{
+     RowBox[{"Table", "[",
+      RowBox[{
+       RowBox[{"{",
+        RowBox[{"l1", ",", "l2", ",", "l3", ",",
+         RowBox[{"DCoeff", "[",
+          RowBox[{"l1", ",", "l2", ",", "l3"}], "]"}]}], "}"}], ",",
+       RowBox[{"{",
+        RowBox[{"l1", ",", "ells"}], "}"}], ",",
+       RowBox[{"{",
+        RowBox[{"l2", ",", "ells"}], "}"}], ",",
+       RowBox[{"{",
+        RowBox[{"l3", ",", "ells"}], "}"}]}], "]"}], ",", "2"}], "]"}]}],
+  ";"}], "\n",
+ RowBox[{
+  RowBox[{"nonZeroD", "=",
+   RowBox[{"Select", "[",
+    RowBox[{"DResults", ",",
+     RowBox[{
+      RowBox[{
+       RowBox[{"#", "[",
+        RowBox[{"[", "4", "]"}], "]"}], "=!=", "0"}], "&"}]}], "]"}]}],
+  ";"}], "\n",
+ RowBox[{"TableForm", "[",
+  RowBox[{"nonZeroD", ",",
+   RowBox[{"TableHeadings", "\[Rule]",
+    RowBox[{"{",
+     RowBox[{"None", ",",
+      RowBox[{"{",
+       RowBox[{
+       "\"\<\[ScriptL]1\>\"", ",", "\"\<\[ScriptL]2\>\"", ",",
+        "\"\<\[ScriptL]3\>\"", ",",
+        "\"\<D_{\[ScriptL]1,\[ScriptL]2,\[ScriptL]3}\>\""}], "}"}]}],
+     "}"}]}]}], "]"}]}], "Input",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell["\<\
+Assemble the full angular integral I(k1,k2,k3) from the D coefficients.\
+\>", "Text",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell[BoxData[{
+ RowBox[{
+  RowBox[{
+   RowBox[{"Pcoeff", "[",
+    RowBox[{"0", ",", "k_"}], "]"}], ":=",
+   RowBox[{"Pt0", "[", "k", "]"}]}], ";"}], "\n",
+ RowBox[{
+  RowBox[{
+   RowBox[{"Pcoeff", "[",
+    RowBox[{"2", ",", "k_"}], "]"}], ":=",
+   RowBox[{"P2", "[", "k", "]"}]}], ";"}], "\n",
+ RowBox[{
+  RowBox[{
+   RowBox[{"Pcoeff", "[",
+    RowBox[{"4", ",", "k_"}], "]"}], ":=",
+   RowBox[{"P4", "[", "k", "]"}]}], ";"}], "\n", "\n",
+ RowBox[{
+  RowBox[{"covIntegral", "=",
+   RowBox[{"Sum", "[",
+    RowBox[{
+     RowBox[{
+      RowBox[{"DCoeff", "[",
+       RowBox[{"l1", ",", "l2", ",", "l3"}], "]"}], " ",
+      RowBox[{"Pcoeff", "[",
+       RowBox[{"l1", ",", "k1"}], "]"}], " ",
+      RowBox[{"Pcoeff", "[",
+       RowBox[{"l2", ",", "k2"}], "]"}], " ",
+      RowBox[{"Pcoeff", "[",
+       RowBox[{"l3", ",", "k3"}], "]"}]}], ",",
+     RowBox[{"{",
+      RowBox[{"l1", ",", "ells"}], "}"}], ",",
+     RowBox[{"{",
+      RowBox[{"l2", ",", "ells"}], "}"}], ",",
+     RowBox[{"{",
+      RowBox[{"l3", ",", "ells"}], "}"}]}], "]"}]}], ";"}], "\n", "\n",
+ RowBox[{"(*", " ",
+  RowBox[{"Collect", " ", "by", " ", "multipole", " ", "products"}], " ",
+  "*)"}], "\n",
+ RowBox[{
+  RowBox[{"allTerms", "=",
+   RowBox[{"Flatten", "[",
+    RowBox[{"Outer", "[",
+     RowBox[{"Times", ",",
+      RowBox[{"{",
+       RowBox[{
+        RowBox[{"Pt0", "[", "k1", "]"}], ",",
+        RowBox[{"P2", "[", "k1", "]"}], ",",
+        RowBox[{"P4", "[", "k1", "]"}]}], "}"}], ",",
+      RowBox[{"{",
+       RowBox[{
+        RowBox[{"Pt0", "[", "k2", "]"}], ",",
+        RowBox[{"P2", "[", "k2", "]"}], ",",
+        RowBox[{"P4", "[", "k2", "]"}]}], "}"}], ",",
+      RowBox[{"{",
+       RowBox[{
+        RowBox[{"Pt0", "[", "k3", "]"}], ",",
+        RowBox[{"P2", "[", "k3", "]"}], ",",
+        RowBox[{"P4", "[", "k3", "]"}]}], "}"}]}], "]"}], "]"}]}], ";"}],
+ "\n",
+ RowBox[{"Collect", "[",
+  RowBox[{
+   RowBox[{"Expand", "[", "covIntegral", "]"}], ",", "allTerms"}],
+  "]"}]}], "Input",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell["\<\
+Express the result in terms of k1, k2, k3 using the triangle relations:\
+\>", "Text",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell[BoxData[{
+ RowBox[{
+  RowBox[{"triangleRules", "=",
+   RowBox[{"{", "\[IndentingNewLine]",
+    RowBox[{
+     RowBox[{
+      RowBox[{"Cos", "[", "\[Theta]12", "]"}], "\[Rule]",
+      RowBox[{
+       RowBox[{"(",
+        RowBox[{
+         SuperscriptBox["k3", "2"], "-",
+         SuperscriptBox["k1", "2"], "-",
+         SuperscriptBox["k2", "2"]}], ")"}], "/",
+       RowBox[{"(",
+        RowBox[{"2", " ", "k1", " ", "k2"}], ")"}]}]}], ",",
+     "\[IndentingNewLine]",
+     RowBox[{
+      SuperscriptBox[
+       RowBox[{"Sin", "[", "\[Theta]12", "]"}], "2"], "\[Rule]",
+      RowBox[{"1", "-",
+       SuperscriptBox[
+        RowBox[{"(",
+         RowBox[{
+          RowBox[{"(",
+           RowBox[{
+            SuperscriptBox["k3", "2"], "-",
+            SuperscriptBox["k1", "2"], "-",
+            SuperscriptBox["k2", "2"]}], ")"}], "/",
+          RowBox[{"(",
+           RowBox[{"2", " ", "k1", " ", "k2"}], ")"}]}], ")"}], "2"]}]}],
+     ",", "\[IndentingNewLine]",
+     RowBox[{
+      RowBox[{"Cos", "[", "\[Theta]13", "]"}], "\[Rule]",
+      RowBox[{
+       RowBox[{"(",
+        RowBox[{
+         SuperscriptBox["k2", "2"], "-",
+         SuperscriptBox["k1", "2"], "-",
+         SuperscriptBox["k3", "2"]}], ")"}], "/",
+       RowBox[{"(",
+        RowBox[{"2", " ", "k1", " ", "k3"}], ")"}]}]}], ",",
+     "\[IndentingNewLine]",
+     RowBox[{
+      SuperscriptBox[
+       RowBox[{"Sin", "[", "\[Theta]13", "]"}], "2"], "\[Rule]",
+      RowBox[{"1", "-",
+       SuperscriptBox[
+        RowBox[{"(",
+         RowBox[{
+          RowBox[{"(",
+           RowBox[{
+            SuperscriptBox["k2", "2"], "-",
+            SuperscriptBox["k1", "2"], "-",
+            SuperscriptBox["k3", "2"]}], ")"}], "/",
+          RowBox[{"(",
+           RowBox[{"2", " ", "k1", " ", "k3"}], ")"}]}], ")"}], "2"]}]}]}],
+    "\[IndentingNewLine]", "}"}]}], ";"}], "\n",
+ RowBox[{
+  RowBox[{"covInK", "=",
+   RowBox[{"FullSimplify", "[",
+    RowBox[{
+     RowBox[{"covIntegral", "/.", "triangleRules"}], ",",
+     RowBox[{"Assumptions", "\[Rule]",
+      RowBox[{"{",
+       RowBox[{
+        RowBox[{"k1", ">", "0"}], ",",
+        RowBox[{"k2", ">", "0"}], ",",
+        RowBox[{"k3", ">", "0"}]}], "}"}]}]}], "]"}]}], ";"}], "\n",
+ RowBox[{"Collect", "[",
+  RowBox[{
+   RowBox[{"Expand", "[", "covInK", "]"}], ",", "allTerms"}],
+  "]"}]}], "Input",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell["\<\
+Comparison with Eq. (4.3) and Appendix F of Ivanov et al. (Phys.Rev.D 105, \
+063512) [arXiv:2110.10161], and Eq. (19-20) of Sefusatti (2015) \
+[arXiv:1502.03099].
+
+Both papers use the tree-level (Kaiser) power spectrum
+P_g(k,\[Mu]) = (b1 + f \[Mu]^2)^2 P_lin(k), which gives the multipoles:
+  Pt0(k) = (b1^2 + 2 b1 f/3 + f^2/5) P_lin(k) + 1/nbar
+  P2(k) = (4 b1 f/3 + 4 f^2/7) P_lin(k)
+  P4(k) = (8 f^2/35) P_lin(k)
+
+We substitute these into our general expression and verify that the result \
+matches the direct integration of the Kaiser model.\
+\>", "Text",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell[BoxData[{
+ RowBox[{
+  RowBox[{"kaiserRules", "=",
+   RowBox[{"{", "\[IndentingNewLine]",
+    RowBox[{
+     RowBox[{
+      RowBox[{"Pt0", "[", "k_", "]"}], "\[RuleDelayed]",
+      RowBox[{
+       RowBox[{
+        RowBox[{"(",
+         RowBox[{
+          SuperscriptBox["b1", "2"], "+",
+          FractionBox[
+           RowBox[{"2", " ", "b1", " ", "f"}], "3"], "+",
+          FractionBox[
+           SuperscriptBox["f", "2"], "5"]}], ")"}], " ",
+        RowBox[{"Plin", "[", "k", "]"}]}], "+",
+       FractionBox["1", "nbar"]}]}], ",", "\[IndentingNewLine]",
+     RowBox[{
+      RowBox[{"P2", "[", "k_", "]"}], "\[RuleDelayed]",
+      RowBox[{
+       RowBox[{"(",
+        RowBox[{
+         FractionBox[
+          RowBox[{"4", " ", "b1", " ", "f"}], "3"], "+",
+         FractionBox[
+          RowBox[{"4", " ",
+           SuperscriptBox["f", "2"]}], "7"]}], ")"}], " ",
+       RowBox[{"Plin", "[", "k", "]"}]}]}], ",", "\[IndentingNewLine]",
+     RowBox[{
+      RowBox[{"P4", "[", "k_", "]"}], "\[RuleDelayed]",
+      RowBox[{
+       FractionBox[
+        RowBox[{"8", " ",
+         SuperscriptBox["f", "2"]}], "35"], " ",
+       RowBox[{"Plin", "[", "k", "]"}]}]}]}], "\[IndentingNewLine]",
+    "}"}]}], ";"}], "\n",
+ RowBox[{
+  RowBox[{"covKaiser", "=",
+   RowBox[{"FullSimplify", "[",
+    RowBox[{"covIntegral", "/.", "kaiserRules"}], "]"}]}], ";"}], "\n", "\n",
+ RowBox[{"(*", " ",
+  RowBox[{
+   RowBox[{
+   "Direct", " ", "integration", " ", "of", " ", "the", " ", "Kaiser", " ",
+    "model", " ", "for", " ", "cross"}], "-", "check"}], " ", "*)"}], "\n",
+ RowBox[{
+  RowBox[{
+   RowBox[{"PgK", "[",
+    RowBox[{"mu_", ",", "k_"}], "]"}], ":=",
+   RowBox[{
+    RowBox[{
+     SuperscriptBox[
+      RowBox[{"(",
+       RowBox[{"b1", "+",
+        RowBox[{"f", " ",
+         SuperscriptBox["mu", "2"]}]}], ")"}], "2"], " ",
+     RowBox[{"Plin", "[", "k", "]"}]}], "+",
+    FractionBox["1", "nbar"]}]}], ";"}], "\n",
+ RowBox[{
+  RowBox[{"intK", "=",
+   RowBox[{
+    RowBox[{"Sin", "[", "\[Omega]", "]"}], " ",
+    RowBox[{"PgK", "[",
+     RowBox[{"mu1", ",", "k1"}], "]"}], " ",
+    RowBox[{"PgK", "[",
+     RowBox[{"mu2", ",", "k2"}], "]"}], " ",
+    RowBox[{"PgK", "[",
+     RowBox[{"mu3", ",", "k3"}], "]"}]}]}], ";"}], "\n",
+ RowBox[{
+  RowBox[{"covDirectK", "=",
+   RowBox[{"FullSimplify", "[",
+    RowBox[{
+     RowBox[{
+      FractionBox["1",
+       RowBox[{"4", " ", "Pi"}]], " ",
+      RowBox[{"Integrate", "[",
+       RowBox[{
+        RowBox[{"Integrate", "[",
+         RowBox[{"intK", ",",
+          RowBox[{"{",
+           RowBox[{"\[Phi]", ",", "0", ",",
+            RowBox[{"2", " ", "Pi"}]}], "}"}]}], "]"}], ",",
+        RowBox[{"{",
+         RowBox[{"\[Omega]", ",", "0", ",", "Pi"}], "}"}]}], "]"}]}], ",",
+     RowBox[{"Assumptions", "\[Rule]",
+      RowBox[{"{",
+       RowBox[{
+        RowBox[{
+         RowBox[{"Sin", "[", "\[Theta]12", "]"}], ">", "0"}], ",",
+        RowBox[{
+         RowBox[{"Sin", "[", "\[Theta]13", "]"}], ">", "0"}]}], "}"}]}]}],
+    "]"}]}], ";"}], "\n", "\n",
+ RowBox[{"(*", " ",
+  RowBox[{
+   RowBox[{"Verify", ":", " ", "should"}], " ", "give", " ", "0"}], " ",
+  "*)"}], "\n",
+ RowBox[{"FullSimplify", "[",
+  RowBox[{"covKaiser", "-", "covDirectK"}], "]"}]}], "Input",
+ CellChangeTimes->{{3.958e9, 3.958e9}}],
+
+Cell["\<\
+Summary:
+
+The Gaussian covariance of the bispectrum monopole [Eq. (B.3)] is:
+
+  C^{B,l=0}_{TT'} = (2\[Pi])^3/V(z) \[Times] \[Pi] s_{123}/(dk1 dk2 dk3 k1 \
+k2 k3) \[Times] \[Delta]_{TT'} \[Times] I(k1,k2,k3)
+
+where s_{123} = 6, 2, 1 for equilateral, isosceles, and general triangles, \
+and I(k1,k2,k3) = covIntegral is the angular integral derived above.
+
+The result decomposes into D_{l1,l2,l3} coefficients (angular averages of \
+triple Legendre polynomial products) multiplying products of power spectrum \
+multipoles Pt_l1(k1) Pt_l2(k2) Pt_l3(k3).
+
+Compare the explicit D coefficients with:
+- Appendix F of Ivanov et al. (Phys.Rev.D 105, 063512) [arXiv:2110.10161]
+- Eq. (19-20) of Sefusatti (2015) [arXiv:1502.03099], where the angular \
+integral structure is the same after averaging over triangle orientations.\
+\>", "Text",
+ CellChangeTimes->{{3.958e9, 3.958e9}}]
+},
+WindowSize->{1512, 858},
+WindowMargins->{{1, Automatic}, {Automatic, 0}},
+FrontEndVersion->"14.2 for Mac OS X ARM (64-bit) (March 16, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"b3c7e8a1-4f2d-4e3c-9a1b-c8d5f7e2a3b4"
+]
+(* End of Notebook Content *)

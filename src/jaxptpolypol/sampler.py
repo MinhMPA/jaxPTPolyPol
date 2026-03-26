@@ -28,6 +28,31 @@ __all__ = [
 _DEFAULT_SCAN_CHUNK = 128
 
 
+def _resolve_tree_depths(max_tree_depth):
+    """Resolve NUTS tree-depth configuration.
+
+    Accept either a single positive integer or a ``(warmup, sample)`` pair.
+    """
+    if isinstance(max_tree_depth, (tuple, list)):
+        if len(max_tree_depth) != 2:
+            raise ValueError(
+                "max_tree_depth tuple/list must have length 2: "
+                f"got {max_tree_depth!r}"
+            )
+        warmup_depth, sample_depth = max_tree_depth
+    else:
+        warmup_depth = sample_depth = max_tree_depth
+
+    warmup_depth = int(warmup_depth)
+    sample_depth = int(sample_depth)
+    if warmup_depth <= 0 or sample_depth <= 0:
+        raise ValueError(
+            "max_tree_depth entries must be positive integers: "
+            f"got {max_tree_depth!r}"
+        )
+    return warmup_depth, sample_depth
+
+
 # ---------------------------------------------------------------------------
 # Parameter whitening
 # ---------------------------------------------------------------------------
@@ -197,7 +222,9 @@ def warmup_nuts(rng_key, log_posterior_fn, initial_position,
                 num_warmup=500, num_chains=4,
                 adapt_mass_matrix=True, mass_matrix_type="diagonal",
                 initial_inverse_mass_matrix=None,
-                progress_fn=None):
+                max_tree_depth=10,
+                progress_fn=None,
+                warmup_progress_fn=None):
     """Run BlackJAX NUTS window adaptation only.
 
     Parameters
@@ -221,9 +248,16 @@ def warmup_nuts(rng_key, log_posterior_fn, initial_position,
     initial_inverse_mass_matrix : ndarray, optional
         Starting inverse mass matrix. Shape ``(n,)`` for diagonal or
         ``(n, n)`` for dense. If *None*, starts from the identity.
+    max_tree_depth : int
+        Maximum NUTS doubling depth used during warmup.
     progress_fn : callable, optional
         ``progress_fn(chain_number, num_chains)`` called after each
         chain's warmup completes.
+    warmup_progress_fn : callable, optional
+        Fine-grained warmup callback with signature
+        ``warmup_progress_fn(chain_number, num_chains, stage, done, total)``.
+        The ``stage`` is one of ``"find_reasonable_step_size"``,
+        ``"dual_averaging"``, or ``"window_adaptation"``.
 
     Returns
     -------
@@ -244,6 +278,11 @@ def warmup_nuts(rng_key, log_posterior_fn, initial_position,
         raise ValueError(
             f"mass_matrix_type must be 'diagonal' or 'dense', "
             f"got {mass_matrix_type!r}"
+        )
+    warmup_max_num_doublings = int(max_tree_depth)
+    if warmup_max_num_doublings <= 0:
+        raise ValueError(
+            f"max_tree_depth must be a positive integer, got {max_tree_depth!r}"
         )
     is_diagonal = mass_matrix_type == "diagonal"
 
@@ -269,15 +308,26 @@ def warmup_nuts(rng_key, log_posterior_fn, initial_position,
         warmup_key, adapt_key = jax.random.split(chain_keys[c])
 
         if adapt_mass_matrix:
+            if warmup_progress_fn is not None:
+                warmup_progress_fn(
+                    c + 1, num_chains, "window_adaptation", 0, num_warmup
+                )
             warmup = blackjax.window_adaptation(
                 blackjax.nuts,
                 log_posterior_fn,
                 is_mass_matrix_diagonal=is_diagonal,
                 initial_step_size=1.0,
+                progress_bar=False,
+                max_num_doublings=warmup_max_num_doublings,
             )
             (state, params), _ = warmup.run(
                 warmup_key, initial_position, num_steps=num_warmup,
             )
+            if warmup_progress_fn is not None:
+                warmup_progress_fn(
+                    c + 1, num_chains, "window_adaptation",
+                    num_warmup, num_warmup,
+                )
         else:
             state = blackjax.nuts.init(initial_position, log_posterior_fn)
 
@@ -289,9 +339,14 @@ def warmup_nuts(rng_key, log_posterior_fn, initial_position,
                         log_posterior_fn,
                         step_size=step_size,
                         inverse_mass_matrix=init_inv_mass,
+                        max_num_doublings=warmup_max_num_doublings,
                     )
                 return kernel
 
+            if warmup_progress_fn is not None:
+                warmup_progress_fn(
+                    c + 1, num_chains, "find_reasonable_step_size", 0, 1
+                )
             step_size = find_reasonable_step_size(
                 warmup_key,
                 kernel_generator,
@@ -299,19 +354,36 @@ def warmup_nuts(rng_key, log_posterior_fn, initial_position,
                 jnp.asarray(1.0, dtype=jnp.float64),
                 target_accept=0.8,
             )
+            if warmup_progress_fn is not None:
+                warmup_progress_fn(
+                    c + 1, num_chains, "find_reasonable_step_size", 1, 1
+                )
             da_init, da_update, da_final = dual_averaging_adaptation(0.8)
             da_state = da_init(step_size)
+            progress_every = max(1, num_warmup // 50)
 
-            for key in jax.random.split(adapt_key, num_warmup):
+            if warmup_progress_fn is not None:
+                warmup_progress_fn(
+                    c + 1, num_chains, "dual_averaging", 0, num_warmup
+                )
+
+            for step, key in enumerate(jax.random.split(adapt_key, num_warmup), start=1):
                 state, info = nuts_kernel(
                     key,
                     state,
                     log_posterior_fn,
                     step_size=step_size,
                     inverse_mass_matrix=init_inv_mass,
+                    max_num_doublings=warmup_max_num_doublings,
                 )
                 da_state = da_update(da_state, info.acceptance_rate)
                 step_size = jnp.exp(da_state.log_step_size)
+                if warmup_progress_fn is not None and (
+                    step == num_warmup or step % progress_every == 0
+                ):
+                    warmup_progress_fn(
+                        c + 1, num_chains, "dual_averaging", step, num_warmup
+                    )
 
             params = {
                 "step_size": da_final(da_state),
@@ -337,9 +409,11 @@ def run_nuts(rng_key, log_posterior_fn, initial_position,
              num_warmup=500, num_samples=2000, num_chains=4,
              adapt_mass_matrix=True, mass_matrix_type="diagonal",
              initial_inverse_mass_matrix=None,
+             max_tree_depth=10,
              scan_chunk_size=_DEFAULT_SCAN_CHUNK,
              parallel_chains=False,
              progress_fn=None,
+             warmup_progress_fn=None,
              sample_progress_fn=None):
     """Run NUTS with BlackJAX window adaptation.
 
@@ -379,6 +453,9 @@ def run_nuts(rng_key, log_posterior_fn, initial_position,
         ``(n, n)`` for dense.  Useful for seeding the adaptation from a
         Fisher-derived estimate.  If *None*, BlackJAX starts from the
         identity.
+    max_tree_depth : int or (int, int)
+        NUTS trajectory doubling cap. If a tuple/list of two ints is
+        provided, interpret as ``(warmup_depth, sampling_depth)``.
     scan_chunk_size : int
         Number of samples per ``jax.lax.scan`` chunk.  Smaller chunks
         reduce peak compilation memory at the cost of slightly more
@@ -393,6 +470,10 @@ def run_nuts(rng_key, log_posterior_fn, initial_position,
         ``progress_fn(chain_number, num_chains)`` called after each
         chain's warmup completes.  During parallel production sampling,
         a single call is made after all chains finish.
+    warmup_progress_fn : callable, optional
+        Fine-grained warmup callback forwarded to
+        :func:`warmup_nuts`.  See that function for the callback
+        signature.
     sample_progress_fn : callable, optional
         Progress callback for production samples, called after each
         chunk with signature
@@ -425,6 +506,7 @@ def run_nuts(rng_key, log_posterior_fn, initial_position,
     n_params = initial_position.shape[0]
     chain_keys = jax.random.split(rng_key, num_chains)
     is_diagonal = mass_matrix_type == "diagonal"
+    warmup_tree_depth, sample_tree_depth = _resolve_tree_depths(max_tree_depth)
 
     if initial_inverse_mass_matrix is not None:
         init_inv_mass = jnp.asarray(initial_inverse_mass_matrix,
@@ -449,6 +531,7 @@ def run_nuts(rng_key, log_posterior_fn, initial_position,
             key, state, log_posterior_fn,
             step_size=step_size,
             inverse_mass_matrix=inverse_mass_matrix,
+            max_num_doublings=sample_tree_depth,
         )
         return state, (
             state.position,
@@ -485,7 +568,9 @@ def run_nuts(rng_key, log_posterior_fn, initial_position,
         adapt_mass_matrix=adapt_mass_matrix,
         mass_matrix_type=mass_matrix_type,
         initial_inverse_mass_matrix=initial_inverse_mass_matrix,
+        max_tree_depth=warmup_tree_depth,
         progress_fn=progress_fn,
+        warmup_progress_fn=warmup_progress_fn,
     )
     warmup_step_sizes = [x for x in warmup_params["step_size"]]
     warmup_inv_masses = [x for x in warmup_params["inverse_mass_matrix"]]
