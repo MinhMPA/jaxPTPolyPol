@@ -272,7 +272,15 @@ def _reduce_components(values: np.ndarray, how: str) -> float:
     raise ValueError(f"Unknown component_reduce={how!r}; expected 'mean', 'min', or 'median'.")
 
 
-def _survey_base_name(group: str, key: str | None) -> str:
+def _survey_base_name(
+    survey_key: tuple[str, str | None] | tuple[str, str, str | None],
+) -> str:
+    if len(survey_key) == 2:
+        group, key = survey_key
+    elif len(survey_key) == 3:
+        _, group, key = survey_key
+    else:  # pragma: no cover - defensive guard
+        raise ValueError(f"unsupported survey key format: {survey_key!r}")
     return group if key is None else f"{group}.{key}"
 
 
@@ -323,7 +331,9 @@ class PackedParameterSpec:
     analysis_kind: str
     cosmo_keys: tuple[str, ...]
     cosmo_sizes: tuple[int, ...]
-    survey_keys: tuple[tuple[str, str | None], ...] = ()
+    survey_keys: tuple[
+        tuple[str, str | None] | tuple[str, str, str | None], ...
+    ] = ()
     n_bins: int = 1
     varied_idx: tuple[int, ...] | None = None
     bin_labels: tuple[str, ...] | None = None
@@ -371,8 +381,8 @@ class PackedParameterSpec:
 
         if self.survey_keys:
             for bin_label in self.resolved_bin_labels:
-                for group, key in self.survey_keys:
-                    base = _survey_base_name(group, key)
+                for survey_key in self.survey_keys:
+                    base = _survey_base_name(survey_key)
                     names.append(_append_bin_suffix(base, bin_label, self.n_bins))
 
         return tuple(names)
@@ -387,8 +397,8 @@ class PackedParameterSpec:
 
         if self.survey_keys:
             for bin_label in self.resolved_bin_labels:
-                for group, key in self.survey_keys:
-                    base_name = _survey_base_name(group, key)
+                for survey_key in self.survey_keys:
+                    base_name = _survey_base_name(survey_key)
                     name = _append_bin_suffix(base_name, bin_label, self.n_bins)
                     base_label = DEFAULT_LATEX_LABELS.get(base_name, base_name)
                     labels[name] = _latex_with_bin(base_label, bin_label, self.n_bins)
@@ -411,7 +421,9 @@ def make_fullshape_spec(
     *,
     cosmo_keys: tuple[str, ...],
     cosmo_sizes: tuple[int, ...],
-    survey_keys: tuple[tuple[str, str | None], ...],
+    survey_keys: tuple[
+        tuple[str, str | None] | tuple[str, str, str | None], ...
+    ],
     n_bins: int = 1,
     varied_idx: Sequence[int] | None = None,
     bin_labels: Sequence[str] | None = None,

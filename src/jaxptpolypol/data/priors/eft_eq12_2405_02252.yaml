@@ -1,0 +1,60 @@
+metadata:
+  source: "arXiv:2405.02252"
+  equation: 12
+  description: >
+    Gaussian EFT and stochastic nuisance priors translated into the
+    jaxPTPolyPol / ps_1loop_jax coefficient convention.
+  notes:
+    - Counterterms remain zero-centered with unit-width priors.
+    - P_shot, B_shot, and A_shot are unit-centered amplitudes of Poisson-like templates.
+    - The scale field is validated metadata; no additional ndens or k_nl rescaling is applied.
+
+survey_priors:
+  shared:
+    stoch:
+      P_shot:
+        mean: 1.0
+        sigma: 1.0
+        scale: unit
+  pk:
+    ctr:
+      c0:
+        mean: 0.0
+        sigma: 1.0
+        scale: mpc_over_h_sq
+      c2:
+        mean: 0.0
+        sigma: 1.0
+        scale: mpc_over_h_sq
+      c4:
+        mean: 0.0
+        sigma: 1.0
+        scale: mpc_over_h_sq
+      cfog:
+        mean: 0.0
+        sigma: 1.0
+        scale: mpc_over_h_sq
+    stoch:
+      a0:
+        mean: 0.0
+        sigma: 1.0
+        scale: unit
+      a2:
+        mean: 0.0
+        sigma: 1.0
+        scale: unit
+  bk:
+    ctr:
+      c1:
+        mean: 0.0
+        sigma: 1.0
+        scale: mpc_over_h_sq
+    stoch:
+      B_shot:
+        mean: 1.0
+        sigma: 1.0
+        scale: unit
+      A_shot:
+        mean: 1.0
+        sigma: 1.0
+        scale: unit

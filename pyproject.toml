@@ -13,6 +13,7 @@ dependencies = [
     "jax>=0.4",
     "jaxlib>=0.4",
     "numpy",
+    "PyYAML",
 ]
 
 [project.optional-dependencies]
@@ -26,3 +27,6 @@ full = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"jaxptpolypol" = ["data/priors/*.yaml"]

@@ -5,10 +5,67 @@ Plotting utilities for Fisher contours and 1-d marginals.
 from __future__ import annotations
 
 import numpy as np
-from jax.scipy.linalg import eigh, inv
+import warnings
+
 from jax.scipy.stats import norm
 
 __all__ = ["plot_contours", "plot_Gaussian", "triangle_plot"]
+
+
+def _covariance_from_fisher(fisher, *, rcond: float = 1e-12) -> np.ndarray:
+    """Return a finite covariance matrix, falling back to a pseudo-inverse."""
+    fisher_np = np.asarray(fisher, dtype=float)
+    if fisher_np.ndim != 2 or fisher_np.shape[0] != fisher_np.shape[1]:
+        raise ValueError(
+            f"fisher must be a square matrix, got shape {fisher_np.shape}"
+        )
+    if not np.all(np.isfinite(fisher_np)):
+        raise ValueError("fisher contains NaN or Inf entries")
+
+    fisher_np = 0.5 * (fisher_np + fisher_np.T)
+
+    used_pinv = False
+    try:
+        cov = np.linalg.inv(fisher_np)
+    except np.linalg.LinAlgError:
+        cov = np.linalg.pinv(fisher_np, rcond=rcond, hermitian=True)
+        used_pinv = True
+
+    cov = np.asarray(0.5 * (cov + cov.T), dtype=float)
+    if not np.all(np.isfinite(cov)):
+        cov = np.linalg.pinv(fisher_np, rcond=rcond, hermitian=True)
+        cov = np.asarray(0.5 * (cov + cov.T), dtype=float)
+        used_pinv = True
+
+    if not np.all(np.isfinite(cov)):
+        raise ValueError("could not compute a finite covariance from fisher")
+
+    if used_pinv:
+        warnings.warn(
+            "Fisher matrix is singular or ill-conditioned; plotting uses a "
+            "pseudo-inverse fallback.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+
+    return cov
+
+
+def _nonnegative_or_none(value: float, *, atol: float = 1e-15) -> float | None:
+    """Return a clipped non-negative scalar or ``None`` for invalid values."""
+    value = float(value)
+    if not np.isfinite(value):
+        return None
+    if value < 0.0:
+        if abs(value) <= atol:
+            return 0.0
+        return None
+    return value
+
+
+def _fallback_halfspan(center: float) -> float:
+    """Small finite axis span used when a marginal width collapses to zero."""
+    return 1e-6 * max(abs(center), 1.0)
 
 
 def plot_contours(
@@ -42,10 +99,26 @@ def plot_contours(
         cls = np.array([0.6827, 0.9545])
 
     inds = np.asarray(inds)
-    cov = inv(fisher)[np.ix_(inds, inds)]
-    vals, vecs = eigh(cov)
+    cov = _covariance_from_fisher(fisher)[np.ix_(inds, inds)]
+    vals, vecs = np.linalg.eigh(cov)
     order = vals.argsort()[::-1]
     vals, vecs = vals[order], vecs[:, order]
+    vals = np.array(
+        [
+            _nonnegative_or_none(vals[0]),
+            _nonnegative_or_none(vals[1]),
+        ],
+        dtype=object,
+    )
+    if vals[0] is None or vals[1] is None:
+        warnings.warn(
+            f"Skipping contour for indices {inds.tolist()} because the "
+            "marginal covariance is not positive semidefinite.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    vals = np.asarray(vals, dtype=float)
     theta = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
     nstds = norm.ppf(0.5 * (1 + np.asarray(cls)))
 
@@ -62,8 +135,20 @@ def plot_contours(
             )
         )
     nstdmax = max(nstds)
-    sx = nstdmax * np.sqrt(cov[0, 0])
-    sy = nstdmax * np.sqrt(cov[1, 1])
+    sx2 = _nonnegative_or_none(cov[0, 0])
+    sy2 = _nonnegative_or_none(cov[1, 1])
+    if sx2 is None or sy2 is None:
+        warnings.warn(
+            f"Skipping contour axis limits for indices {inds.tolist()} because "
+            "the marginal variances are not finite and non-negative.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    sx = nstdmax * np.sqrt(sx2)
+    sy = nstdmax * np.sqrt(sy2)
+    sx = max(float(sx), _fallback_halfspan(float(pos[inds[0]])))
+    sy = max(float(sy), _fallback_halfspan(float(pos[inds[1]])))
     ax.set_xlim(pos[inds[0]] - 1.5 * sx, pos[inds[0]] + 1.5 * sx)
     ax.set_ylim(pos[inds[1]] - 1.5 * sy, pos[inds[1]] + 1.5 * sy)
 
@@ -94,13 +179,30 @@ def plot_Gaussian(
     """
     import matplotlib.pyplot as plt
 
-    mu = np.array(pos[ind])
-    sigma = np.sqrt(inv(fisher)[ind, ind])
+    mu = float(np.asarray(pos[ind], dtype=float))
+    cov = _covariance_from_fisher(fisher)
+    sigma2 = _nonnegative_or_none(cov[ind, ind])
+    if sigma2 is None:
+        warnings.warn(
+            f"Skipping Gaussian marginal for index {ind} because the variance "
+            "is not finite and non-negative.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return
+    sigma = float(np.sqrt(sigma2))
     nstd = float(norm.ppf(0.5 * (1 + cl)))
     if ax is None:
         ax = plt.gca()
-    x = np.linspace(mu - 1.5 * nstd * sigma, mu + 1.5 * nstd * sigma, 100)
-    ax.plot(x, np.exp(-0.5 * ((x - mu) / sigma) ** 2), **kwargs)
+    halfspan = 1.5 * nstd * sigma
+    halfspan = max(halfspan, _fallback_halfspan(mu))
+    x = np.linspace(mu - halfspan, mu + halfspan, 100)
+    if sigma > 0.0:
+        y = np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+    else:
+        y = np.zeros_like(x)
+        y[len(y) // 2] = 1.0
+    ax.plot(x, y, **kwargs)
     ax.set_xlim(x[0], x[-1])
 
 

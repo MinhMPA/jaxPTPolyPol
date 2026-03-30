@@ -8,10 +8,121 @@ both Fisher and MCMC pipelines.
 
 from __future__ import annotations
 
+import inspect
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 
-__all__ = ["CosmoEmulator", "PS1LoopModel"]
+__all__ = ["CosmoEmulator", "PS1LoopModel", "BispectrumTreeModel"]
+
+
+def _contains_tracer(*values) -> bool:
+    """Return ``True`` when any leaf is currently being traced by JAX."""
+    return any(
+        isinstance(leaf, jax.core.Tracer)
+        for value in values
+        for leaf in jax.tree_util.tree_leaves(value)
+    )
+
+
+def _triangle_closure_tolerance(k1_np, k2_np, k3_np) -> float:
+    """Match the triangle-builder closure tolerance on concrete arrays."""
+    scale = float(max(np.max(k1_np), np.max(k2_np), np.max(k3_np), 1.0))
+    return 10.0 * np.finfo(np.float64).eps * scale
+
+
+def _validate_triangle_eager(k1, k2, k3) -> None:
+    """Raise the upstream triangle-geometry errors on concrete arrays."""
+    k1_np, k2_np, k3_np = np.broadcast_arrays(
+        np.asarray(k1, dtype=float),
+        np.asarray(k2, dtype=float),
+        np.asarray(k3, dtype=float),
+    )
+
+    if np.any(k1_np <= 0) or np.any(k2_np <= 0) or np.any(k3_np <= 0):
+        raise ValueError("All triangle side lengths must be strictly positive.")
+
+    tol = _triangle_closure_tolerance(k1_np, k2_np, k3_np)
+    valid = (
+        (k1_np + k2_np >= k3_np - tol)
+        & (k1_np + k3_np >= k2_np - tol)
+        & (k2_np + k3_np >= k1_np - tol)
+    )
+    if not np.all(valid):
+        raise ValueError("Input wavenumbers do not satisfy the triangle inequality.")
+
+
+def _validate_triangle_jax_safe(_, k1, k2, k3) -> None:
+    """Preserve eager validation while allowing traced triangle arrays under ``jit``."""
+    if _contains_tracer(k1, k2, k3):
+        jax.debug.callback(_validate_triangle_eager, k1, k2, k3)
+        return
+    _validate_triangle_eager(k1, k2, k3)
+
+
+def _needs_ndens_jax_safe(_, stoch) -> bool:
+    """Require ``ndens`` whenever stochastic amplitudes may be traced at runtime."""
+
+    def _value_needs_ndens(value) -> bool:
+        if value is None:
+            return False
+        if _contains_tracer(value):
+            return True
+        return bool(np.any(np.asarray(value) != 0.0))
+
+    return any(_value_needs_ndens(value) for value in stoch.values())
+
+
+def _get_ndens_jax_safe(_, params, stoch):
+    """Mirror the upstream logic without converting traced stochastic values to NumPy."""
+    has_explicit_stoch = (
+        "stoch" in params
+        or "P_shot" in params
+        or "Pshot" in params
+        or "B_shot" in params
+        or "Bshot" in params
+        or "A_shot" in params
+        or "Ashot" in params
+    )
+    if not has_explicit_stoch:
+        return None
+    if "ndens" in params:
+        return jnp.asarray(params["ndens"], dtype=float)
+    if _needs_ndens_jax_safe(None, stoch):
+        raise KeyError("params['ndens'] is required when bispectrum stochasticity is enabled.")
+    return None
+
+
+def _get_bk_shot_jax_safe(_, params):
+    """Return bispectrum shot noise without Python branching on traced values."""
+    stoch = params.get("stoch", {})
+
+    if "B_shot" in stoch:
+        bshot = stoch["B_shot"]
+    elif "Bshot" in stoch:
+        bshot = stoch["Bshot"]
+    elif "Bshot" in params:
+        bshot = params["Bshot"]
+    else:
+        bshot = 0.0
+
+    bshot_arr = jnp.asarray(bshot, dtype=float)
+    if _contains_tracer(bshot_arr):
+        if "ndens" not in params:
+            raise KeyError(
+                "params['ndens'] is required when bispectrum shot noise is enabled."
+            )
+        ndens = jnp.asarray(params["ndens"], dtype=float)
+        return jnp.where(bshot_arr == 0.0, 0.0, bshot_arr / ndens**2)
+
+    if float(np.asarray(bshot_arr)) == 0.0:
+        return 0.0
+
+    if "ndens" not in params:
+        raise KeyError("params['ndens'] is required when bispectrum shot noise is enabled.")
+
+    return bshot_arr / jnp.asarray(params["ndens"], dtype=float) ** 2
 
 
 # ---------------------------------------------------------------------------
@@ -140,3 +251,171 @@ class PS1LoopModel:
     def tree_unflatten(cls, aux_data, children):
         (do_irres,) = aux_data
         return cls(do_irres=do_irres)
+
+
+# ---------------------------------------------------------------------------
+# Tree-level bispectrum model wrapper
+# ---------------------------------------------------------------------------
+@jax.tree_util.register_pytree_node_class
+class BispectrumTreeModel:
+    """Wrapper around ``ps_1loop_jax.bs_tree.BispectrumTree``.
+
+    Parameters
+    ----------
+    do_irres : bool
+        Whether to enable the IR-resummed bispectrum path. The upstream
+        implementation currently raises ``NotImplementedError`` for this mode.
+    do_AP : bool
+        Whether the wrapped model should expect AP-remapped calls by default.
+    rbao, ks, k_nl_rsd, kmin_fft, kmax_fft, nfft
+        Static configuration forwarded to ``BispectrumTree``.
+    """
+
+    def __init__(
+        self,
+        do_irres: bool = False,
+        do_AP: bool = False,
+        rbao: float = 110.0,
+        ks: float = 0.2,
+        k_nl_rsd: float = 0.3,
+        kmin_fft: float = 1e-5,
+        kmax_fft: float = 1e3,
+        nfft: int = 256,
+    ):
+        from ps_1loop_jax.bs_tree import BispectrumTree
+
+        self.do_irres = do_irres
+        self.do_AP = do_AP
+        self.rbao = rbao
+        self.ks = ks
+        self.k_nl_rsd = k_nl_rsd
+        self.kmin_fft = kmin_fft
+        self.kmax_fft = kmax_fft
+        self.nfft = nfft
+        init_sig = inspect.signature(BispectrumTree.__init__)
+        init_kwargs = {
+            "do_irres": do_irres,
+            "do_AP": do_AP,
+            "rbao": rbao,
+            "ks": ks,
+            "kmin_fft": kmin_fft,
+            "kmax_fft": kmax_fft,
+            "nfft": nfft,
+        }
+        if "k_nl_rsd" in init_sig.parameters:
+            init_kwargs["k_nl_rsd"] = k_nl_rsd
+        self.model = BispectrumTree(**init_kwargs)
+        self.model._validate_triangle = _validate_triangle_jax_safe.__get__(
+            self.model, type(self.model)
+        )
+        self.model._needs_ndens = _needs_ndens_jax_safe.__get__(
+            self.model, type(self.model)
+        )
+        self.model._get_ndens = _get_ndens_jax_safe.__get__(
+            self.model, type(self.model)
+        )
+        if hasattr(self.model, "_get_bk_shot"):
+            self.model._get_bk_shot = _get_bk_shot_jax_safe.__get__(
+                self.model, type(self.model)
+            )
+
+    def get_bk0(
+        self,
+        k1,
+        k2,
+        k3,
+        pk_data,
+        params,
+        *,
+        alpha_perp=None,
+        alpha_para=None,
+        num_mu: int = 65,
+        num_phi: int = 65,
+    ):
+        """Bispectrum monopole, optionally in the reference frame with AP."""
+        return self.model.get_bk0(
+            k1,
+            k2,
+            k3,
+            pk_data,
+            params,
+            alpha_perp=alpha_perp,
+            alpha_para=alpha_para,
+            num_mu=num_mu,
+            num_phi=num_phi,
+        )
+
+    def get_bk0_ref(
+        self,
+        k1,
+        k2,
+        k3,
+        alpha_perp,
+        alpha_para,
+        pk_data,
+        params,
+        *,
+        num_mu: int = 65,
+        num_phi: int = 65,
+    ):
+        """Bispectrum monopole in the reference frame with AP."""
+        if hasattr(self.model, "get_bk0_ref"):
+            return self.model.get_bk0_ref(
+                k1,
+                k2,
+                k3,
+                alpha_perp,
+                alpha_para,
+                pk_data,
+                params,
+                num_mu=num_mu,
+                num_phi=num_phi,
+            )
+        return self.model.get_bk0_tree_ref(
+            k1,
+            k2,
+            k3,
+            alpha_perp,
+            alpha_para,
+            pk_data,
+            params,
+            num_mu=num_mu,
+            num_phi=num_phi,
+        )
+
+    # --- JAX pytree ---------------------------------------------------------
+
+    def tree_flatten(self):
+        return (), (
+            self.do_irres,
+            self.do_AP,
+            self.rbao,
+            self.ks,
+            self.k_nl_rsd,
+            self.kmin_fft,
+            self.kmax_fft,
+            self.nfft,
+        )
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        (
+            do_irres,
+            do_AP,
+            rbao,
+            ks,
+            k_nl_rsd,
+            kmin_fft,
+            kmax_fft,
+            nfft,
+        ) = aux_data
+        return cls(
+            do_irres=do_irres,
+            do_AP=do_AP,
+            rbao=rbao,
+            ks=ks,
+            k_nl_rsd=k_nl_rsd,
+            kmin_fft=kmin_fft,
+            kmax_fft=kmax_fft,
+            nfft=nfft,
+        )

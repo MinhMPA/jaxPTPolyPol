@@ -15,8 +15,17 @@ import jax.numpy as jnp
 
 __all__ = [
     "CosmoParams",
+    "FullShapeSurveyParams",
     "SurveyParams",
+    "pack_bk_params",
+    "pack_fullshape_params",
+    "pack_joint_params",
+    "pack_pk_params",
     "pack_params",
+    "unpack_bk_params",
+    "unpack_fullshape_params",
+    "unpack_joint_params",
+    "unpack_pk_params",
     "unpack_params",
     "pack_multibin_params",
     "unpack_multibin_params",
@@ -275,6 +284,195 @@ class SurveyParams:
         return cls(grouped)
 
 
+def _flatten_survey_param_dict(
+    param_dict: dict,
+) -> list[tuple[tuple[str, str | None], object]]:
+    return [
+        ((group, k), v)
+        for group, val in param_dict.items()
+        for k, v in (val.items() if isinstance(val, dict) else [(None, val)])
+    ]
+
+
+def _merge_survey_dicts(*param_dicts: dict) -> dict:
+    merged: dict = {}
+    for param_dict in param_dicts:
+        for group, value in param_dict.items():
+            if isinstance(value, dict):
+                target = merged.setdefault(group, {})
+                if not isinstance(target, dict):
+                    raise ValueError(f"group {group!r} mixes scalar and dict values")
+                for key, item in value.items():
+                    if key in target:
+                        raise ValueError(
+                            f"duplicate survey parameter {group!r}:{key!r}"
+                        )
+                    target[key] = item
+            else:
+                if group in merged:
+                    raise ValueError(f"duplicate survey parameter group {group!r}")
+                merged[group] = value
+    return merged
+
+
+def _is_role_key(key) -> bool:
+    return isinstance(key, tuple) and len(key) == 3
+
+
+@jax.tree_util.register_pytree_node_class
+class FullShapeSurveyParams:
+    """Role-aware full-shape survey / nuisance parameters.
+
+    Parameters are divided into three sections:
+
+    - ``shared``: common to both power spectrum and bispectrum analyses
+    - ``pk``: power-spectrum-only nuisance / EFT parameters
+    - ``bk``: bispectrum-only nuisance / EFT parameters
+
+    Each section uses the same nested ``{group: scalar_or_dict}`` structure as
+    :class:`SurveyParams`.
+    """
+
+    def __init__(
+        self,
+        *,
+        shared: dict | None = None,
+        pk: dict | None = None,
+        bk: dict | None = None,
+    ):
+        self.shared = SurveyParams(shared or {})
+        self.pk = SurveyParams(pk or {})
+        self.bk = SurveyParams(bk or {})
+
+    def __repr__(self) -> str:
+        return (
+            "FullShapeSurveyParams("
+            f"shared={self.shared.to_dict()}, "
+            f"pk={self.pk.to_dict()}, "
+            f"bk={self.bk.to_dict()})"
+        )
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, FullShapeSurveyParams)
+            and self.shared == other.shared
+            and self.pk == other.pk
+            and self.bk == other.bk
+        )
+
+    def _sections_for(self, observable: str) -> tuple[tuple[str, SurveyParams], ...]:
+        if observable == "pk":
+            return (("shared", self.shared), ("pk", self.pk))
+        if observable == "bk":
+            return (("shared", self.shared), ("bk", self.bk))
+        if observable == "joint":
+            return (
+                ("shared", self.shared),
+                ("pk", self.pk),
+                ("bk", self.bk),
+            )
+        raise ValueError(
+            "observable must be 'pk', 'bk', or 'joint', "
+            f"got {observable!r}"
+        )
+
+    def layout_keys(
+        self,
+        observable: str = "joint",
+    ) -> tuple[tuple[str, str, str | None], ...]:
+        keys: list[tuple[str, str, str | None]] = []
+        for section, params in self._sections_for(observable):
+            keys.extend((section, group, key) for group, key in params.param_keys)
+        return tuple(keys)
+
+    @property
+    def param_keys(self) -> tuple[tuple[str, str, str | None], ...]:
+        return self.layout_keys("joint")
+
+    @property
+    def pk_param_keys(self) -> tuple[tuple[str, str, str | None], ...]:
+        return self.layout_keys("pk")
+
+    @property
+    def bk_param_keys(self) -> tuple[tuple[str, str, str | None], ...]:
+        return self.layout_keys("bk")
+
+    @property
+    def joint_param_keys(self) -> tuple[tuple[str, str, str | None], ...]:
+        return self.layout_keys("joint")
+
+    def to_array(self, observable: str = "joint") -> jnp.ndarray:
+        parts = [params.to_array() for _, params in self._sections_for(observable)]
+        if not parts:
+            return jnp.array([])
+        if len(parts) == 1:
+            return parts[0]
+        return jnp.concatenate(parts)
+
+    def to_role_dict(self) -> dict[str, dict]:
+        return {
+            "shared": self.shared.to_dict(),
+            "pk": self.pk.to_dict(),
+            "bk": self.bk.to_dict(),
+        }
+
+    def to_model_dict(self, observable: str) -> dict:
+        return _merge_survey_dicts(
+            *(params.to_dict() for _, params in self._sections_for(observable))
+        )
+
+    def tree_flatten(self):
+        return ((self.shared, self.pk, self.bk),), ()
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        del aux_data
+        ((shared, pk, bk),) = children
+        return cls(
+            shared=shared.to_dict(),
+            pk=pk.to_dict(),
+            bk=bk.to_dict(),
+        )
+
+    @classmethod
+    def from_array(
+        cls,
+        flat_values: jnp.ndarray,
+        flat_keys,
+    ) -> FullShapeSurveyParams:
+        if flat_keys and not all(
+            isinstance(key, tuple) and len(key) in (2, 3) for key in flat_keys
+        ):
+            raise ValueError("flat_keys must contain 2-tuple or 3-tuple survey keys")
+
+        shared_dict: dict = {}
+        pk_dict: dict = {}
+        bk_dict: dict = {}
+
+        for key, value in zip(flat_keys, flat_values):
+            if len(key) == 2:
+                section = "shared"
+                group, subkey = key
+            else:
+                section, group, subkey = key
+
+            if section == "shared":
+                target = shared_dict
+            elif section == "pk":
+                target = pk_dict
+            elif section == "bk":
+                target = bk_dict
+            else:
+                raise ValueError(f"unknown survey section {section!r}")
+
+            if subkey is None:
+                target[group] = value
+            else:
+                target.setdefault(group, {})[subkey] = value
+
+        return cls(shared=shared_dict, pk=pk_dict, bk=bk_dict)
+
+
 # ---------------------------------------------------------------------------
 # Pack / unpack helpers
 # ---------------------------------------------------------------------------
@@ -312,6 +510,40 @@ def pack_multibin_params(
     return jnp.concatenate(parts)
 
 
+def pack_fullshape_params(
+    cosmo: CosmoParams,
+    surveys: list[FullShapeSurveyParams],
+    *,
+    observable: str = "joint",
+) -> jnp.ndarray:
+    """Pack shared cosmology with per-bin role-aware survey parameters."""
+    parts = [cosmo.to_array()]
+    for survey in surveys:
+        parts.append(survey.to_array(observable))
+    return jnp.concatenate(parts)
+
+
+def pack_pk_params(
+    cosmo: CosmoParams,
+    surveys: list[FullShapeSurveyParams],
+) -> jnp.ndarray:
+    return pack_fullshape_params(cosmo, surveys, observable="pk")
+
+
+def pack_bk_params(
+    cosmo: CosmoParams,
+    surveys: list[FullShapeSurveyParams],
+) -> jnp.ndarray:
+    return pack_fullshape_params(cosmo, surveys, observable="bk")
+
+
+def pack_joint_params(
+    cosmo: CosmoParams,
+    surveys: list[FullShapeSurveyParams],
+) -> jnp.ndarray:
+    return pack_fullshape_params(cosmo, surveys, observable="joint")
+
+
 def unpack_multibin_params(
     params: jnp.ndarray,
     cosmo_keys: tuple[str, ...],
@@ -330,3 +562,74 @@ def unpack_multibin_params(
             SurveyParams.from_array(params[offset : offset + n_survey], survey_keys)
         )
     return cosmo_obj, survey_objs
+
+
+def unpack_fullshape_params(
+    params: jnp.ndarray,
+    cosmo_keys: tuple[str, ...],
+    cosmo_sizes: tuple[int, ...],
+    survey_keys,
+    n_bins: int,
+) -> tuple[CosmoParams, list[FullShapeSurveyParams]]:
+    """Unpack a flat vector into ``(CosmoParams, [FullShapeSurveyParams, ...])``."""
+    n_cosmo = sum(cosmo_sizes)
+    n_survey = len(survey_keys)
+    cosmo_obj = CosmoParams.from_array(params[:n_cosmo], cosmo_keys, cosmo_sizes)
+    survey_objs = []
+    for i in range(n_bins):
+        offset = n_cosmo + i * n_survey
+        survey_objs.append(
+            FullShapeSurveyParams.from_array(
+                params[offset : offset + n_survey],
+                survey_keys,
+            )
+        )
+    return cosmo_obj, survey_objs
+
+
+def unpack_pk_params(
+    params: jnp.ndarray,
+    cosmo_keys: tuple[str, ...],
+    cosmo_sizes: tuple[int, ...],
+    survey_keys,
+    n_bins: int,
+) -> tuple[CosmoParams, list[FullShapeSurveyParams]]:
+    return unpack_fullshape_params(
+        params,
+        cosmo_keys,
+        cosmo_sizes,
+        survey_keys,
+        n_bins,
+    )
+
+
+def unpack_bk_params(
+    params: jnp.ndarray,
+    cosmo_keys: tuple[str, ...],
+    cosmo_sizes: tuple[int, ...],
+    survey_keys,
+    n_bins: int,
+) -> tuple[CosmoParams, list[FullShapeSurveyParams]]:
+    return unpack_fullshape_params(
+        params,
+        cosmo_keys,
+        cosmo_sizes,
+        survey_keys,
+        n_bins,
+    )
+
+
+def unpack_joint_params(
+    params: jnp.ndarray,
+    cosmo_keys: tuple[str, ...],
+    cosmo_sizes: tuple[int, ...],
+    survey_keys,
+    n_bins: int,
+) -> tuple[CosmoParams, list[FullShapeSurveyParams]]:
+    return unpack_fullshape_params(
+        params,
+        cosmo_keys,
+        cosmo_sizes,
+        survey_keys,
+        n_bins,
+    )

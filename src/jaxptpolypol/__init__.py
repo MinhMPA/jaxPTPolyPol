@@ -27,3 +27,6 @@ from . import bao
 from . import plotting
 from . import sampler
 from . import chain_analysis
+from . import priors
+from . import derived
+from . import marginalization
