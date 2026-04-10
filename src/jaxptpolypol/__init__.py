@@ -30,3 +30,5 @@ from . import chain_analysis
 from . import priors
 from . import derived
 from . import marginalization
+from . import cmb
+from . import cmb_mcmc_utils

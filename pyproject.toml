@@ -12,12 +12,14 @@ requires-python = ">=3.9"
 dependencies = [
     "jax>=0.4",
     "jaxlib>=0.4",
+    "interpax",
     "numpy",
     "PyYAML",
 ]
 
 [project.optional-dependencies]
 full = [
+    "candl-like",
     "cosmopower-jax",
     "ps_1loop_jax",
     "quadax",
