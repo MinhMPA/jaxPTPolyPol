@@ -158,7 +158,7 @@ def _gaussian_pk_covariance_blocks(
 ) -> jnp.ndarray:
     """Return the per-k ``(3, 3)`` Gaussian covariance blocks."""
     P0, P2, P4 = pk_ell
-    N_k = V_survey * (k**2) * dk / (4.0 * jnp.pi**2)
+    N_k = V_survey * (k**2) * dk / (2.0 * jnp.pi**2)
 
     C00 = P0**2 + (1.0 / 5.0) * P2**2 + (1.0 / 9.0) * P4**2
     C02 = (

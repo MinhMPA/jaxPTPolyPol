@@ -211,7 +211,7 @@ def test_gaussian_covariance_matches_observable_major_manual_blocks():
     p2 = np.array([5.0, 7.0])
     p4 = np.array([11.0, 13.0])
 
-    nk = volume * k**2 * dk / (4.0 * np.pi**2)
+    nk = volume * k**2 * dk / (2.0 * np.pi**2)
 
     c00 = p0**2 + (1.0 / 5.0) * p2**2 + (1.0 / 9.0) * p4**2
     c02 = (
