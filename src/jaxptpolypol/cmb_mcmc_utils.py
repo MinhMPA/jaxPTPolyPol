@@ -19,13 +19,19 @@ COSMO_SIZES_NATIVE = (1, 1, 1, 1, 1, 1)
 NONPLANCK_SAMPLED_COSMO_KEYS = ("100theta", "ombh2", "omch2", "logA", "ns")
 ACT_LENSING_ONLY_SAMPLED_COSMO_KEYS = ("H0", "ombh2", "omch2", "logA", "ns")
 PLANCK_SAMPLED_COSMO_KEYS = NONPLANCK_SAMPLED_COSMO_KEYS + ("tau",)
+# Planck 2018 TT,TE,EE+lowE+lensing+BAO best fit — kept in sync with the
+# Fisher notebooks (example/fisher/fisher_cmb_candl_*.ipynb and
+# fisher_joint_PFS_BAO_CMB_*.ipynb) so Fisher-vs-MCMC comparisons expand
+# around the same point. Note: NUTS gets no tau gradient from clipy simall
+# (zero-gradient table lookup; see ~/candl/clipy/fix_simall_grad.md) — the
+# chain values remain exact, only tau mixing is inefficient.
 DEFAULT_FIDUCIAL_NATIVE = {
-    "H0": 67.32,
-    "ombh2": 0.02237,
-    "omch2": 0.1200,
-    "logA": 3.044,
-    "ns": 0.9649,
-    "tau": 0.0544,
+    "H0": 67.66,
+    "ombh2": 0.02242,
+    "omch2": 0.11933,
+    "logA": 3.047,
+    "ns": 0.9665,
+    "tau": 0.0561,
 }
 
 COMBINATION_CONFIGS = {
