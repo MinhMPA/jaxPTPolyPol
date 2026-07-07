@@ -268,6 +268,13 @@ class CandlParameterLayout:
         cosmo: CosmoParams,
         cmb_nuisance: Mapping[str, Any] | None = None,
     ) -> jnp.ndarray:
+        if tuple(cosmo.param_keys) != tuple(self.cosmo_keys):
+            raise ValueError(
+                "CosmoParams key order "
+                f"{tuple(cosmo.param_keys)} does not match layout.cosmo_keys "
+                f"{tuple(self.cosmo_keys)}; pack() fills the cosmology block "
+                "by insertion order, so a mismatch scrambles parameter values."
+            )
         nuisance = dict(cmb_nuisance or {})
         packed = jnp.zeros(self.size, dtype=jnp.asarray(cosmo.to_array()).dtype)
         packed = packed.at[: self.n_cosmo].set(cosmo.to_array())
