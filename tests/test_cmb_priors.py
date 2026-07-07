@@ -54,6 +54,18 @@ def test_assert_zero_gradient_raises_for_sloped_fn():
         assert_zero_gradient(sloped, jnp.ones(4), name="planck_lowl_ee")
 
 
+def test_assert_zero_gradient_indices_restricts_to_checked_block():
+    # Models the simall case: flat in the cosmology block (index 0), but sloped
+    # in a nuisance component (index 1) via its internal Gaussian prior.
+    fn = lambda th: jnp.sum(th[1] ** 2)
+    theta = jnp.array([1.0, 2.0])
+    # Full check trips on the nuisance gradient ...
+    with pytest.raises(RuntimeError):
+        assert_zero_gradient(fn, theta, name="planck_lowl_ee")
+    # ... but restricting to the cosmology block passes.
+    assert_zero_gradient(fn, theta, indices=range(1), name="planck_lowl_ee")
+
+
 def test_pack_rejects_mismatched_cosmo_key_order():
     from jaxptpolypol.cmb import CandlParameterLayout
     from jaxptpolypol.params import CosmoParams

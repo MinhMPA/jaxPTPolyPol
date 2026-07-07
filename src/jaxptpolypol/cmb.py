@@ -206,21 +206,29 @@ def add_tau_prior_to_fisher(fisher, param_order, tau_prior_sigma):
     return out
 
 
-def assert_zero_gradient(loglike_fn, theta, *, atol=1e-12, name="loglike"):
+def assert_zero_gradient(loglike_fn, theta, *, atol=1e-12, name="loglike", indices=None):
     """Raise if `loglike_fn` has a nonzero JAX gradient at `theta`.
 
     Tripwire for the tau-prior workaround: it must fail loudly the moment
-    the clipy simall likelihood becomes differentiable, because then adding
-    PLANCK_TAU_PRIOR_SIGMA on top would double-count the lowE information.
+    the clipy simall likelihood becomes differentiable in the cosmology it
+    depends on, because then adding PLANCK_TAU_PRIOR_SIGMA on top would
+    double-count the lowE information.
+
+    Pass `indices` to restrict the check to a subset of `theta`'s components.
+    For the simall tripwire, restrict to the cosmology block: simall's table
+    lookup zeroes the gradient w.r.t. cosmology, but its internal Gaussian
+    prior on the `A_planck` nuisance carries a legitimate nonzero gradient
+    that is unrelated to the missing lowE cosmology information.
     """
-    grad = jax.grad(loglike_fn)(theta)
-    max_abs = float(jnp.max(jnp.abs(jnp.asarray(grad))))
+    grad = jnp.asarray(jax.grad(loglike_fn)(theta))
+    checked = grad if indices is None else grad[jnp.asarray(list(indices))]
+    max_abs = float(jnp.max(jnp.abs(checked))) if checked.size else 0.0
     if max_abs > atol:
         raise RuntimeError(
-            f"{name} has a nonzero gradient (max |g| = {max_abs:.3e}): "
-            "the simall zero-gradient assumption no longer holds; remove the "
-            "Gaussian tau prior to avoid double-counting lowE information "
-            "(see ~/candl/clipy/fix_simall_grad.md)."
+            f"{name} has a nonzero gradient (max |g| = {max_abs:.3e}) over the "
+            "checked parameters: the simall zero-gradient assumption no longer "
+            "holds; remove the Gaussian tau prior to avoid double-counting lowE "
+            "information (see ~/candl/clipy/fix_simall_grad.md)."
         )
 
 
