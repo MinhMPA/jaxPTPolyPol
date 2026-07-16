@@ -31,6 +31,8 @@ __all__ = [
     "MarginalSplit",
     "split_marginal_indices",
     "make_marginal_templates",
+    "make_constant_prior_fns",
+    "make_marginal_log_posterior",
 ]
 
 
@@ -165,3 +167,43 @@ def make_marginal_templates(theory_fn, lin_idx):
         return m0, M.T                  # (n_data, n_lin)
 
     return templates
+
+
+def make_constant_prior_fns(mu_p, sigma_p):
+    """Constant (theta_NL-independent) prior mean/width functions.
+
+    Stream-A configuration: fiducial-centered means, Fisher-consistent widths.
+    """
+    mu_p = jnp.asarray(mu_p, dtype=jnp.float64)
+    sigma_p = jnp.asarray(sigma_p, dtype=jnp.float64)
+    return (lambda _theta_nl: mu_p), (lambda _theta_nl: sigma_p)
+
+
+def make_marginal_log_posterior(theory_fn, data, cov_inv, lin_idx,
+                                prior_mean_fn, prior_sigma_fn,
+                                log_prior_nl_fn, to_physical, full_params_fn,
+                                *, include_logdet: bool = True):
+    """JIT-compiled marginal log-posterior in whitened theta_NL space.
+
+    Mirrors sampler.make_log_posterior but integrates the linear block
+    analytically at every step. prior_mean_fn / prior_sigma_fn receive the
+    *physical* theta_NL vector and return (n_lin,) arrays -- constant for
+    Stream A (make_constant_prior_fns), theta_NL-dependent for the
+    arXiv:2511.20757 A_AP*A_amp-rescaled priors (Stream B).
+    """
+    data = jnp.asarray(data, dtype=jnp.float64)
+    cov_inv = jnp.asarray(cov_inv, dtype=jnp.float64)
+    templates = make_marginal_templates(theory_fn, lin_idx)
+
+    @jax.jit
+    def log_posterior(x):
+        theta_nl = to_physical(x)
+        full = full_params_fn(theta_nl)
+        m0, M = templates(full)
+        mu_p = prior_mean_fn(theta_nl)
+        sigma_p = prior_sigma_fn(theta_nl)
+        ll = gaussian_marginal_loglike(
+            data, m0, M, cov_inv, mu_p, sigma_p, include_logdet=include_logdet)
+        return ll + log_prior_nl_fn(theta_nl)
+
+    return log_posterior

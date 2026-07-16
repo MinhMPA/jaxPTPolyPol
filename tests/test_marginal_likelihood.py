@@ -139,3 +139,65 @@ def test_templates_linearize_quadratic_offender():
 
     r1, r2 = residual(0.4), residual(0.8)
     np.testing.assert_allclose(r2 / r1, 4.0, rtol=1e-12)   # exact quadratic law
+
+
+def test_marginal_posterior_hessian_equals_schur():
+    from jaxptpolypol.marginal_likelihood import (
+        make_constant_prior_fns, make_marginal_log_posterior)
+    from jaxptpolypol.sampler import make_full_params_fn
+
+    rng = np.random.default_rng(2)
+    n_d = 12
+    J = rng.normal(size=(n_d, 5))          # linear theory: t = J @ p (p = full, 5 params)
+    J_jnp = jnp.asarray(J)
+
+    def theory(p):
+        return J_jnp @ p
+
+    nl_idx, lin_idx = (0, 1), (2, 3, 4)
+    fid = jnp.array([0.5, -0.3, 1.0, 0.0, 2.0])
+    data = theory(fid)                      # noiseless mock
+    cov_inv = jnp.eye(n_d)
+    mu_p = fid[jnp.array(lin_idx)]
+    sigma_p = jnp.array([0.7, 1.3, 0.9])
+
+    prior_mean_fn, prior_sigma_fn = make_constant_prior_fns(mu_p, sigma_p)
+    log_post = make_marginal_log_posterior(
+        theory_fn=theory, data=data, cov_inv=cov_inv, lin_idx=lin_idx,
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda t: 0.0,
+        to_physical=lambda x: x,            # unwhitened for the test
+        full_params_fn=make_full_params_fn(fid, nl_idx),
+        include_logdet=False,               # pure-likelihood curvature
+    )
+    H = jax.hessian(log_post)(fid[jnp.array(nl_idx)])
+
+    # Expected: Schur complement of the joint GN Fisher over the lin block
+    F = J.T @ J
+    F[np.ix_(lin_idx, lin_idx)] += np.diag(1.0 / np.asarray(sigma_p) ** 2)
+    F_nn = F[np.ix_(nl_idx, nl_idx)]
+    F_nl = F[np.ix_(nl_idx, lin_idx)]
+    F_ll = F[np.ix_(lin_idx, lin_idx)]
+    schur = F_nn - F_nl @ np.linalg.solve(F_ll, F_nl.T)
+    np.testing.assert_allclose(np.asarray(-H), schur, rtol=1e-10)
+
+
+def test_marginal_posterior_peak_at_fiducial_noiseless():
+    from jaxptpolypol.marginal_likelihood import (
+        make_constant_prior_fns, make_marginal_log_posterior)
+    from jaxptpolypol.sampler import make_full_params_fn
+
+    def theory(p):
+        return jnp.array([p[0]**2 + p[1], 2.0 * p[0] - p[1], p[1]])
+
+    fid = jnp.array([1.2, 0.5])
+    data = theory(fid)
+    prior_mean_fn, prior_sigma_fn = make_constant_prior_fns(
+        fid[1:2], jnp.array([2.0]))
+    log_post = make_marginal_log_posterior(
+        theory_fn=theory, data=data, cov_inv=jnp.eye(3), lin_idx=(1,),
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda t: 0.0, to_physical=lambda x: x,
+        full_params_fn=make_full_params_fn(fid, (0,)))
+    g = jax.grad(log_post)(fid[:1])
+    np.testing.assert_allclose(np.asarray(g), [0.0], atol=1e-10)

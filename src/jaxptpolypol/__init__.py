@@ -32,3 +32,13 @@ from . import derived
 from . import marginalization
 from . import cmb
 from . import cmb_mcmc_utils
+
+from .marginal_likelihood import (
+    LIN_SURVEY_KEYS,
+    MarginalSplit,
+    gaussian_marginal_loglike,
+    make_constant_prior_fns,
+    make_marginal_log_posterior,
+    make_marginal_templates,
+    split_marginal_indices,
+)
