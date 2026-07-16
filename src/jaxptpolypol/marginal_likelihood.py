@@ -30,6 +30,7 @@ __all__ = [
     "LIN_SURVEY_KEYS",
     "MarginalSplit",
     "split_marginal_indices",
+    "make_marginal_templates",
 ]
 
 
@@ -138,3 +139,29 @@ def split_marginal_indices(*, n_cosmo_params, survey_keys, n_bins,
         nl_idx=tuple(nl_idx), lin_idx=tuple(lin_idx), lin_keys=tuple(lin_keys),
         nl_b1_pos=tuple(nl_b1_pos), n_lin=len(lin_idx), n_nl=len(nl_idx),
     )
+
+
+def make_marginal_templates(theory_fn, lin_idx):
+    """Build the exact linear templates m0(theta_NL) = t(theta_lin=0) and
+    M(theta_NL) = dt/dtheta_lin.
+
+    Uses jax.linearize: one primal trace + n_lin forward tangents. Exact for
+    parameters the theory is linear in; for c1 (exactly quadratic in the
+    ps_1loop_jax bispectrum) this returns the slope at c1=0, i.e. the
+    linearized single-insertion counterterm of arXiv:2511.20757.
+    """
+    lin_idx_arr = jnp.array(lin_idx)
+    n_lin = len(lin_idx)
+    eye = jnp.eye(n_lin)
+
+    def templates(full_params):
+        base = full_params.at[lin_idx_arr].set(0.0)
+
+        def t_of_lin(lin_values):
+            return theory_fn(base.at[lin_idx_arr].set(lin_values))
+
+        m0, jvp = jax.linearize(t_of_lin, jnp.zeros(n_lin))
+        M = jax.vmap(jvp)(eye)          # (n_lin, n_data)
+        return m0, M.T                  # (n_data, n_lin)
+
+    return templates

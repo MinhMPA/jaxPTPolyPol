@@ -98,3 +98,44 @@ def test_split_rejects_unknown_lin_key():
             n_cosmo_params=9, survey_keys=bad_keys, n_bins=1,
             fixed_survey_keys={('shared', 'k_nl', None), ('shared', 'ndens', None)},
         )
+
+
+def test_templates_exact_on_linear_toy():
+    from jaxptpolypol.marginal_likelihood import make_marginal_templates
+
+    # full params: [a, b | l1, l2];  t linear in (l1, l2), nonlinear in (a, b)
+    def theory(p):
+        a, b, l1, l2 = p[0], p[1], p[2], p[3]
+        return jnp.array([a**2 + 3.0 * l1 + a * l2,
+                          jnp.sin(b) + l1 - 2.0 * l2])
+
+    templates = make_marginal_templates(theory, lin_idx=(2, 3))
+    full = jnp.array([1.5, 0.7, 99.0, -99.0])   # junk lin values must be ignored
+    m0, M = templates(full)
+    np.testing.assert_allclose(np.asarray(m0), [1.5**2, np.sin(0.7)], rtol=1e-14)
+    np.testing.assert_allclose(np.asarray(M), [[3.0, 1.5], [1.0, -2.0]], rtol=1e-14)
+    # exact reconstruction for any theta_lin
+    theta_lin = jnp.array([0.3, -1.2])
+    t_full = theory(full.at[jnp.array((2, 3))].set(theta_lin))
+    np.testing.assert_allclose(np.asarray(t_full), np.asarray(m0 + M @ theta_lin), rtol=1e-14)
+
+
+def test_templates_linearize_quadratic_offender():
+    from jaxptpolypol.marginal_likelihood import make_marginal_templates
+
+    # c1-like: t carries an l**2 term; templates must return slope at 0 only,
+    # and the reconstruction residual must scale exactly quadratically.
+    def theory(p):
+        l = p[0]
+        return jnp.array([2.0 * l + 0.5 * l**2])
+
+    templates = make_marginal_templates(theory, lin_idx=(0,))
+    m0, M = templates(jnp.array([7.0]))
+    np.testing.assert_allclose(np.asarray(M), [[2.0]], rtol=1e-14)
+
+    def residual(c):
+        t = theory(jnp.array([c]))
+        return float((t - m0 - M @ jnp.array([c]))[0])
+
+    r1, r2 = residual(0.4), residual(0.8)
+    np.testing.assert_allclose(r2 / r1, 4.0, rtol=1e-12)   # exact quadratic law
