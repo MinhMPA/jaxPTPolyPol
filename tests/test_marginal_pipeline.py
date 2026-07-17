@@ -124,3 +124,44 @@ def test_c1_residual_is_exactly_quadratic(pipeline):
     r1, r2 = residual_norm(0.4), residual_norm(0.8)
     assert r1 > 0.0                                    # curvature is real
     np.testing.assert_allclose(r2 / r1, 4.0, rtol=1e-6)  # exact quadratic law
+
+
+@needs_emulator
+def test_marginal_curvature_equals_fisher_schur(pipeline):
+    from jaxptpolypol.marginal_likelihood import (
+        make_constant_prior_fns, make_marginal_log_posterior,
+        split_marginal_indices)
+    from jaxptpolypol.sampler import make_full_params_fn
+
+    theory_fn, packed, survey_keys, n_cosmo, n_bins = pipeline
+    split = split_marginal_indices(
+        n_cosmo_params=n_cosmo, survey_keys=survey_keys, n_bins=n_bins,
+        fixed_cosmo=(5, 6, 7, 8),
+        fixed_survey_keys={('shared', 'k_nl', None), ('shared', 'ndens', None)})
+
+    data = theory_fn(packed)                      # noiseless mock
+    n_data = data.shape[0]
+    cov_inv = jnp.eye(n_data)                     # identity covariance suffices for the identity
+    sigma_p = jnp.full(split.n_lin, 1.0)
+    mu_p = packed[jnp.array(split.lin_idx)]
+
+    prior_mean_fn, prior_sigma_fn = make_constant_prior_fns(mu_p, sigma_p)
+    log_post = make_marginal_log_posterior(
+        theory_fn=theory_fn, data=data, cov_inv=cov_inv, lin_idx=split.lin_idx,
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda t: 0.0, to_physical=lambda x: x,
+        full_params_fn=make_full_params_fn(packed, split.nl_idx),
+        include_logdet=False)
+    H = jax.hessian(log_post)(packed[jnp.array(split.nl_idx)])
+
+    # Full-space GN Fisher over [nl | lin], prior on lin slots, Schur out lin.
+    jac = jax.jacfwd(theory_fn)(packed)
+    varied = list(split.nl_idx) + list(split.lin_idx)
+    J = jac[:, jnp.array(varied)]
+    F = np.array(J.T @ cov_inv @ J)   # writable copy (np.asarray of a jax array is read-only)
+    n_nl = split.n_nl
+    F[n_nl:, n_nl:] += np.diag(1.0 / np.asarray(sigma_p) ** 2)
+    schur = F[:n_nl, :n_nl] - F[:n_nl, n_nl:] @ np.linalg.solve(
+        F[n_nl:, n_nl:], F[n_nl:, :n_nl])
+    scale = np.abs(schur).max()
+    np.testing.assert_allclose(np.asarray(-H) / scale, schur / scale, atol=1e-8)
