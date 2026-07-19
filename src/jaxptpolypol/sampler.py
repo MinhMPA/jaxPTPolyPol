@@ -22,6 +22,7 @@ __all__ = [
     "make_log_posterior",
     "warmup_nuts",
     "run_nuts",
+    "run_rwmh",
     "samples_to_physical",
 ]
 
@@ -721,6 +722,150 @@ def _sample_parallel(chain_keys, warmup_states, warmup_step_sizes,
             "is_divergent": jnp.concatenate(all_divergent, axis=1),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Random-walk Metropolis-Hastings sampler (gradient-free)
+# ---------------------------------------------------------------------------
+
+def run_rwmh(rng_key, log_posterior_fn, initial_position, num_samples,
+             num_chains=1, proposal_sigma=None, scan_chunk_size=1000,
+             progress_fn=None, sample_progress_fn=None):
+    """Run gradient-free random-walk Metropolis-Hastings (RWMH).
+
+    A forward-evaluation-only alternative to :func:`run_nuts` for
+    posteriors whose gradient is intractable or explodes the XLA
+    compilation graph (e.g. marginal-likelihood posteriors, whose
+    gradient is a second-order graph).  This mirrors the Metropolis-
+    Hastings usage in Chudaykin, Ivanov & Philcox (arXiv:2511.20757,
+    §II), which drives inference with forward posterior calls only.
+
+    The proposal is an isotropic Gaussian scaled by ``sigma_vector``.
+    There is **no warmup or adaptation**: the caller is expected to work
+    in a whitened parameter space where the posterior is approximately a
+    unit Gaussian, so the standard optimal-scaling default
+    ``(2.38 / sqrt(d)) * ones(d)`` is a good fixed proposal.
+
+    Chains are run **sequentially** (one at a time) to keep peak memory
+    low.  Each chain draws samples in chunked ``jax.lax.scan`` blocks;
+    the BlackJAX transition is JIT-compiled once and reused across
+    chunks and chains.
+
+    Parameters
+    ----------
+    rng_key : PRNGKey
+        JAX random key.
+    log_posterior_fn : callable
+        Log-posterior ``x -> scalar`` (typically in whitened space,
+        from :func:`make_log_posterior`).
+    initial_position : ndarray, shape (n_params,)
+        Starting point (typically ``jnp.zeros(n)`` in whitened space).
+    num_samples : int
+        Samples drawn per chain.
+    num_chains : int
+        Number of independent chains.
+    proposal_sigma : None, scalar, or ndarray, optional
+        Per-parameter proposal standard deviations.
+
+        - *None* (default): ``(2.38 / sqrt(d)) * ones(d)``.
+        - scalar: broadcast to a length-*d* vector.
+        - vector, shape ``(d,)``: used as-is.
+    scan_chunk_size : int
+        Number of steps per ``jax.lax.scan`` chunk.  Default 1000.
+    progress_fn : callable, optional
+        ``progress_fn(chain_number, num_chains)`` called after each
+        chain completes (1-based ``chain_number``).
+    sample_progress_fn : callable, optional
+        Per-chunk callback with signature
+        ``sample_progress_fn(chain_number, num_chains, done, total)``,
+        where ``chain_number`` is 1-based and ``done`` counts completed
+        draws for that chain.
+
+    Returns
+    -------
+    samples : ndarray, shape (num_chains, num_samples, n_params)
+        Samples in the sampled parameter space.
+    diagnostics : dict
+        ``acceptance_rate``  (num_chains,) mean acceptance per chain.
+        ``proposal_sigma``  (n_params,) the proposal vector used.
+    """
+    import blackjax
+    import blackjax.mcmc.random_walk as random_walk
+
+    initial_position = jnp.asarray(initial_position, dtype=jnp.float64)
+    d = initial_position.shape[0]
+
+    # Resolve the proposal standard-deviation vector.
+    if proposal_sigma is None:
+        sigma_vector = (2.38 / jnp.sqrt(d)) * jnp.ones(d, dtype=jnp.float64)
+    else:
+        proposal_sigma = jnp.asarray(proposal_sigma, dtype=jnp.float64)
+        if proposal_sigma.ndim == 0:
+            sigma_vector = proposal_sigma * jnp.ones(d, dtype=jnp.float64)
+        else:
+            sigma_vector = proposal_sigma
+    sigma_vector = jnp.asarray(sigma_vector, dtype=jnp.float64)
+
+    rwmh = blackjax.additive_step_random_walk(
+        log_posterior_fn, random_walk.normal(sigma_vector)
+    )
+
+    # JIT the transition once; reused across chunks and chains.
+    @jax.jit
+    def _scan_chunk(state, keys):
+        def body(s, k):
+            s, info = rwmh.step(k, s)
+            return s, (s.position, info.is_accepted)
+        return lax.scan(body, state, keys)
+
+    chain_keys = jax.random.split(rng_key, num_chains)
+
+    all_positions = []
+    all_accept = []
+
+    for c in range(num_chains):
+        init_key, sample_key = jax.random.split(chain_keys[c])
+
+        # Jitter the shared start point per chain.
+        jitter = 0.1 * sigma_vector * jax.random.normal(init_key, (d,))
+        state = rwmh.init(initial_position + jitter)
+
+        chunk_positions = []
+        chunk_accept = []
+
+        n_remaining = num_samples
+        key_offset = 0
+
+        while n_remaining > 0:
+            chunk_n = min(scan_chunk_size, n_remaining)
+            keys = _make_step_keys(sample_key, key_offset, chunk_n)
+
+            state, (pos, acc) = _scan_chunk(state, keys)
+
+            chunk_positions.append(pos)
+            chunk_accept.append(acc)
+
+            key_offset += chunk_n
+            n_remaining -= chunk_n
+
+            if sample_progress_fn is not None:
+                sample_progress_fn(c + 1, num_chains, key_offset, num_samples)
+
+        all_positions.append(jnp.concatenate(chunk_positions, axis=0))
+        all_accept.append(jnp.concatenate(chunk_accept, axis=0))
+
+        if progress_fn is not None:
+            progress_fn(c + 1, num_chains)
+
+    samples = jnp.stack(all_positions)
+    acceptance_rate = jnp.stack(
+        [acc.mean() for acc in all_accept]
+    )
+
+    return samples, {
+        "acceptance_rate": acceptance_rate,
+        "proposal_sigma": sigma_vector,
+    }
 
 
 # ---------------------------------------------------------------------------
