@@ -1066,8 +1066,11 @@ def make_joint_pk_bk_bin_fn(
 
     Same arguments as :func:`make_joint_pk_bk_fn` plus ``bin_index``. The
     returned closure takes the *full* packed multi-bin parameter vector and
-    returns only bin ``bin_index``'s block, byte-identical to the matching
-    slice of :func:`make_joint_pk_bk_fn`'s output.
+    returns only bin ``bin_index``'s block, numerically identical to the
+    matching slice of :func:`make_joint_pk_bk_fn`'s output: the inputs (AP
+    alphas, survey slice, redshift) are bit-identical by construction, and the
+    op sequence matches, but XLA may reassociate a 1-bin and an n-bin graph
+    differently, so equality is asserted at ``rtol=1e-12`` rather than bitwise.
     """
     if tuple(ells) != (0, 2, 4):
         raise ValueError(

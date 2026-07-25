@@ -280,7 +280,13 @@ def make_marginal_log_posterior_perbin(*, bin_theory_fns, bin_data, bin_cov_invs
     ``M`` is block-diagonal too. Both quadratic forms and
     ``ln det(A Sigma_p) = sum_b ln det(A_b Sigma_p,b)`` are then block
     separable, and the sum of per-bin marginalizations equals the dense one
-    term by term -- same posterior, ~n_bins times smaller XLA graph.
+    identical posterior, computed from ``n_lin_b``-sized blocks instead of one
+    dense ``n_lin`` system. Measured at 7 bins on production grids versus the
+    dense monolith (same harness): first compile 54.4 s vs 109.3 s, per-eval
+    5.06 s vs 65.44 s (12.9x), peak compile RSS 28.3 GB vs 92.5 GB (3.3x).
+    Note the XLA *op count* is NOT reduced (the theory graph is still emitted
+    once per bin); the win is the smaller marginalization algebra and memory
+    behaviour. See ``docs/design/perbin-compile-measurements.md``.
 
     Parameters
     ----------
