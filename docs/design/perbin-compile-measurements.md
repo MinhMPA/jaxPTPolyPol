@@ -129,3 +129,51 @@ which is also why peak RSS is measured in gigabytes).
 Equivalence of the three paths is covered by
 `tests/test_marginal_perbin.py::test_scan_logpost_equals_perbin_and_monolith`
 and `::test_scan_logpost_with_extra_bao_term_equals_perbin`.
+
+---
+
+## 7-bin production-grid numbers (added 2026-07-25)
+
+The table above is the 2-bin reference config. The production configuration was
+measured twice, independently:
+
+| harness | first compile | cached eval | peak RSS |
+|---|---|---|---|
+| isolated script, synthetic data/cov, no Fisher — **monolith** | 109.3 s | 65.44 s | 92.5 GB |
+| isolated script, synthetic data/cov, no Fisher — **per-bin** | **54.4 s** | **5.06 s** | **28.3 GB** |
+| inside the real LCDM notebook — **per-bin** | 60.9 s | — | 33.5 GB |
+
+Config: `n_bins=7`, `block_len = 3*37 + 264 = 375`, `n_data = 2625` (+13 BAO),
+`n_lin = 77` (11/bin), `n_NL = 26`. The two per-bin harnesses agree to ~12 %,
+which is the expected spread between a bare script and a notebook that has
+already allocated the emulator, covariance and Fisher objects.
+
+**Per-bin vs monolith at 7 bins: 2.0x first compile, 12.9x per evaluation,
+3.3x peak RSS**, with the two posteriors agreeing to ~4e-13 relative.
+
+### Why the per-evaluation win is so much larger than the compile win
+
+The op counts are equal (see above), so the runtime win is *dense linear
+algebra*, not graph size. The marginal likelihood's dominant term is
+`Ci_M = cov_inv @ M`:
+
+- monolith: `(n_data x n_data) @ (n_data x n_lin)` ~ `n_data^2 * n_lin`
+- per-bin: `n_bins` copies of `(block x block) @ (block x n_lin_b)` with
+  `block = n_data/n_bins`, `n_lin_b = n_lin/n_bins` ~ `n_data^2 * n_lin / n_bins^3`
+
+i.e. an `n_bins^3 = 343x` reduction in that matmul at 7 bins. The observed
+end-to-end factor is 12.9x rather than 343x because the theory evaluation
+itself does not shrink — it is now the floor.
+
+### What is NOT fixed by this work
+
+The notebook is still not demonstrably end-to-end. Measured per-cell:
+
+- the Fisher `jacfwd` cell **completes** in 174 s at 77.6 GB (expensive, not a blocker);
+- the `run_rwmh` cell ran **60 min at up to 94.0 GB and emitted zero draws**.
+
+`run_rwmh` wraps `log_post` in a `lax.scan` over MH steps, which embeds the
+whole ~61 s-compile posterior inside a scan body — the same failure mode this
+document records for `make_marginal_log_posterior_scan`. At 5.06 s/eval a plain
+Python loop over the already-compiled `log_post` gives ~12 steps/min and
+produces draws incrementally; that is the outstanding follow-up.
