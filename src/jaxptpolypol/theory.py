@@ -356,7 +356,22 @@ def _make_theory_context_evaluator(
         )
         z_bg_grid = jnp.asarray(z_bg_grid)
 
-    def evaluate_contexts(params):
+    def evaluate_contexts(params, bins=None):
+        """Evaluate the theory contexts of all bins, or of ``bins`` only.
+
+        ``bins`` is a static sequence of global bin indices. The returned
+        tuple follows the order of ``bins``.
+        """
+        if bins is None:
+            bin_indices = tuple(range(n_bins))
+        else:
+            bin_indices = tuple(int(b) for b in bins)
+            for b in bin_indices:
+                if not 0 <= b < n_bins:
+                    raise ValueError(
+                        f"bin index {b} out of range for n_bins ({n_bins})"
+                    )
+
         cosmo_obj = CosmoParams.from_array(params[:n_cosmo], cosmo_keys, cosmo_sizes)
 
         h = cosmo_obj.h[0]
@@ -368,6 +383,13 @@ def _make_theory_context_evaluator(
         cosmo_dict_base = cosmo_obj.to_dict()
 
         if ap and multi_bin:
+            # Deliberately computed over ALL bins, even when only a subset is
+            # requested: batching a background integral over a different number
+            # of redshifts perturbs the last bits of D_A, which is enough to
+            # flip the exact ``alpha == 1`` shortcut in ps_1loop_jax and shift
+            # the multipoles by ~1e-3. Keeping the full batch makes a per-bin
+            # evaluation bit-identical to the corresponding slice of the
+            # all-bin evaluation. These arrays index by GLOBAL bin.
             Hz_true_all = bg.Hz(omb, omc, h, z_bins_arr, mnu)
             if use_tabulated_background:
                 chi_grid = bg.chi(omb, omc, h, z_bg_grid, mnu)
@@ -381,7 +403,7 @@ def _make_theory_context_evaluator(
                 )(z_bins_arr)
 
         contexts = []
-        for i in range(n_bins):
+        for i in bin_indices:
             z_i = z_bins[i] if multi_bin else cosmo_obj.z[0]
 
             if multi_bin:
@@ -1015,6 +1037,108 @@ def make_joint_pk_bk_fn(
     joint_fn.layout = "[bin_0[P0,P2,P4,B0], ..., bin_N[P0,P2,P4,B0]]"
 
     return joint_fn
+
+
+def make_joint_pk_bk_bin_fn(
+    *,
+    bin_index: int,
+    ells: tuple[int, ...] = (0, 2, 4),
+    pklin_emulator: CosmoEmulator,
+    ps1loop_model: PS1LoopModel,
+    bispectrum_model: BispectrumTreeModel,
+    cosmo_keys: tuple[str, ...],
+    cosmo_sizes: tuple[int, ...],
+    survey_keys: tuple,
+    ap: bool = True,
+    Hz_fid: tuple[float, ...] | None = None,
+    DAz_fid: tuple[float, ...] | None = None,
+    z_bins: tuple[float, ...] | None = None,
+    mnu_fixed: float = 0.06,
+    num: int = 256,
+    n_gl: int | None = None,
+    num_mu: int = 65,
+    num_phi: int = 65,
+    background_mode: str = "direct",
+    background_nz: int = 256,
+):
+    r"""Build the ``[P0, P2, P4, B0]`` block of a single redshift bin.
+
+    Same arguments as :func:`make_joint_pk_bk_fn` plus ``bin_index``. The
+    returned closure takes the *full* packed multi-bin parameter vector and
+    returns only bin ``bin_index``'s block, byte-identical to the matching
+    slice of :func:`make_joint_pk_bk_fn`'s output.
+    """
+    if tuple(ells) != (0, 2, 4):
+        raise ValueError(
+            "make_joint_pk_bk_bin_fn requires ells=(0, 2, 4) so the output "
+            "matches the joint covariance layout"
+        )
+
+    evaluate_contexts, metadata = _make_theory_context_evaluator(
+        pklin_emulator=pklin_emulator,
+        cosmo_keys=cosmo_keys,
+        cosmo_sizes=cosmo_sizes,
+        survey_keys=survey_keys,
+        ap=ap,
+        Hz_fid=Hz_fid,
+        DAz_fid=DAz_fid,
+        z_bins=z_bins,
+        mnu_fixed=mnu_fixed,
+        background_mode=background_mode,
+        background_nz=background_nz,
+    )
+    n_bins = metadata["n_bins"]
+    has_mnu = metadata["has_mnu"]
+    bin_index = int(bin_index)
+    if not 0 <= bin_index < n_bins:
+        raise ValueError(
+            f"bin_index ({bin_index}) out of range for n_bins ({n_bins})"
+        )
+    use_gl = n_gl is not None
+    mu_gl = None
+    w_proj = None
+    if use_gl:
+        mu_gl, w_proj = make_multipole_projector(ells, n_gl)
+
+    def bin_fn(params, *, k, triangles):
+        (context,) = evaluate_contexts(params, bins=(bin_index,))
+        triangles_b = _as_triangle_array(
+            _select_bin_input(triangles, bin_index, n_bins, "triangles")
+        )
+        pk_block = _evaluate_pk_ell_from_context(
+            k,
+            ells,
+            context,
+            ps1loop_model=ps1loop_model,
+            num=num,
+            use_gl=use_gl,
+            mu_gl=mu_gl,
+            w_proj=w_proj,
+        ).reshape(-1)
+        bk_block = _evaluate_bk0_from_context(
+            triangles_b,
+            context,
+            bispectrum_model=bispectrum_model,
+            num_mu=num_mu,
+            num_phi=num_phi,
+        ).reshape(-1)
+        return jnp.concatenate([pk_block, bk_block])
+
+    bin_fn.bin_index = bin_index
+    bin_fn.ells = ells
+    bin_fn.ap = ap
+    bin_fn.n_bins = n_bins
+    bin_fn.z_bins = z_bins
+    bin_fn.has_mnu = has_mnu
+    bin_fn.num = num
+    bin_fn.n_gl = n_gl
+    bin_fn.num_mu = num_mu
+    bin_fn.num_phi = num_phi
+    bin_fn.background_mode = background_mode
+    bin_fn.background_nz = background_nz
+    bin_fn.layout = f"[P0,P2,P4,B0] for bin {bin_index}"
+
+    return bin_fn
 
 
 def make_gaussian_bk0_covariance_fn(
