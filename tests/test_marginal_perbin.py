@@ -233,6 +233,179 @@ def test_perbin_logpost_with_extra_bao_term_equals_monolith(cfg):
     assert abs(float(-0.5 * r0 @ np.asarray(cov_bao_inv) @ r0)) > 1e-6
 
 
+@needs_emulator
+def test_scan_logpost_equals_perbin_and_monolith(cfg):
+    """lax.scan over stacked per-bin blocks == unrolled per-bin == dense monolith."""
+    from jaxptpolypol.marginal_likelihood import (
+        make_constant_prior_fns, make_marginal_log_posterior,
+        bin_lin_slices, make_marginal_log_posterior_perbin,
+        make_marginal_log_posterior_scan, split_marginal_indices)
+    from jaxptpolypol.sampler import make_full_params_fn
+    from jaxptpolypol.theory import make_joint_pk_bk_fn, make_joint_pk_bk_bin_fn
+    kwargs, packed, k, triangles, n_bins, survey_keys, n_cosmo = cfg
+
+    joint = make_joint_pk_bk_fn(**kwargs)
+    theory_fn = partial(joint, k=k, triangles=triangles)
+    split = split_marginal_indices(
+        n_cosmo_params=n_cosmo, survey_keys=survey_keys, n_bins=n_bins,
+        fixed_cosmo=FIXED_COSMO, fixed_survey_keys=FIXED_SURVEY_KEYS)
+
+    data = theory_fn(packed)
+    n_data = data.shape[0]
+    block = n_data // n_bins
+    rng = np.random.default_rng(0)
+    blocks = [_random_block_cov(data[b * block:(b + 1) * block], rng)
+              for b in range(n_bins)]
+    cov = _bd(*blocks)
+    cov_inv = jnp.asarray(np.linalg.inv(cov))
+    mu_p = packed[jnp.array(split.lin_idx)]
+    sigma_p = jnp.asarray(rng.uniform(0.5, 2.0, size=split.n_lin))
+    prior_mean_fn, prior_sigma_fn = make_constant_prior_fns(mu_p, sigma_p)
+    fpf = make_full_params_fn(packed, split.nl_idx)
+
+    mono = make_marginal_log_posterior(
+        theory_fn=theory_fn, data=data, cov_inv=cov_inv, lin_idx=split.lin_idx,
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda t: 0.0, to_physical=lambda x: x,
+        full_params_fn=fpf, include_logdet=True)
+
+    bin_fns = [partial(make_joint_pk_bk_bin_fn(bin_index=b, **kwargs),
+                       k=k, triangles=triangles) for b in range(n_bins)]
+    common = dict(
+        bin_theory_fns=bin_fns,
+        bin_data=[data[b * block:(b + 1) * block] for b in range(n_bins)],
+        bin_cov_invs=[jnp.asarray(np.linalg.inv(blocks[b])) for b in range(n_bins)],
+        bin_lin_idx=[split.lin_idx[sl] for sl in bin_lin_slices(split, n_bins)],
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda t: 0.0, to_physical=lambda x: x,
+        full_params_fn=fpf, include_logdet=True)
+    per = make_marginal_log_posterior_perbin(**common)
+    scan = make_marginal_log_posterior_scan(**common)
+
+    x0 = packed[jnp.array(split.nl_idx)]
+    np.testing.assert_allclose(float(scan(x0)), float(per(x0)), rtol=1e-10)
+    np.testing.assert_allclose(float(scan(x0)), float(mono(x0)), rtol=1e-10)
+    # displaced point -- catches wrong theta_NL / wrong per-bin xs wiring
+    x1 = x0 * (1.0 + 0.01 * jnp.arange(x0.shape[0]) / max(x0.shape[0], 1))
+    np.testing.assert_allclose(float(scan(x1)), float(per(x1)), rtol=1e-10)
+    np.testing.assert_allclose(float(scan(x1)), float(mono(x1)), rtol=1e-10)
+    # The two points must differ, otherwise the displaced check is vacuous.
+    assert abs(float(scan(x1)) - float(scan(x0))) > 1e-6
+
+
+@needs_emulator
+def test_scan_logpost_with_extra_bao_term_equals_perbin(cfg):
+    """The optional extra (BAO) block must be added once, outside the scan."""
+    from jaxptpolypol.marginal_likelihood import (
+        make_constant_prior_fns, bin_lin_slices,
+        make_marginal_log_posterior_perbin, make_marginal_log_posterior_scan,
+        split_marginal_indices)
+    from jaxptpolypol.sampler import make_full_params_fn
+    from jaxptpolypol.theory import make_joint_pk_bk_fn, make_joint_pk_bk_bin_fn
+    kwargs, packed, k, triangles, n_bins, survey_keys, n_cosmo = cfg
+
+    joint = make_joint_pk_bk_fn(**kwargs)
+    theory_fn = partial(joint, k=k, triangles=triangles)
+    split = split_marginal_indices(
+        n_cosmo_params=n_cosmo, survey_keys=survey_keys, n_bins=n_bins,
+        fixed_cosmo=FIXED_COSMO, fixed_survey_keys=FIXED_SURVEY_KEYS)
+
+    data = theory_fn(packed)
+    block = data.shape[0] // n_bins
+    rng = np.random.default_rng(1)
+    blocks = [_random_block_cov(data[b * block:(b + 1) * block], rng)
+              for b in range(n_bins)]
+
+    n_bao = 13
+    A_bao = jnp.asarray(rng.normal(size=(n_bao, n_cosmo)))
+
+    def bao_fn(full_params):
+        return A_bao @ full_params[:n_cosmo]
+
+    L = rng.normal(size=(n_bao, n_bao))
+    cov_bao = L @ L.T + n_bao * np.eye(n_bao)
+    cov_bao_inv = jnp.asarray(np.linalg.inv(cov_bao))
+    data_bao = jnp.asarray(np.asarray(bao_fn(packed)) + rng.normal(size=n_bao))
+
+    mu_p = packed[jnp.array(split.lin_idx)]
+    sigma_p = jnp.asarray(rng.uniform(0.5, 2.0, size=split.n_lin))
+    prior_mean_fn, prior_sigma_fn = make_constant_prior_fns(mu_p, sigma_p)
+    fpf = make_full_params_fn(packed, split.nl_idx)
+
+    bin_fns = [partial(make_joint_pk_bk_bin_fn(bin_index=b, **kwargs),
+                       k=k, triangles=triangles) for b in range(n_bins)]
+    common = dict(
+        bin_theory_fns=bin_fns,
+        bin_data=[data[b * block:(b + 1) * block] for b in range(n_bins)],
+        bin_cov_invs=[jnp.asarray(np.linalg.inv(blocks[b])) for b in range(n_bins)],
+        bin_lin_idx=[split.lin_idx[sl] for sl in bin_lin_slices(split, n_bins)],
+        extra_theory_fn=bao_fn, extra_data=data_bao, extra_cov_inv=cov_bao_inv,
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda t: 0.0, to_physical=lambda x: x,
+        full_params_fn=fpf, include_logdet=True)
+    per = make_marginal_log_posterior_perbin(**common)
+    scan = make_marginal_log_posterior_scan(**common)
+
+    x0 = packed[jnp.array(split.nl_idx)]
+    np.testing.assert_allclose(float(scan(x0)), float(per(x0)), rtol=1e-10)
+    x1 = x0 * (1.0 + 0.01 * jnp.arange(x0.shape[0]) / max(x0.shape[0], 1))
+    np.testing.assert_allclose(float(scan(x1)), float(per(x1)), rtol=1e-10)
+    r0 = np.asarray(data_bao - bao_fn(packed))
+    assert abs(float(-0.5 * r0 @ np.asarray(cov_bao_inv) @ r0)) > 1e-6
+
+
+def test_scan_requires_uniform_bin_shapes():
+    """Stacking is only defined for equal-sized blocks; ragged input must raise.
+
+    Emulator-free: the same 2-bin toy as the per-bin tiling guard test.
+    """
+    from jaxptpolypol.marginal_likelihood import (
+        make_marginal_log_posterior_perbin, make_marginal_log_posterior_scan)
+
+    def bin0(p):
+        return jnp.array([p[0] + 2.0 * p[1] + 3.0 * p[2]])
+
+    def bin1(p):
+        return jnp.array([p[0] - 1.5 * p[3] + 0.5 * p[4]])
+
+    def bin1_wide(p):
+        return jnp.array([p[0] - 1.5 * p[3], 0.5 * p[4]])
+
+    fid = jnp.array([1.0, 0.1, 0.2, 0.3, 0.4])
+    common = dict(
+        log_prior_nl_fn=lambda t: 0.0,
+        to_physical=lambda x: x,
+        full_params_fn=lambda t: fid.at[jnp.array([0])].set(t),
+        prior_mean_fn=lambda t: jnp.zeros(4),
+        prior_sigma_fn=lambda t: jnp.ones(4),
+    )
+    uniform = dict(
+        bin_theory_fns=[bin0, bin1],
+        bin_data=[jnp.array([1.0]), jnp.array([1.0])],
+        bin_cov_invs=[jnp.eye(1), jnp.eye(1)],
+        bin_lin_idx=[(1, 2), (3, 4)],
+        **common)
+    # Uniform toy: scan matches the unrolled per-bin form exactly.
+    ok_scan = make_marginal_log_posterior_scan(**uniform)
+    ok_per = make_marginal_log_posterior_perbin(**uniform)
+    np.testing.assert_allclose(float(ok_scan(fid[:1])), float(ok_per(fid[:1])),
+                               rtol=1e-10)
+
+    # Ragged data blocks cannot be stacked.
+    ragged = dict(uniform)
+    ragged.update(bin_theory_fns=[bin0, bin1_wide],
+                  bin_data=[jnp.array([1.0]), jnp.array([1.0, 2.0])],
+                  bin_cov_invs=[jnp.eye(1), jnp.eye(2)])
+    with pytest.raises(ValueError, match="same length"):
+        make_marginal_log_posterior_scan(**ragged)
+
+    # Ragged marginalized blocks cannot be stacked either.
+    ragged_lin = dict(uniform)
+    ragged_lin.update(bin_lin_idx=[(1,), (2, 3, 4)])
+    with pytest.raises(ValueError, match="same number of marginalized"):
+        make_marginal_log_posterior_scan(**ragged_lin)
+
+
 def test_bin_lin_slices_and_validation():
     """Pure-python: slices are 11-wide bin-major; non-bin-major input raises."""
     from jaxptpolypol.marginal_likelihood import (

@@ -41,6 +41,7 @@ from .marginal_likelihood import (
     make_constant_prior_fns,
     make_marginal_log_posterior,
     make_marginal_log_posterior_perbin,
+    make_marginal_log_posterior_scan,
     make_marginal_templates,
     split_marginal_indices,
 )

@@ -35,6 +35,7 @@ __all__ = [
     "make_marginal_log_posterior",
     "bin_lin_slices",
     "make_marginal_log_posterior_perbin",
+    "make_marginal_log_posterior_scan",
 ]
 
 
@@ -145,6 +146,23 @@ def split_marginal_indices(*, n_cosmo_params, survey_keys, n_bins,
     )
 
 
+def _linear_templates(theory_fn, full_params, lin_idx_arr, n_lin):
+    """``(m0, M)`` at ``theta_lin = 0`` for one theory block.
+
+    ``lin_idx_arr`` may be a *traced* index array (the ``lax.scan`` form feeds
+    it one row of the stacked per-bin indices), so it is used only through
+    ``.at[].set()``.
+    """
+    base = full_params.at[lin_idx_arr].set(0.0)
+
+    def t_of_lin(lin_values):
+        return theory_fn(base.at[lin_idx_arr].set(lin_values))
+
+    m0, jvp = jax.linearize(t_of_lin, jnp.zeros(n_lin))
+    M = jax.vmap(jvp)(jnp.eye(n_lin))   # (n_lin, n_data)
+    return m0, M.T                      # (n_data, n_lin)
+
+
 def make_marginal_templates(theory_fn, lin_idx):
     """Build the exact linear templates m0(theta_NL) = t(theta_lin=0) and
     M(theta_NL) = dt/dtheta_lin.
@@ -156,17 +174,9 @@ def make_marginal_templates(theory_fn, lin_idx):
     """
     lin_idx_arr = jnp.array(lin_idx)
     n_lin = len(lin_idx)
-    eye = jnp.eye(n_lin)
 
     def templates(full_params):
-        base = full_params.at[lin_idx_arr].set(0.0)
-
-        def t_of_lin(lin_values):
-            return theory_fn(base.at[lin_idx_arr].set(lin_values))
-
-        m0, jvp = jax.linearize(t_of_lin, jnp.zeros(n_lin))
-        M = jax.vmap(jvp)(eye)          # (n_lin, n_data)
-        return m0, M.T                  # (n_data, n_lin)
+        return _linear_templates(theory_fn, full_params, lin_idx_arr, n_lin)
 
     return templates
 
@@ -343,6 +353,137 @@ def make_marginal_log_posterior_perbin(*, bin_theory_fns, bin_data, bin_cov_invs
             out = out + gaussian_marginal_loglike(
                 bin_data[b], m0, M, bin_cov_invs[b], mu_p[sl], sigma_p[sl],
                 include_logdet=include_logdet)
+        if has_extra:
+            resid = extra_data - extra_theory_fn(full)
+            out = out - 0.5 * (resid @ extra_cov_inv @ resid)
+        return out
+
+    return log_posterior
+
+
+def make_marginal_log_posterior_scan(*, bin_theory_fns, bin_data, bin_cov_invs,
+                                     bin_lin_idx,
+                                     extra_theory_fn=None, extra_data=None,
+                                     extra_cov_inv=None,
+                                     prior_mean_fn, prior_sigma_fn,
+                                     log_prior_nl_fn, to_physical,
+                                     full_params_fn,
+                                     include_logdet: bool = True):
+    """``lax.scan`` form of :func:`make_marginal_log_posterior_perbin`.
+
+    Same signature, same value (to float64 round-off in the summation order),
+    but the per-bin loop is a ``lax.scan`` over *stacked* per-bin arrays --
+    ``bin_data`` -> ``(n_bins, n_data_b)``, ``bin_cov_invs`` ->
+    ``(n_bins, n_data_b, n_data_b)``, ``bin_lin_idx`` -> ``(n_bins, n_lin_b)``,
+    and the prior vectors reshaped to ``(n_bins, n_lin_b)`` -- with the running
+    log-likelihood as the scan carry. All bins must therefore have the *same*
+    block size and the *same* number of marginalized parameters; a ragged
+    configuration raises ``ValueError`` (use the per-bin form instead).
+
+    **Honest caveat on the compile-cost win.** ``bin_theory_fns[b]`` bakes its
+    bin index in statically (``theory.make_joint_pk_bk_bin_fn`` reads
+    ``z_bins[b]``, ``Hz_fid[b]``, ``DAz_fid[b]`` and calls the emulator at a
+    Python-level redshift), so the theory cannot be evaluated at a *traced* bin
+    index. The scan body therefore dispatches through ``jax.lax.switch`` over
+    the tuple of per-bin closures, and ``lax.switch`` traces and compiles *all*
+    ``n_bins`` branches. Only the bin-independent marginalization algebra (the
+    ``n_lin_b``-dimensional Cholesky, solve and log-det in
+    :func:`gaussian_marginal_loglike`) is emitted once instead of ``n_bins``
+    times; the dominant theory graph is still emitted ``n_bins`` times. Expect
+    little or no first-compile saving over the unrolled per-bin form -- see
+    ``docs/design/perbin-compile-measurements.md`` for the measured numbers on
+    the 2-bin configuration. A genuine single-body compile would require the
+    per-bin statics (``z``, ``Hz_fid``, ``DAz_fid``) to become traced inputs of
+    one closure, i.e. a theory-side change.
+
+    Parameters
+    ----------
+    Identical to :func:`make_marginal_log_posterior_perbin`; the two are
+    drop-in interchangeable for uniform-block configurations.
+
+    Returns
+    -------
+    jitted ``log_posterior(x)`` in whitened theta_NL space.
+    """
+    n_bins = len(bin_theory_fns)
+    if not (len(bin_data) == len(bin_cov_invs) == len(bin_lin_idx) == n_bins):
+        raise ValueError(
+            "bin_theory_fns, bin_data, bin_cov_invs and bin_lin_idx must have "
+            f"the same length; got {n_bins}, {len(bin_data)}, "
+            f"{len(bin_cov_invs)}, {len(bin_lin_idx)}")
+    has_extra = extra_theory_fn is not None
+    if has_extra and (extra_data is None or extra_cov_inv is None):
+        raise ValueError(
+            "extra_theory_fn requires both extra_data and extra_cov_inv")
+
+    bin_data = tuple(jnp.asarray(d, dtype=jnp.float64) for d in bin_data)
+    bin_cov_invs = tuple(jnp.asarray(c, dtype=jnp.float64) for c in bin_cov_invs)
+    if n_bins == 0:
+        raise ValueError("bin_theory_fns must not be empty")
+    shapes = {d.shape for d in bin_data}
+    if len(shapes) != 1 or len(bin_data[0].shape) != 1:
+        raise ValueError(
+            "make_marginal_log_posterior_scan stacks the per-bin blocks, so "
+            "every bin_data entry must be 1-d with the same length; got "
+            f"{[tuple(d.shape) for d in bin_data]}. Use "
+            "make_marginal_log_posterior_perbin for ragged blocks.")
+    n_data_b = bin_data[0].shape[0]
+    bad_cov = [tuple(c.shape) for c in bin_cov_invs
+               if c.shape != (n_data_b, n_data_b)]
+    if bad_cov:
+        raise ValueError(
+            f"bin_cov_invs must all have shape ({n_data_b}, {n_data_b}) to "
+            f"match bin_data; got {bad_cov}")
+    n_lin_b = len(bin_lin_idx[0])
+    if any(len(idx) != n_lin_b for idx in bin_lin_idx):
+        raise ValueError(
+            "make_marginal_log_posterior_scan stacks the per-bin index sets, "
+            "so it requires the same number of marginalized parameters in "
+            f"every bin; got {[len(idx) for idx in bin_lin_idx]}")
+
+    data_stack = jnp.stack(bin_data)                      # (n_bins, n_data_b)
+    cov_inv_stack = jnp.stack(bin_cov_invs)     # (n_bins, n_data_b, n_data_b)
+    lin_idx_stack = jnp.asarray(
+        [[int(i) for i in idx] for idx in bin_lin_idx])   # (n_bins, n_lin_b)
+    bin_arange = jnp.arange(n_bins)
+    branches = tuple(bin_theory_fns)
+    n_lin_total = n_bins * n_lin_b
+    if has_extra:
+        extra_data = jnp.asarray(extra_data, dtype=jnp.float64)
+        extra_cov_inv = jnp.asarray(extra_cov_inv, dtype=jnp.float64)
+
+    @jax.jit
+    def log_posterior(x):
+        theta_nl = to_physical(x)
+        full = full_params_fn(theta_nl)
+        mu_p = prior_mean_fn(theta_nl)
+        sigma_p = prior_sigma_fn(theta_nl)
+        # Same static guard as the per-bin form: the prior vectors must tile the
+        # bins exactly, or the reshape below would silently mis-pair them.
+        for name, vec in (("prior_mean_fn", mu_p), ("prior_sigma_fn", sigma_p)):
+            if vec.shape != (n_lin_total,):
+                raise ValueError(
+                    f"{name} returned shape {vec.shape}, but bin_lin_idx "
+                    f"implies {(n_lin_total,)} linear parameters "
+                    f"({n_lin_b} per bin x {n_bins} bins)")
+
+        def body(acc, xs):
+            i, data_b, cov_inv_b, lin_idx_b, mu_b, sigma_b = xs
+
+            def theory_b(params):
+                return jax.lax.switch(i, branches, params)
+
+            m0, M = _linear_templates(theory_b, full, lin_idx_b, n_lin_b)
+            ll = gaussian_marginal_loglike(
+                data_b, m0, M, cov_inv_b, mu_b, sigma_b,
+                include_logdet=include_logdet)
+            return acc + ll, None
+
+        total, _ = jax.lax.scan(
+            body, jnp.zeros((), dtype=jnp.float64),
+            (bin_arange, data_stack, cov_inv_stack, lin_idx_stack,
+             mu_p.reshape(n_bins, n_lin_b), sigma_p.reshape(n_bins, n_lin_b)))
+        out = total + log_prior_nl_fn(theta_nl)
         if has_extra:
             resid = extra_data - extra_theory_fn(full)
             out = out - 0.5 * (resid @ extra_cov_inv @ resid)
