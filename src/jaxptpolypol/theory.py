@@ -40,6 +40,7 @@ __all__ = [
     "make_pk_ell_fn",
     "make_bk0_fn",
     "make_joint_pk_bk_fn",
+    "make_joint_pk_bk_bin_fn",
     "make_gaussian_bk0_covariance_fn",
     "make_gaussian_joint_covariance_fn",
 ]

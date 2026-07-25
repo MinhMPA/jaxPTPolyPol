@@ -1,7 +1,6 @@
 """Per-bin theory evaluation must reproduce the monolithic joint theory exactly."""
 import os
 import pathlib
-from functools import partial
 
 import jax
 jax.config.update("jax_enable_x64", True)
