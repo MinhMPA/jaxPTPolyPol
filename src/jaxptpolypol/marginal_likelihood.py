@@ -33,6 +33,8 @@ __all__ = [
     "make_marginal_templates",
     "make_constant_prior_fns",
     "make_marginal_log_posterior",
+    "bin_lin_slices",
+    "make_marginal_log_posterior_perbin",
 ]
 
 
@@ -205,5 +207,133 @@ def make_marginal_log_posterior(theory_fn, data, cov_inv, lin_idx,
         ll = gaussian_marginal_loglike(
             data, m0, M, cov_inv, mu_p, sigma_p, include_logdet=include_logdet)
         return ll + log_prior_nl_fn(theta_nl)
+
+    return log_posterior
+
+
+def _contiguous_slices(counts):
+    """Consecutive slices of the given lengths, starting at 0."""
+    out, start = [], 0
+    for n in counts:
+        out.append(slice(start, start + n))
+        start += n
+    return tuple(out)
+
+
+def bin_lin_slices(split, n_bins):
+    """Position of each bin's marginalized parameters inside the prior vectors.
+
+    ``prior_mean_fn`` / ``prior_sigma_fn`` return ``(n_lin,)`` arrays laid out
+    in ``split.lin_idx`` order. Because ``split_marginal_indices`` emits that
+    order bin-major with an equal number of entries per bin, bin ``b`` owns the
+    contiguous chunk ``slice(b * n_per, (b + 1) * n_per)``.
+
+    Raises ``ValueError`` if ``split.lin_keys`` is not bin-major with equal
+    counts, so a mis-ordered split cannot be silently mis-sliced.
+    """
+    n_bins = int(n_bins)
+    if n_bins <= 0:
+        raise ValueError(f"n_bins must be positive, got {n_bins}")
+    lin_keys = tuple(split.lin_keys)
+    if len(lin_keys) != split.n_lin:
+        raise ValueError(
+            f"split.lin_keys has {len(lin_keys)} entries but n_lin={split.n_lin}")
+    if split.n_lin % n_bins != 0:
+        raise ValueError(
+            f"n_lin={split.n_lin} is not an integer multiple of n_bins={n_bins}; "
+            "bin_lin_slices requires the same number of marginalized parameters "
+            "in every bin")
+    n_per = split.n_lin // n_bins
+    slices = _contiguous_slices([n_per] * n_bins)
+    for b, sl in enumerate(slices):
+        found = {key[0] for key in lin_keys[sl]}
+        if found != {b}:
+            raise ValueError(
+                f"split.lin_keys is not bin-major: entries "
+                f"[{sl.start}:{sl.stop}) reference bins {sorted(found)}, "
+                f"expected only bin {b}")
+    return slices
+
+
+def make_marginal_log_posterior_perbin(*, bin_theory_fns, bin_data, bin_cov_invs,
+                                       bin_lin_idx,
+                                       extra_theory_fn=None, extra_data=None,
+                                       extra_cov_inv=None,
+                                       prior_mean_fn, prior_sigma_fn,
+                                       log_prior_nl_fn, to_physical,
+                                       full_params_fn,
+                                       include_logdet: bool = True):
+    """Exactly factorized version of :func:`make_marginal_log_posterior`.
+
+    The data covariance is block-diagonal across redshift bins and each bin's
+    theory depends only on its own ``theta_lin``, so the dense template matrix
+    ``M`` is block-diagonal too. Both quadratic forms and
+    ``ln det(A Sigma_p) = sum_b ln det(A_b Sigma_p,b)`` are then block
+    separable, and the sum of per-bin marginalizations equals the dense one
+    term by term -- same posterior, ~n_bins times smaller XLA graph.
+
+    Parameters
+    ----------
+    bin_theory_fns : sequence of callables
+        ``bin_theory_fns[b](full_params) -> (n_data_b,)``, the single-bin
+        theory block (e.g. ``theory.make_joint_pk_bk_bin_fn`` with its static
+        arguments pre-bound). Each takes the *full* packed parameter vector.
+    bin_data, bin_cov_invs : sequences
+        Per-bin data vectors ``(n_data_b,)`` and inverse covariances
+        ``(n_data_b, n_data_b)``.
+    bin_lin_idx : sequence of index sequences
+        ``bin_lin_idx[b]`` holds bin ``b``'s marginalized parameters as
+        *full-vector* indices, i.e. ``split.lin_idx[b * n_per:(b + 1) * n_per]``.
+    extra_theory_fn, extra_data, extra_cov_inv : optional
+        An additional block carrying no ``theta_lin`` dependence (the BAO
+        likelihood). Enters as a plain ``-0.5 r^T Cinv r`` added once.
+    prior_mean_fn, prior_sigma_fn : callables
+        Unchanged Stream-A/B contract: ``fn(theta_nl) -> (n_lin,)`` in
+        ``split.lin_idx`` order. Sliced per bin with the same contiguous
+        bin-major layout as :func:`bin_lin_slices`.
+    log_prior_nl_fn, to_physical, full_params_fn, include_logdet
+        As in :func:`make_marginal_log_posterior`.
+
+    Returns
+    -------
+    jitted ``log_posterior(x)`` in whitened theta_NL space.
+    """
+    n_bins = len(bin_theory_fns)
+    if not (len(bin_data) == len(bin_cov_invs) == len(bin_lin_idx) == n_bins):
+        raise ValueError(
+            "bin_theory_fns, bin_data, bin_cov_invs and bin_lin_idx must have "
+            f"the same length; got {n_bins}, {len(bin_data)}, "
+            f"{len(bin_cov_invs)}, {len(bin_lin_idx)}")
+    has_extra = extra_theory_fn is not None
+    if has_extra and (extra_data is None or extra_cov_inv is None):
+        raise ValueError(
+            "extra_theory_fn requires both extra_data and extra_cov_inv")
+
+    bin_data = tuple(jnp.asarray(d, dtype=jnp.float64) for d in bin_data)
+    bin_cov_invs = tuple(jnp.asarray(c, dtype=jnp.float64) for c in bin_cov_invs)
+    bin_templates = tuple(make_marginal_templates(fn, idx)
+                          for fn, idx in zip(bin_theory_fns, bin_lin_idx))
+    prior_slices = _contiguous_slices([len(idx) for idx in bin_lin_idx])
+    if has_extra:
+        extra_data = jnp.asarray(extra_data, dtype=jnp.float64)
+        extra_cov_inv = jnp.asarray(extra_cov_inv, dtype=jnp.float64)
+
+    @jax.jit
+    def log_posterior(x):
+        theta_nl = to_physical(x)
+        full = full_params_fn(theta_nl)
+        mu_p = prior_mean_fn(theta_nl)
+        sigma_p = prior_sigma_fn(theta_nl)
+        out = log_prior_nl_fn(theta_nl)
+        for b in range(n_bins):
+            m0, M = bin_templates[b](full)
+            sl = prior_slices[b]
+            out = out + gaussian_marginal_loglike(
+                bin_data[b], m0, M, bin_cov_invs[b], mu_p[sl], sigma_p[sl],
+                include_logdet=include_logdet)
+        if has_extra:
+            resid = extra_data - extra_theory_fn(full)
+            out = out - 0.5 * (resid @ extra_cov_inv @ resid)
+        return out
 
     return log_posterior

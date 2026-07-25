@@ -36,9 +36,11 @@ from . import cmb_mcmc_utils
 from .marginal_likelihood import (
     LIN_SURVEY_KEYS,
     MarginalSplit,
+    bin_lin_slices,
     gaussian_marginal_loglike,
     make_constant_prior_fns,
     make_marginal_log_posterior,
+    make_marginal_log_posterior_perbin,
     make_marginal_templates,
     split_marginal_indices,
 )
