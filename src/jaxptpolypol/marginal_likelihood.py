@@ -318,12 +318,24 @@ def make_marginal_log_posterior_perbin(*, bin_theory_fns, bin_data, bin_cov_invs
         extra_data = jnp.asarray(extra_data, dtype=jnp.float64)
         extra_cov_inv = jnp.asarray(extra_cov_inv, dtype=jnp.float64)
 
+    n_lin_total = prior_slices[-1].stop
+
     @jax.jit
     def log_posterior(x):
         theta_nl = to_physical(x)
         full = full_params_fn(theta_nl)
         mu_p = prior_mean_fn(theta_nl)
         sigma_p = prior_sigma_fn(theta_nl)
+        # The per-bin prior slices must tile the prior vectors exactly: a caller
+        # that mis-sliced ``split.lin_idx`` (wrong per-bin count, or a dropped
+        # bin) would otherwise get a silently wrong posterior instead of an
+        # error.  Shapes are static at trace time, so this costs nothing.
+        for name, vec in (("prior_mean_fn", mu_p), ("prior_sigma_fn", sigma_p)):
+            if vec.shape != (n_lin_total,):
+                raise ValueError(
+                    f"{name} returned shape {vec.shape}, but bin_lin_idx "
+                    f"implies {(n_lin_total,)} linear parameters "
+                    f"({[len(idx) for idx in bin_lin_idx]} per bin)")
         out = log_prior_nl_fn(theta_nl)
         for b in range(n_bins):
             m0, M = bin_templates[b](full)

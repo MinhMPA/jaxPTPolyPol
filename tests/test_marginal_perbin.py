@@ -103,7 +103,8 @@ def test_perbin_logpost_equals_monolith(cfg):
     """Same joint posterior, computed two ways: sum-of-bins == dense 22x22."""
     from jaxptpolypol.marginal_likelihood import (
         make_constant_prior_fns, make_marginal_log_posterior,
-        make_marginal_log_posterior_perbin, split_marginal_indices)
+        bin_lin_slices, make_marginal_log_posterior_perbin,
+        split_marginal_indices)
     from jaxptpolypol.sampler import make_full_params_fn
     from jaxptpolypol.theory import make_joint_pk_bk_fn, make_joint_pk_bk_bin_fn
     kwargs, packed, k, triangles, n_bins, survey_keys, n_cosmo = cfg
@@ -140,7 +141,7 @@ def test_perbin_logpost_equals_monolith(cfg):
         bin_theory_fns=bin_fns,
         bin_data=[data[b * block:(b + 1) * block] for b in range(n_bins)],
         bin_cov_invs=[jnp.asarray(np.linalg.inv(blocks[b])) for b in range(n_bins)],
-        bin_lin_idx=[split.lin_idx[b * 11:(b + 1) * 11] for b in range(n_bins)],
+        bin_lin_idx=[split.lin_idx[sl] for sl in bin_lin_slices(split, n_bins)],
         prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
         log_prior_nl_fn=lambda t: 0.0, to_physical=lambda x: x,
         full_params_fn=fpf, include_logdet=True)
@@ -157,7 +158,8 @@ def test_perbin_logpost_with_extra_bao_term_equals_monolith(cfg):
     """BAO as a separate cosmology-only chi^2 == BAO concatenated into the monolith."""
     from jaxptpolypol.marginal_likelihood import (
         make_constant_prior_fns, make_marginal_log_posterior,
-        make_marginal_log_posterior_perbin, split_marginal_indices)
+        bin_lin_slices, make_marginal_log_posterior_perbin,
+        split_marginal_indices)
     from jaxptpolypol.sampler import make_full_params_fn
     from jaxptpolypol.theory import make_joint_pk_bk_fn, make_joint_pk_bk_bin_fn
     kwargs, packed, k, triangles, n_bins, survey_keys, n_cosmo = cfg
@@ -216,7 +218,7 @@ def test_perbin_logpost_with_extra_bao_term_equals_monolith(cfg):
         bin_theory_fns=bin_fns,
         bin_data=[data[b * block:(b + 1) * block] for b in range(n_bins)],
         bin_cov_invs=[jnp.asarray(np.linalg.inv(blocks[b])) for b in range(n_bins)],
-        bin_lin_idx=[split.lin_idx[b * 11:(b + 1) * 11] for b in range(n_bins)],
+        bin_lin_idx=[split.lin_idx[sl] for sl in bin_lin_slices(split, n_bins)],
         extra_theory_fn=bao_fn, extra_data=data_bao, extra_cov_inv=cov_bao_inv,
         prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
         log_prior_nl_fn=lambda t: 0.0, to_physical=lambda x: x,
@@ -282,3 +284,48 @@ def test_bin_lin_slices_and_validation():
 
     with pytest.raises(ValueError, match="positive"):
         bin_lin_slices(real, 0)
+
+
+def test_perbin_rejects_prior_vector_that_does_not_tile_bins():
+    """The prior-slice tiling guard must fire, not silently mis-slice.
+
+    Emulator-free: a 2-bin toy whose theory is linear in its lin params.
+    """
+    from jaxptpolypol.marginal_likelihood import make_marginal_log_posterior_perbin
+
+    # full vector: [nl | bin0 lin (2) | bin1 lin (2)]
+    def bin0(p):
+        return jnp.array([p[0] + 2.0 * p[1] + 3.0 * p[2]])
+
+    def bin1(p):
+        return jnp.array([p[0] - 1.5 * p[3] + 0.5 * p[4]])
+
+    fid = jnp.array([1.0, 0.1, 0.2, 0.3, 0.4])
+    common = dict(
+        bin_theory_fns=[bin0, bin1],
+        bin_data=[jnp.array([1.0]), jnp.array([1.0])],
+        bin_cov_invs=[jnp.eye(1), jnp.eye(1)],
+        bin_lin_idx=[(1, 2), (3, 4)],          # 2 lin params per bin -> n_lin = 4
+        log_prior_nl_fn=lambda t: 0.0,
+        to_physical=lambda x: x,
+        full_params_fn=lambda t: fid.at[jnp.array([0])].set(t),
+    )
+
+    # Correct width (4) works.
+    ok = make_marginal_log_posterior_perbin(
+        prior_mean_fn=lambda t: jnp.zeros(4),
+        prior_sigma_fn=lambda t: jnp.ones(4), **common)
+    assert np.isfinite(float(ok(fid[:1])))
+
+    # Wrong width (3) must raise, naming the offending function.
+    bad = make_marginal_log_posterior_perbin(
+        prior_mean_fn=lambda t: jnp.zeros(3),
+        prior_sigma_fn=lambda t: jnp.ones(4), **common)
+    with pytest.raises(ValueError, match="prior_mean_fn"):
+        bad(fid[:1])
+
+    bad_sigma = make_marginal_log_posterior_perbin(
+        prior_mean_fn=lambda t: jnp.zeros(4),
+        prior_sigma_fn=lambda t: jnp.ones(5), **common)
+    with pytest.raises(ValueError, match="prior_sigma_fn"):
+        bad_sigma(fid[:1])
