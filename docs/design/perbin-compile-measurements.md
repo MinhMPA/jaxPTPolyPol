@@ -177,3 +177,61 @@ whole ~61 s-compile posterior inside a scan body — the same failure mode this
 document records for `make_marginal_log_posterior_scan`. At 5.06 s/eval a plain
 Python loop over the already-compiled `log_post` gives ~12 steps/min and
 produces draws incrementally; that is the outstanding follow-up.
+
+### Correction (2026-07-25, verified): what the numbers above do and do not show
+
+An 11-agent measurement workflow, with every probe adversarially verified,
+corrected four claims made earlier in this document and in the commit log:
+
+1. **The "2.0x first-compile win" is a measurement artifact.** The timed region
+   was `build closure + first call`, and the first call includes execution.
+   Decomposed with the measured cached evals: monolith `109.3 - 65.44 = ~43.9 s`
+   compile; per-bin `54.4 - 5.06 = ~49.3 s` compile. **Compile is roughly equal**
+   (per-bin possibly slightly worse). The real wins are per-evaluation (12.9x)
+   and peak RSS (3.3x).
+
+2. **The `n_bins^3` dense-algebra explanation is wrong.** The marginalization
+   linear algebra is ~30 ms of a 65.44 s evaluation (~0.05%). The actual driver
+   is the **linearize tangent count x bins**: the monolith's dense
+   `M = vmap(jvp)(eye(n_lin))` propagates all 77 tangents through all 7 bins
+   (539 bin-JVP units); the per-bin form propagates 11 through 1 bin each
+   (77 units) — a factor `n_bins`. XLA cannot discover this itself, because
+   scattering a dense `(77,)` tangent into the packed parameter vector makes
+   every bin *formally* depend on all 77 parameters. Per-bin factorization is
+   what makes that sparsity structural. The residual ~1.9x is working set.
+
+3. **Emulator-weight inlining is NOT a driver.** `CosmoPowerJAX.predict` is
+   `@partial(jit, static_argnames=('self',))`, so calling it inside a traced
+   region emits one shared private function plus one `func.call` per bin: the
+   weights appear **once**, not per bin. Batching `predict` over `z` changes the
+   graph by +2.8%. Do not pursue it.
+
+4. **Input StableHLO op count is a non-predictor.** It is ~139 MB / ~10k ops at
+   every `n_bins` by construction (shared private funcs, ~23 extra `func.call`s
+   per bin). Compile time tracks the **optimized** HLO instruction count at
+   ~84 us/op.
+
+Contested and worth one direct re-check: whether the 28 PT loop-kernel constants
+(`complex128[257,257]`, emitted 2x per bin pre-inline) survive duplication into
+the optimized module. The probe measured linear duplication pre-inline; the
+verifier read the optimized HLO and found XLA CSE collapses them to 28 copies at
+every `n_bins`. Prefer the verifier's reading pending a re-check.
+
+### The notebook blocker, resolved
+
+`run_rwmh` wraps `log_post` in a `lax.scan` over MH steps: **60 min, up to
+94.0 GB, zero draws**. A plain Python loop over the same already-compiled
+`log_post`: **20 steps -> 20 draws, 50% acceptance, 5.71 s median step
+(= one `log_post` call), 10.5 steps/min, flat 28.5 GB**.
+
+The posterior is fine; the scan wrapper is the blocker. This is the third
+instance of one pathology — a ~50k-instruction body inside a `while` defeats
+XLA's simplification/fusion passes (114k vs 180k optimized instructions, 2.2k vs
+4.5k fusions). **Rule: drive iteration from Python over an already-compiled
+callable; do not `lax.scan` an expensive body.** A Python loop is also
+checkpointable and yields draws incrementally.
+
+Honest throughput: 10.5 steps/min => ~159 h for 100k single-chain steps. Since
+the 5.06 s evaluation is dominated by *template construction* (77 bin-JVP units
+rebuilt every call) and not by the marginalization algebra, the correctly aimed
+speedup is to stop rebuilding templates per call.
