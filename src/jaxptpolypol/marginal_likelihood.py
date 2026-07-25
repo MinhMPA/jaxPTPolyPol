@@ -389,12 +389,20 @@ def make_marginal_log_posterior_scan(*, bin_theory_fns, bin_data, bin_cov_invs,
     ``n_bins`` branches. Only the bin-independent marginalization algebra (the
     ``n_lin_b``-dimensional Cholesky, solve and log-det in
     :func:`gaussian_marginal_loglike`) is emitted once instead of ``n_bins``
-    times; the dominant theory graph is still emitted ``n_bins`` times. Expect
-    little or no first-compile saving over the unrolled per-bin form -- see
-    ``docs/design/perbin-compile-measurements.md`` for the measured numbers on
-    the 2-bin configuration. A genuine single-body compile would require the
-    per-bin statics (``z``, ``Hz_fid``, ``DAz_fid``) to become traced inputs of
-    one closure, i.e. a theory-side change.
+    times; the dominant theory graph is still emitted ``n_bins`` times.
+
+    **Measured outcome: this form is SLOWER. Prefer**
+    :func:`make_marginal_log_posterior_perbin`. On the 2-bin reference
+    configuration this scan form takes **28.7 s to first-compile versus 16.9 s
+    for the unrolled per-bin form (~1.7x slower)**, with slightly *worse* peak
+    compile RSS (~4.9 GB vs ~4.8 GB) and an essentially identical op count
+    (20 090 vs 20 096) -- it saves 6 ops out of ~20 000 while adding loop
+    plumbing. It is retained as a *recorded negative result* and as scaffolding
+    should the theory ever gain a traced-bin-index entry point; it is not the
+    production path. Full table and method:
+    ``docs/design/perbin-compile-measurements.md``. A genuine single-body
+    compile would require the per-bin statics (``z``, ``Hz_fid``, ``DAz_fid``)
+    to become traced inputs of one closure, i.e. a theory-side change.
 
     Parameters
     ----------

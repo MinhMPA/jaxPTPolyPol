@@ -111,10 +111,11 @@ sampler.stop()
 ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024**2  # macOS: bytes
 ```
 
-then, one fresh process per path:
+then, one fresh process per path, three repeats each (the Numbers table above
+reports all three runs per path):
 
 ```bash
-for p in mono perbin scan; do python measure_compile.py "$p"; done
+for rep in 1 2 3; do for p in mono perbin scan; do python measure_compile.py "$p"; done; done
 ```
 
 The stage breakdown used the same fixture with
