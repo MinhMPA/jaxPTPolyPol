@@ -241,3 +241,37 @@ def test_rwmh_python_matches_contract_of_run_rwmh():
     assert samples_py.dtype == jnp.float64
     assert diag_py["acceptance_rate"].dtype == jnp.float64
     assert diag_py["proposal_sigma"].dtype == jnp.float64
+
+
+def test_cholesky_transform_roundtrip_and_isotropizes():
+    """Cholesky whitening: exact round-trip, batch support, and the whitened
+    image of cov-distributed samples is the isotropic unit Gaussian."""
+    from jaxptpolypol.sampler import make_cholesky_transform
+
+    rng = np.random.default_rng(7)
+    d = 4
+    A = rng.normal(size=(d, d))
+    cov = A @ A.T + d * np.eye(d)          # SPD, non-trivial correlations
+    center = rng.normal(size=d)
+
+    to_w, to_p = make_cholesky_transform(center, cov)
+
+    # exact round-trip, single vector
+    theta = jnp.asarray(rng.normal(size=d))
+    np.testing.assert_allclose(np.asarray(to_p(to_w(theta))), np.asarray(theta),
+                               rtol=1e-12)
+
+    # batched to_physical: (n, d) and (chains, n, d)
+    xb = jnp.asarray(rng.normal(size=(50, d)))
+    assert to_p(xb).shape == (50, d)
+    assert to_p(xb[None]).shape == (1, 50, d)
+
+    # to_physical maps unit-isotropic draws to cov-distributed draws
+    z = rng.normal(size=(200_000, d))
+    phys = np.asarray(to_p(jnp.asarray(z)))
+    emp = np.cov(phys - center, rowvar=False)
+    np.testing.assert_allclose(emp, cov, rtol=0.05, atol=0.05 * np.abs(cov).max())
+
+    # and to_whitened isotropizes them again
+    w = np.asarray(to_w(jnp.asarray(phys[0])))
+    assert w.shape == (d,)

@@ -18,6 +18,7 @@ from jax import lax
 
 __all__ = [
     "make_transform",
+    "make_cholesky_transform",
     "make_full_params_fn",
     "make_gaussian_log_prior",
     "make_log_posterior",
@@ -84,6 +85,49 @@ def make_transform(center, scale):
 
     def to_physical(x):
         return center + scale * x
+
+    return to_whitened, to_physical
+
+
+def make_cholesky_transform(center, cov):
+    """Create a full-covariance (Cholesky) whitening transform pair.
+
+    Unlike :func:`make_transform`, which rescales each parameter
+    independently and therefore leaves the whitened posterior with the
+    original correlation structure, this uses the Cholesky factor of a
+    covariance estimate (e.g. the inverse Fisher matrix) so the whitened
+    posterior is approximately the isotropic unit Gaussian. That makes the
+    standard random-walk proposal scale ``2.38/sqrt(d)`` correct by
+    construction. Measured motivation: with diagonal whitening on the 7-bin
+    P+B marginal posterior (strongly correlated cosmology block), isotropic
+    proposals at that scale were rejected 60/60 times; see
+    ``docs/design/perbin-compile-measurements.md``.
+
+    Parameters
+    ----------
+    center : array_like, shape (n,)
+        Fiducial values (origin in whitened space).
+    cov : array_like, shape (n, n)
+        Covariance estimate in physical space (symmetric positive definite),
+        typically ``inv(F)`` for a Fisher matrix ``F``.
+
+    Returns
+    -------
+    to_whitened, to_physical : pair of callables
+        ``to_whitened(theta) = solve(L, theta - center)`` with ``L L^T = cov``;
+        ``to_physical(x) = center + x @ L.T`` (works for a single ``(n,)``
+        vector or any batch ``(..., n)``).
+    """
+    center = jnp.asarray(center, dtype=jnp.float64)
+    cov = jnp.asarray(cov, dtype=jnp.float64)
+    chol = jnp.linalg.cholesky(cov)
+
+    def to_whitened(theta):
+        return jax.scipy.linalg.solve_triangular(
+            chol, jnp.asarray(theta, dtype=jnp.float64) - center, lower=True)
+
+    def to_physical(x):
+        return center + jnp.asarray(x, dtype=jnp.float64) @ chol.T
 
     return to_whitened, to_physical
 
