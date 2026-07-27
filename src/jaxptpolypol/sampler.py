@@ -13,6 +13,7 @@ blackjax >= 1.0
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 from jax import lax
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "warmup_nuts",
     "run_nuts",
     "run_rwmh",
+    "run_rwmh_python",
     "samples_to_physical",
 ]
 
@@ -864,6 +866,153 @@ def run_rwmh(rng_key, log_posterior_fn, initial_position, num_samples,
 
     return samples, {
         "acceptance_rate": acceptance_rate,
+        "proposal_sigma": sigma_vector,
+    }
+
+
+def run_rwmh_python(rng_key, log_posterior_fn, initial_position, num_samples,
+                    num_chains=1, proposal_sigma=None, thin=1,
+                    progress_fn=None, sample_progress_fn=None):
+    """Run gradient-free random-walk MH with a Python-driven step loop.
+
+    A same-shaped alternative to :func:`run_rwmh` that steps the chain from a
+    **plain Python loop** instead of wrapping the transition in
+    ``jax.lax.scan``.  It exists for a *measured* failure mode: on the
+    production 7-bin marginal posterior, :func:`run_rwmh`'s ``lax.scan``
+    wrapper produced **zero draws in 60 min at 94 GB** — the scan body folds
+    the already-huge marginal graph into one monolithic XLA program whose
+    compilation never completes.  A plain Python loop over the *same*
+    already-compiled ``log_posterior_fn`` stepped at ~5.7 s/step (one cached
+    forward eval), ~50% acceptance, at a flat 28.5 GB, with draws
+    accumulating.
+
+    Differences from :func:`run_rwmh` (which are the whole point)
+    ------------------------------------------------------------
+    - **No ``lax.scan`` / ``fori_loop``.**  ``log_posterior_fn`` is called
+      once per step from Python.  It is expected to be **already
+      jit-compiled** by the caller; this driver never wraps it.
+    - **Proposal noise and the Metropolis accept test use a NumPy RNG**,
+      seeded deterministically from the per-chain JAX key (via
+      :func:`jax.random.randint`), so ``same rng_key => identical samples``.
+      Only the per-chain start jitter still uses JAX random (identical to
+      :func:`run_rwmh`).
+    - **Thinning.**  ``thin`` keeps every ``thin``-th step; ``num_samples``
+      is the number of KEPT draws, so the loop runs ``num_samples * thin``
+      total steps and the returned array is always
+      ``(num_chains, num_samples, d)``.
+
+    Everything else matches :func:`run_rwmh`: the ``proposal_sigma``
+    resolution (``None`` -> ``(2.38 / sqrt(d)) * ones(d)``; scalar ->
+    broadcast; vector -> as-is), the ``0.1 * sigma * normal`` per-chain start
+    jitter, sequential chains, and the returned ``(samples, diagnostics)``
+    contract.
+
+    Parameters
+    ----------
+    rng_key : PRNGKey
+        JAX random key.
+    log_posterior_fn : callable
+        Log-posterior ``x -> scalar``.  Expected to be **already
+        jit-compiled**; it is called once per step and never re-wrapped.
+    initial_position : ndarray, shape (d,)
+        Starting point (typically ``jnp.zeros(d)`` in whitened space).
+    num_samples : int
+        Number of KEPT draws per chain.
+    num_chains : int
+        Number of independent chains (run sequentially).
+    proposal_sigma : None, scalar, or ndarray, optional
+        Per-parameter proposal standard deviations.
+
+        - *None* (default): ``(2.38 / sqrt(d)) * ones(d)``.
+        - scalar: broadcast to a length-*d* vector.
+        - vector, shape ``(d,)``: used as-is.
+    thin : int
+        Keep every ``thin``-th step.  Total steps per chain is
+        ``num_samples * thin``.  Default 1 (keep every step).
+    progress_fn : callable, optional
+        ``progress_fn(chain_number, num_chains)`` called after each chain
+        completes (1-based ``chain_number``).
+    sample_progress_fn : callable, optional
+        Per-draw callback with signature
+        ``sample_progress_fn(chain_number, num_chains, done, total)``, where
+        ``chain_number`` is 1-based and ``done`` counts KEPT draws for that
+        chain (``total`` == ``num_samples``).
+
+    Returns
+    -------
+    samples : ndarray, shape (num_chains, num_samples, d)
+        Samples in the sampled parameter space.
+    diagnostics : dict
+        ``acceptance_rate``  (num_chains,) mean acceptance per chain.
+        ``proposal_sigma``  (d,) the proposal vector used.
+    """
+    initial_position = jnp.asarray(initial_position, dtype=jnp.float64)
+    d = initial_position.shape[0]
+
+    thin = int(thin)
+    if thin < 1:
+        raise ValueError(f"thin must be a positive integer, got {thin!r}")
+
+    # Resolve the proposal standard-deviation vector (identical to run_rwmh).
+    if proposal_sigma is None:
+        sigma_vector = (2.38 / jnp.sqrt(d)) * jnp.ones(d, dtype=jnp.float64)
+    else:
+        proposal_sigma = jnp.asarray(proposal_sigma, dtype=jnp.float64)
+        if proposal_sigma.ndim == 0:
+            sigma_vector = proposal_sigma * jnp.ones(d, dtype=jnp.float64)
+        else:
+            sigma_vector = proposal_sigma
+    sigma_vector = jnp.asarray(sigma_vector, dtype=jnp.float64)
+    sigma_np = np.asarray(sigma_vector, dtype=np.float64)
+
+    chain_keys = jax.random.split(rng_key, num_chains)
+    total_steps = num_samples * thin
+
+    all_positions = []
+    acceptance = []
+
+    for c in range(num_chains):
+        init_key, sample_key = jax.random.split(chain_keys[c])
+
+        # Per-chain start jitter (JAX random, identical to run_rwmh).
+        jitter = 0.1 * sigma_vector * jax.random.normal(init_key, (d,))
+        cur = np.asarray(initial_position + jitter, dtype=np.float64)
+
+        # Per-chain NumPy RNG, seeded deterministically from the JAX key so
+        # that ``same rng_key => identical samples``.
+        seed = int(jax.random.randint(sample_key, (), 0, 2 ** 31 - 1))
+        rng = np.random.default_rng(seed)
+
+        cur_lp = float(log_posterior_fn(jnp.asarray(cur)))
+        kept = np.empty((num_samples, d), dtype=np.float64)
+        kept_count = 0
+        n_accepted = 0
+
+        for step in range(total_steps):
+            prop = cur + sigma_np * rng.normal(size=d)
+            lp = float(log_posterior_fn(jnp.asarray(prop)))
+            if np.log(rng.random()) < (lp - cur_lp):
+                cur, cur_lp = prop, lp
+                n_accepted += 1
+            if (step + 1) % thin == 0:
+                kept[kept_count] = cur
+                kept_count += 1
+                if sample_progress_fn is not None:
+                    sample_progress_fn(
+                        c + 1, num_chains, kept_count, num_samples
+                    )
+
+        all_positions.append(kept)
+        acceptance.append(
+            n_accepted / total_steps if total_steps > 0 else 0.0
+        )
+
+        if progress_fn is not None:
+            progress_fn(c + 1, num_chains)
+
+    samples = jnp.asarray(np.stack(all_positions), dtype=jnp.float64)
+    return samples, {
+        "acceptance_rate": jnp.asarray(acceptance, dtype=jnp.float64),
         "proposal_sigma": sigma_vector,
     }
 
