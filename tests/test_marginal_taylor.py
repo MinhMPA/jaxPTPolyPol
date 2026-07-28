@@ -370,3 +370,186 @@ def test_roundtrip_order1_no_H(tmp_path):
     common = _toy_surrogate_common(theory, fpf)
     sur = make_marginal_log_posterior_taylor(loaded, **common)
     assert np.isfinite(float(sur(theta0)))
+
+
+# --- Importance reweighting (Task 5) ------------------------------------------
+#
+# The surrogate posterior is fast but only asymptotically exact. These tests
+# pin the post-hoc importance-reweighting utility that restores exactness on a
+# surrogate chain, plus the ESS / max-weight diagnostics that reveal when the
+# surrogate under-covers the tails (in which case the reweighted answer must be
+# reported as untrustworthy, not silently trusted). All toys are analytic 1-D/
+# N-D Gaussians (no emulator, no jax): the exact and surrogate "posteriors" are
+# closed-form Gaussian log-pdfs, so the reweighting algebra is checked against
+# values known to the float64 floor and against a numerically-computed ESS.
+
+_TRAPZ = getattr(np, "trapezoid", np.trapz)   # np>=2 renamed trapz -> trapezoid
+
+
+def _normal_logpdf(x, mu, var):
+    """Log N(x; mu, var) -- SECOND ARG IS THE VARIANCE (so N(0.3, 1.2**2) below
+    is variance 1.44). Vectorized over x."""
+    return -0.5 * np.log(2.0 * np.pi * var) - 0.5 * (x - mu) ** 2 / var
+
+
+def _analytic_ess_frac(mu_p, var_p, mu_q, var_q):
+    """Limiting ESS/n for weights w = p/q with x drawn from q = N(mu_q, var_q),
+    target p = N(mu_p, var_p).
+
+    E_q[w] = int q * (p/q) = 1, so ESS/n -> (E_q[w])**2 / E_q[w**2]
+    = 1 / int p(x)**2 / q(x) dx.  The integral is done by fine-grid quadrature
+    (deterministic, independent of the Monte-Carlo draw the test asserts on).
+    """
+    span = 12.0 * np.sqrt(max(var_p, var_q))
+    xg = np.linspace(min(mu_p, mu_q) - span, max(mu_p, mu_q) + span, 2_000_001)
+    integrand = np.exp(2 * _normal_logpdf(xg, mu_p, var_p)
+                       - _normal_logpdf(xg, mu_q, var_q))
+    e_w2 = _TRAPZ(integrand, xg)
+    return 1.0 / e_w2
+
+
+def test_is_reweight_corrects_offset_gaussian():
+    """Reweighting a surrogate draw to an offset, wider exact target recovers
+    the exact mean/std, and the ESS diagnostic matches its analytic value.
+
+    exact    p = N(0.3, 1.2**2 = 1.44)
+    surrogate q = N(0, 1)              -- 200k samples drawn FROM q.
+
+    The naive (unweighted) surrogate sample has mean ~0 and std ~1; reweighting
+    by w = p/q must move them to 0.3 and 1.2. ESS/n is asserted against the
+    numerically-integrated expectation (not a hardcoded band), and max_weight
+    must be tiny (q covers p well, so no single sample dominates).
+    """
+    from jaxptpolypol.marginal_taylor import (
+        importance_reweight, reweighted_moments)
+
+    rng = np.random.default_rng(12345)
+    n = 200_000
+    samples = rng.standard_normal(n).reshape(-1, 1)      # (n, 1), drawn from q
+
+    log_p_exact = lambda x: _normal_logpdf(x[0], 0.3, 1.44)
+    log_p_surrogate = lambda x: _normal_logpdf(x[0], 0.0, 1.0)
+
+    res = importance_reweight(samples, log_p_exact, log_p_surrogate)
+
+    # Keys and shapes.
+    assert set(res) == {"weights", "log_w_raw", "ess", "ess_frac",
+                        "max_weight", "idx"}
+    assert res["weights"].shape == (n,)
+    assert res["log_w_raw"].shape == (n,)
+    assert res["idx"].shape == (n,)
+    np.testing.assert_allclose(res["weights"].sum(), 1.0, rtol=1e-12)
+
+    mean, std = reweighted_moments(samples, res["weights"], idx=res["idx"])
+    assert abs(mean[0] - 0.3) < 0.02, mean[0]
+    assert abs(std[0] - 1.2) < 0.02, std[0]
+
+    # ESS/n within +-0.1 of the numerically-computed expectation.
+    ess_frac_analytic = _analytic_ess_frac(0.3, 1.44, 0.0, 1.0)   # ~0.765
+    assert abs(res["ess_frac"] - ess_frac_analytic) < 0.1, (
+        res["ess_frac"], ess_frac_analytic)
+    assert 0.5 < res["ess_frac"] < 1.0            # well-covered regime
+    assert res["max_weight"] < 0.01               # no single sample dominates
+
+
+def test_is_reweight_subsample_path():
+    """subsample=k evaluates the exact/surrogate fns on only k uniformly-drawn
+    (without replacement) indices -- the laptop path where each exact eval is
+    ~5 s. Returns k weights over sorted, unique, in-range indices, and its
+    moments agree with the full-set answer at a looser tolerance."""
+    from jaxptpolypol.marginal_taylor import (
+        importance_reweight, reweighted_moments)
+
+    rng = np.random.default_rng(2024)
+    n = 200_000
+    samples = rng.standard_normal(n).reshape(-1, 1)
+
+    log_p_exact = lambda x: _normal_logpdf(x[0], 0.3, 1.44)
+    log_p_surrogate = lambda x: _normal_logpdf(x[0], 0.0, 1.0)
+
+    full = importance_reweight(samples, log_p_exact, log_p_surrogate)
+    sub = importance_reweight(samples, log_p_exact, log_p_surrogate,
+                              subsample=10_000, seed=0)
+
+    assert sub["weights"].shape == (10_000,)
+    assert sub["idx"].shape == (10_000,)
+    assert len(np.unique(sub["idx"])) == 10_000          # unique
+    assert np.all(np.diff(sub["idx"]) > 0)               # sorted (strictly)
+    assert sub["idx"].min() >= 0 and sub["idx"].max() < n  # in range
+    np.testing.assert_allclose(sub["weights"].sum(), 1.0, rtol=1e-12)
+
+    m_full, s_full = reweighted_moments(samples, full["weights"],
+                                        idx=full["idx"])
+    m_sub, s_sub = reweighted_moments(samples, sub["weights"], idx=sub["idx"])
+    assert abs(m_sub[0] - m_full[0]) < 0.05, (m_sub[0], m_full[0])
+    assert abs(s_sub[0] - s_full[0]) < 0.05, (s_sub[0], s_full[0])
+
+
+def test_is_reweight_flags_undercoverage():
+    """A surrogate much NARROWER than the exact target under-covers the tails;
+    the diagnostics must fire so the reweighted answer is flagged untrustworthy.
+
+    exact    p = N(0.3, 1.44)
+    narrow   q = N(0, 0.4**2 = 0.16)   -- std 0.4, much narrower than std 1.2.
+
+    Because var_p (1.44) > 2*var_q (0.32) the importance-weight variance
+    diverges: ESS/n -> 0 and the weight mass concentrates on the few samples
+    that stray into the tail.
+
+    Threshold note (brief said max_weight > 0.2): at n=200_000 a *single*
+    normalized weight cannot approach 0.2/1 for a smooth 1-D Gaussian mismatch
+    -- there is always a shell of comparably-extreme samples sharing the peak
+    weight, so max_weight saturates ~0.02-0.2 and is highly seed-dependent
+    (verified by a 6-seed sweep). The robust, seed-independent tripwire is
+    ess_frac; max_weight here is asserted only to be *elevated far above the
+    well-covered baseline* (~2e-4 in test 1), i.e. > 0.01. Both are checked
+    against a healthy N(0,1) surrogate reweighted to the same target.
+    """
+    from jaxptpolypol.marginal_taylor import importance_reweight
+
+    n = 200_000
+    log_p_exact = lambda x: _normal_logpdf(x[0], 0.3, 1.44)
+
+    # Healthy proposal: N(0, 1) -- covers the target.
+    rng_ok = np.random.default_rng(12345)
+    s_ok = rng_ok.standard_normal(n).reshape(-1, 1)
+    ok = importance_reweight(
+        s_ok, log_p_exact, lambda x: _normal_logpdf(x[0], 0.0, 1.0))
+
+    # Under-covering proposal: N(0, 0.4**2) -- far too narrow.
+    rng_bad = np.random.default_rng(7)
+    s_bad = (rng_bad.standard_normal(n) * 0.4).reshape(-1, 1)
+    bad = importance_reweight(
+        s_bad, log_p_exact, lambda x: _normal_logpdf(x[0], 0.0, 0.16))
+
+    # Diagnostics fire on the narrow proposal.
+    assert bad["ess_frac"] < 0.05, bad["ess_frac"]
+    assert bad["max_weight"] > 0.01, bad["max_weight"]
+    # ... and clearly separate the bad proposal from the healthy one.
+    assert bad["ess_frac"] < ok["ess_frac"] / 5.0
+    assert bad["max_weight"] > 20.0 * ok["max_weight"]
+
+
+def test_is_reweight_accepts_chain_axis():
+    """A (chains, n, d) sample array is reshaped to (chains*n, d) and run;
+    idx indexes into the flattened stack."""
+    from jaxptpolypol.marginal_taylor import (
+        importance_reweight, reweighted_moments)
+
+    rng = np.random.default_rng(3)
+    samples = rng.standard_normal((2, 500, 3))            # (chains, n, d)
+
+    mu_p = np.array([0.2, -0.1, 0.4])
+    log_p_exact = lambda x: float(np.sum(_normal_logpdf(x, mu_p, 1.5)))
+    log_p_surrogate = lambda x: float(np.sum(_normal_logpdf(x, 0.0, 1.0)))
+
+    res = importance_reweight(samples, log_p_exact, log_p_surrogate)
+
+    assert res["weights"].shape == (1000,)
+    assert res["idx"].shape == (1000,)
+    assert res["idx"].min() >= 0 and res["idx"].max() < 1000
+    np.testing.assert_allclose(res["weights"].sum(), 1.0, rtol=1e-12)
+    assert np.isfinite(res["ess"]) and 0.0 < res["ess_frac"] <= 1.0
+
+    mean, std = reweighted_moments(samples, res["weights"], idx=res["idx"])
+    assert mean.shape == (3,) and std.shape == (3,)

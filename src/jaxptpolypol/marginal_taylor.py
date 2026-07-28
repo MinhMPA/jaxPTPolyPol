@@ -83,6 +83,8 @@ __all__ = [
     "make_marginal_log_posterior_taylor",
     "save_taylor_templates",
     "load_taylor_templates",
+    "importance_reweight",
+    "reweighted_moments",
 ]
 
 
@@ -483,3 +485,173 @@ def load_taylor_templates(path, *, expect_meta: dict | None = None):
         order2_m0=order2_m0,
         build_diagnostics=build_diagnostics,
     )
+
+
+# --- Importance reweighting: restore asymptotic exactness post-hoc ------------
+#
+# The Taylor surrogate is fast (~ms/eval) but only *asymptotically* exact -- on
+# a model it does not represent exactly it is a low-order approximation whose
+# error grows into the tails. A surrogate MCMC chain therefore targets a
+# slightly-wrong posterior. Importance reweighting corrects this after the fact:
+# each surrogate sample x_i is re-weighted by w_i propto p_exact(x_i) /
+# p_surrogate(x_i), so weighted expectations converge to the EXACT posterior --
+# *provided the surrogate covers the exact posterior's support*. When it does
+# not (the surrogate is too narrow, under-covering the tails), a handful of
+# tail samples carry almost all the weight, the effective sample size collapses,
+# and the reweighted answer is unreliable. The returned diagnostics (``ess``,
+# ``ess_frac``, ``max_weight``) exist precisely to make that failure visible --
+# they are to be reported, never hidden.
+
+
+def _flatten_samples(samples):
+    """Reshape ``(chains, n, d)`` -> ``(chains*n, d)``; pass ``(n, d)`` through.
+
+    Returns a plain ``numpy`` array (this utility runs post-sampling on host
+    memory, not inside a jit).
+    """
+    arr = np.asarray(samples)
+    if arr.ndim == 3:
+        arr = arr.reshape(-1, arr.shape[-1])
+    return arr
+
+
+def importance_reweight(samples, log_p_exact_fn, log_p_surrogate_fn, *,
+                        subsample=None, seed=0):
+    """Importance-reweight surrogate samples back onto the exact posterior.
+
+    Given samples drawn against ``log_p_surrogate_fn`` (a surrogate MCMC chain),
+    compute normalized importance weights ``w_i propto exp(log_p_exact(x_i) -
+    log_p_surrogate(x_i))`` so that ``sum_i w_i f(x_i)`` estimates the EXACT
+    posterior expectation of ``f``. Also returns the effective-sample-size
+    diagnostics that reveal when this correction cannot be trusted.
+
+    Parameters
+    ----------
+    samples : array_like
+        ``(n, d)`` samples, or ``(chains, n, d)`` which is reshaped to
+        ``(chains*n, d)`` (chain axis flattened). ``d`` is the parameter
+        dimension; a 1-D problem uses ``d = 1`` (shape ``(n, 1)``).
+    log_p_exact_fn, log_p_surrogate_fn : callable
+        ``fn(x) -> scalar`` log-posteriors, called on ONE sample ``x`` of shape
+        ``(d,)`` at a time. **The exact posterior is evaluated in a plain Python
+        loop, one sample per call -- it is deliberately NOT vmapped.** In
+        production the exact marginal posterior costs ~5 s and is memory-heavy
+        per evaluation (it re-traces the full ps_1loop_jax graph), and its
+        contract is single-``x`` calls; batching it with ``vmap`` would blow up
+        memory. The (arbitrary, unnormalized) additive constants of the two
+        log-posteriors cancel only up to the shared shift removed below, so only
+        their *difference* need be meaningful.
+    subsample : int, optional
+        If given, evaluate both log-posteriors on only ``subsample`` sample
+        indices drawn uniformly WITHOUT replacement (via
+        ``numpy.random.default_rng(seed)``), returned sorted in ``idx``. This is
+        the laptop path: at ~5 s per exact eval, evaluating all ``n`` samples is
+        infeasible, so a random subset is reweighted instead. If ``None``, all
+        ``n`` samples are used.
+    seed : int
+        Seed for the subsample RNG (ignored when ``subsample`` is ``None``).
+
+    Returns
+    -------
+    dict with keys
+        ``weights`` : ``(m,)`` normalized weights summing to 1 (``m = subsample``
+            or ``n``).
+        ``log_w_raw`` : ``(m,)`` UNSHIFTED log-weights
+            ``log_p_exact - log_p_surrogate`` on the evaluated set (before the
+            log-sum-exp stabilization).
+        ``ess`` : Kish effective sample size ``1 / sum_i weights_i**2``.
+        ``ess_frac`` : ``ess / m`` in ``(0, 1]``.
+        ``max_weight`` : the largest single normalized weight.
+        ``idx`` : ``(m,)`` int indices of the evaluated samples into the
+            FLATTENED ``(chains*n, d)`` sample stack (``arange(n)`` when not
+            subsampling).
+
+    Interpretation contract (READ THIS)
+    -----------------------------------
+    A **small ``ess_frac``** or a **``max_weight`` approaching 1** means the
+    surrogate UNDER-COVERS the exact posterior's tails: a few samples dominate
+    the weights, the reweighted moments are driven by those few draws, and the
+    reweighted answer is **NOT trustworthy** -- the importance-sampling estimator
+    has effectively collapsed to a handful of samples. This is a property of the
+    surrogate/exact mismatch, not a bug. Report these diagnostics alongside any
+    reweighted result; do not silently trust a reweighted answer with a low
+    ``ess_frac``. (A well-covered surrogate gives ``ess_frac`` near 1 and a tiny
+    ``max_weight`` ~ ``1/m``.)
+    """
+    arr = _flatten_samples(samples)
+    n = arr.shape[0]
+
+    if subsample is not None:
+        rng = np.random.default_rng(seed)
+        idx = np.sort(rng.choice(n, size=int(subsample), replace=False))
+    else:
+        idx = np.arange(n)
+
+    eval_samples = arr[idx]
+    m = idx.shape[0]
+
+    # Plain Python loop, one sample per call -- do NOT vmap (see docstring): the
+    # production exact posterior is memory-heavy and contracted for single-x.
+    log_p_ex = np.empty(m, dtype=np.float64)
+    log_p_sur = np.empty(m, dtype=np.float64)
+    for i in range(m):
+        x = eval_samples[i]
+        log_p_ex[i] = float(log_p_exact_fn(x))
+        log_p_sur[i] = float(log_p_surrogate_fn(x))
+
+    log_w_raw = log_p_ex - log_p_sur              # unshifted log-weights
+    lw = log_w_raw - log_w_raw.max()              # log-sum-exp stabilization
+    w = np.exp(lw)
+    weights = w / w.sum()
+
+    sum_w2 = np.sum(weights ** 2)
+    ess = float(1.0 / sum_w2)
+
+    return {
+        "weights": weights,
+        "log_w_raw": log_w_raw,
+        "ess": ess,
+        "ess_frac": ess / m,
+        "max_weight": float(weights.max()),
+        "idx": idx,
+    }
+
+
+def reweighted_moments(samples, weights, idx=None):
+    """Weighted mean and standard deviation of samples under importance weights.
+
+    Parameters
+    ----------
+    samples : array_like
+        ``(n, d)`` or ``(chains, n, d)`` (flattened as in
+        :func:`importance_reweight`).
+    weights : array_like
+        ``(m,)`` normalized weights (sum to 1) from :func:`importance_reweight`.
+    idx : array_like of int, optional
+        The evaluated indices ``weights`` correspond to (the ``idx`` returned by
+        :func:`importance_reweight`). When given, moments are taken over
+        ``samples[idx]``; when ``None``, ``weights`` must align with all ``n``
+        flattened samples.
+
+    Returns
+    -------
+    (mean, std) : each ``(d,)``
+        ``mean = sum_i w_i x_i``. ``std`` uses the reliability-weights unbiased
+        estimator ``sqrt( sum_i w_i (x_i - mean)**2 / (1 - sum_i w_i**2) )``: for
+        *normalized* weights this reduces to the familiar ``1/(N-1)`` correction
+        when all weights are equal (``w_i = 1/N`` gives ``1 - sum w_i**2 =
+        (N-1)/N``), and it is the standard bias correction for the frequency
+        interpretation of importance weights. A near-degenerate weight set
+        (``sum w_i**2 -> 1``, i.e. one sample dominates) makes the denominator
+        collapse, correctly signalling that ``std`` is ill-determined -- pair
+        this with the :func:`importance_reweight` ``ess_frac`` diagnostic.
+    """
+    arr = _flatten_samples(samples)
+    if idx is not None:
+        arr = arr[np.asarray(idx)]
+    w = np.asarray(weights, dtype=np.float64)
+
+    mean = np.sum(w[:, None] * arr, axis=0)
+    var = (np.sum(w[:, None] * (arr - mean) ** 2, axis=0)
+           / (1.0 - np.sum(w ** 2)))
+    return mean, np.sqrt(var)

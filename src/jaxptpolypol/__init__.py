@@ -48,7 +48,9 @@ from .marginal_likelihood import (
 from .marginal_taylor import (
     TaylorTemplates,
     build_taylor_templates,
+    importance_reweight,
     load_taylor_templates,
     make_marginal_log_posterior_taylor,
+    reweighted_moments,
     save_taylor_templates,
 )
