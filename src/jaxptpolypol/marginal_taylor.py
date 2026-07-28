@@ -64,10 +64,12 @@ and a scan body over them defeats XLA -- a measured lesson recorded alongside
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from .marginal_likelihood import (
     _contiguous_slices,
@@ -79,6 +81,8 @@ __all__ = [
     "TaylorTemplates",
     "build_taylor_templates",
     "make_marginal_log_posterior_taylor",
+    "save_taylor_templates",
+    "load_taylor_templates",
 ]
 
 
@@ -342,3 +346,140 @@ def make_marginal_log_posterior_taylor(tt, *, bin_data, bin_cov_invs,
         return out
 
     return log_posterior
+
+
+# --- npz persistence with a stale-config guard --------------------------------
+#
+# A production build of the Taylor tensors is a one-off 15-40 min forward-over-
+# forward pass (see the module docstring); it must be reusable across sampler
+# runs. But the tensors are *only* valid for the exact data configuration they
+# were built against -- change n_bins, the k/triangle grid, the GL/mu/phi
+# quadrature, or the theta_NL centre, and silently reusing an old ``.npz`` would
+# sample a posterior that no longer matches the notebook. ``save`` therefore
+# stamps a flat ``meta`` dict of config identifiers into the file, and ``load``
+# refuses (loudly, listing every offending key) to hand back templates whose
+# stored ``meta`` disagrees with the caller's ``expect_meta``.
+
+_MISSING = "<absent>"
+
+
+def save_taylor_templates(tt, path, *, meta: dict):
+    """Persist ``tt`` to a single ``.npz`` file with a config-identifier stamp.
+
+    Every tensor is written under its own key so the file is inspectable without
+    unpickling: ``theta0``; ``m00_b``, ``J_b``, ``M0_b``, ``dM_b`` for each bin
+    ``b`` (and ``H_b`` only for bins whose ``bin_H[b]`` is not ``None``); the
+    scalars ``order2_m0`` and ``n_bins``; and both the ``meta`` and
+    ``build_diagnostics`` dicts JSON-serialised into 0-d string arrays.
+
+    Parameters
+    ----------
+    tt : TaylorTemplates
+        Output of :func:`build_taylor_templates`.
+    path : str or path-like
+        Destination ``.npz`` file.
+    meta : dict
+        FLAT dict of config identifiers (e.g. ``n_bins``, ``n_k``, ``n_tri``,
+        ``n_gl``, ``num_mu``, ``num_phi``, ``k_min``, ``k_max``, ``x0_hash``).
+        Every value must be ``str``/``int``/``float``/``bool``; a non-scalar
+        value raises ``TypeError`` (it could not round-trip as a config stamp,
+        and would defeat the :func:`load_taylor_templates` guard).
+    """
+    for key, val in meta.items():
+        if not isinstance(val, (str, int, float, bool)):
+            raise TypeError(
+                "meta must be a flat dict of config identifiers "
+                "(str/int/float/bool values); "
+                f"key {key!r} has value of type {type(val).__name__}")
+
+    n_bins = len(tt.bin_m00)
+    arrays = {
+        "theta0": np.asarray(tt.theta0),
+        "order2_m0": np.asarray(bool(tt.order2_m0)),
+        "n_bins": np.asarray(int(n_bins)),
+        "meta": np.asarray(json.dumps(meta)),
+        "build_diagnostics": np.asarray(json.dumps(tt.build_diagnostics)),
+    }
+    for b in range(n_bins):
+        arrays[f"m00_{b}"] = np.asarray(tt.bin_m00[b])
+        arrays[f"J_{b}"] = np.asarray(tt.bin_J[b])
+        arrays[f"M0_{b}"] = np.asarray(tt.bin_M0[b])
+        arrays[f"dM_{b}"] = np.asarray(tt.bin_dM[b])
+        if tt.bin_H[b] is not None:
+            arrays[f"H_{b}"] = np.asarray(tt.bin_H[b])
+
+    np.savez(path, **arrays)
+
+
+def load_taylor_templates(path, *, expect_meta: dict | None = None):
+    """Reconstruct a :class:`TaylorTemplates` from a :func:`save_taylor_templates` file.
+
+    All tensors come back as ``float64`` ``jnp`` arrays; ``bin_H`` entries are
+    ``None`` for any bin that carried no ``H`` (order-1 build). The returned
+    object's ``build_diagnostics`` is the stored build diagnostics with the
+    loaded ``meta`` attached under a ``"meta"`` key.
+
+    Parameters
+    ----------
+    path : str or path-like
+        A ``.npz`` file written by :func:`save_taylor_templates`.
+    expect_meta : dict, optional
+        If given, the stale-template guard: the stored ``meta`` must equal
+        ``expect_meta`` key-for-key. A key present in only one of the two dicts,
+        or present in both with differing values, is a mismatch. Any mismatch
+        raises ``ValueError`` listing EVERY offending key with its stored and
+        expected values, so a regenerated notebook config cannot silently sample
+        with tensors built for a different configuration.
+
+    Returns
+    -------
+    TaylorTemplates
+    """
+    with np.load(path, allow_pickle=False) as npz:
+        stored_meta = json.loads(str(npz["meta"].item()))
+
+        if expect_meta is not None:
+            mismatches = []
+            for key in sorted(set(stored_meta) | set(expect_meta)):
+                sv = stored_meta.get(key, _MISSING)
+                ev = expect_meta.get(key, _MISSING)
+                if (key not in stored_meta or key not in expect_meta
+                        or sv != ev):
+                    mismatches.append(
+                        f"  {key}: stored={sv!r}, expected={ev!r}")
+            if mismatches:
+                raise ValueError(
+                    "Stale Taylor templates: stored config meta does not match "
+                    "expect_meta on the following key(s):\n"
+                    + "\n".join(mismatches))
+
+        n_bins = int(npz["n_bins"])
+        order2_m0 = bool(npz["order2_m0"])
+        theta0 = jnp.asarray(npz["theta0"], dtype=jnp.float64)
+
+        def _get(prefix, b):
+            return jnp.asarray(npz[f"{prefix}_{b}"], dtype=jnp.float64)
+
+        bin_m00 = tuple(_get("m00", b) for b in range(n_bins))
+        bin_J = tuple(_get("J", b) for b in range(n_bins))
+        bin_M0 = tuple(_get("M0", b) for b in range(n_bins))
+        bin_dM = tuple(_get("dM", b) for b in range(n_bins))
+        bin_H = tuple(
+            _get("H", b) if f"H_{b}" in npz.files else None
+            for b in range(n_bins))
+
+        build_diagnostics = json.loads(str(npz["build_diagnostics"].item()))
+
+    build_diagnostics = dict(build_diagnostics)
+    build_diagnostics["meta"] = stored_meta
+
+    return TaylorTemplates(
+        theta0=theta0,
+        bin_m00=bin_m00,
+        bin_J=bin_J,
+        bin_H=bin_H,
+        bin_M0=bin_M0,
+        bin_dM=bin_dM,
+        order2_m0=order2_m0,
+        build_diagnostics=build_diagnostics,
+    )

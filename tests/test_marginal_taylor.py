@@ -253,3 +253,120 @@ def test_surrogate_prior_guard_fires():
         prior_sigma_fn=lambda _t: jnp.ones(3), **common)
     with pytest.raises(ValueError, match="prior_sigma_fn"):
         bad_sigma(theta0)
+
+
+def _toy_surrogate_common(theory, fpf):
+    """The test-(a) surrogate ingredients: data, cov_inv, and constant priors."""
+    mu_p = jnp.array([0.4, -0.3])
+    sigma_p = jnp.array([0.7, 1.3])
+    data = theory(jnp.array([0.3, -0.2, 0.4, -0.3]))
+    cov_inv = jnp.linalg.inv(jnp.diag(jnp.array([0.9, 1.4, 0.6])))
+    return dict(
+        bin_data=[data], bin_cov_invs=[cov_inv],
+        prior_mean_fn=lambda _t: mu_p, prior_sigma_fn=lambda _t: sigma_p,
+        log_prior_nl_fn=lambda _t: 0.0, to_physical=lambda x: x,
+        full_params_fn=fpf, include_logdet=True)
+
+
+def test_save_load_roundtrip_bitwise(tmp_path):
+    """save -> load reproduces every tensor bitwise and both scalars, and a
+    surrogate built from the loaded templates matches the original exactly."""
+    from jaxptpolypol.marginal_taylor import (
+        build_taylor_templates, save_taylor_templates, load_taylor_templates,
+        make_marginal_log_posterior_taylor)
+
+    theory, fpf, packed = _toy_full_setup()
+    theta0 = jnp.array([0.3, -0.2])
+    tt = build_taylor_templates(
+        bin_theory_fns=[theory], bin_lin_idx=[(2, 3)], full_params_fn=fpf,
+        theta0=theta0, order2_m0=True)
+
+    path = tmp_path / "tt.npz"
+    meta = dict(n_bins=1, n_k=8, tag="toy")
+    save_taylor_templates(tt, path, meta=meta)
+    loaded = load_taylor_templates(path, expect_meta=meta)
+
+    # Both scalars, bitwise.
+    assert loaded.order2_m0 == tt.order2_m0
+    assert np.array_equal(np.asarray(loaded.theta0), np.asarray(tt.theta0))
+    # Every per-bin tensor, bitwise (atol=0, not allclose).
+    for b in range(len(tt.bin_m00)):
+        for name in ("bin_m00", "bin_J", "bin_H", "bin_M0", "bin_dM"):
+            lo = getattr(loaded, name)[b]
+            og = getattr(tt, name)[b]
+            assert np.array_equal(np.asarray(lo), np.asarray(og)), name
+
+    # The loaded meta is carried in build_diagnostics.
+    assert loaded.build_diagnostics["meta"] == meta
+
+    # Surrogate from the loaded templates == surrogate from the original.
+    common = _toy_surrogate_common(theory, fpf)
+    sur_orig = make_marginal_log_posterior_taylor(tt, **common)
+    sur_load = make_marginal_log_posterior_taylor(loaded, **common)
+    for dx in (jnp.zeros(2), jnp.array([0.15, -0.2])):
+        x = theta0 + dx
+        np.testing.assert_allclose(
+            float(sur_load(x)), float(sur_orig(x)), rtol=1e-15)
+
+
+def test_load_meta_mismatch_raises_all_keys(tmp_path):
+    """expect_meta mismatch must name EVERY offending key (value diff + missing),
+    and must NOT name matching keys."""
+    from jaxptpolypol.marginal_taylor import (
+        build_taylor_templates, save_taylor_templates, load_taylor_templates)
+
+    theory, fpf, packed = _toy_full_setup()
+    theta0 = jnp.array([0.3, -0.2])
+    tt = build_taylor_templates(
+        bin_theory_fns=[theory], bin_lin_idx=[(2, 3)], full_params_fn=fpf,
+        theta0=theta0)
+
+    path = tmp_path / "tt.npz"
+    save_taylor_templates(tt, path, meta=dict(n_bins=1, n_k=8))
+    with pytest.raises(ValueError) as exc:
+        load_taylor_templates(path, expect_meta=dict(n_bins=2, n_k=8, num_mu=65))
+    msg = str(exc.value)
+    assert "n_bins" in msg          # value differs (1 vs 2)
+    assert "num_mu" in msg          # present only in expect_meta
+    assert "n_k" not in msg         # matches (8 == 8): must not be listed
+
+
+def test_save_rejects_non_flat_meta(tmp_path):
+    """A nested meta value is not a config identifier -> TypeError at save."""
+    from jaxptpolypol.marginal_taylor import (
+        build_taylor_templates, save_taylor_templates)
+
+    theory, fpf, packed = _toy_full_setup()
+    theta0 = jnp.array([0.3, -0.2])
+    tt = build_taylor_templates(
+        bin_theory_fns=[theory], bin_lin_idx=[(2, 3)], full_params_fn=fpf,
+        theta0=theta0)
+    with pytest.raises(TypeError):
+        save_taylor_templates(tt, tmp_path / "tt.npz", meta=dict(cfg={"nested": 1}))
+
+
+def test_roundtrip_order1_no_H(tmp_path):
+    """order2_m0=False: H entries survive as None through save/load and the
+    loaded surrogate still evaluates."""
+    from jaxptpolypol.marginal_taylor import (
+        build_taylor_templates, save_taylor_templates, load_taylor_templates,
+        make_marginal_log_posterior_taylor)
+
+    theory, fpf, packed = _toy_full_setup()
+    theta0 = jnp.array([0.3, -0.2])
+    tt = build_taylor_templates(
+        bin_theory_fns=[theory], bin_lin_idx=[(2, 3)], full_params_fn=fpf,
+        theta0=theta0, order2_m0=False)
+
+    path = tmp_path / "tt.npz"
+    save_taylor_templates(tt, path, meta=dict(n_bins=1))
+    loaded = load_taylor_templates(path)
+
+    assert loaded.order2_m0 is False
+    assert len(loaded.bin_H) == len(tt.bin_H)
+    for h in loaded.bin_H:
+        assert h is None
+
+    common = _toy_surrogate_common(theory, fpf)
+    sur = make_marginal_log_posterior_taylor(loaded, **common)
+    assert np.isfinite(float(sur(theta0)))
