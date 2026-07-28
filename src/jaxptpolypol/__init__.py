@@ -45,3 +45,7 @@ from .marginal_likelihood import (
     make_marginal_templates,
     split_marginal_indices,
 )
+from .marginal_taylor import (
+    TaylorTemplates,
+    build_taylor_templates,
+)
