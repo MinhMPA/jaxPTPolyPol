@@ -135,7 +135,7 @@ def test_surrogate_equals_perbin_on_representable_toy():
         tt, bin_data=[data], bin_cov_invs=[cov_inv],
         prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
         log_prior_nl_fn=lambda _t: 0.0, to_physical=lambda x: x,
-        include_logdet=True)
+        full_params_fn=fpf, include_logdet=True)
 
     for dx in (jnp.zeros(2), jnp.array([0.15, -0.2]), jnp.array([-0.3, 0.1])):
         x = theta0 + dx
@@ -150,6 +150,12 @@ def test_surrogate_with_extra_term():
     The extra term carries no theta_lin dependence and is evaluated exactly in
     both posteriors, so the surrogate still equals the per-bin form to the
     float64 floor at the centre and at displaced points.
+
+    Contract-binding: ``extra_theory_fn`` receives the FULL packed vector via
+    ``full_params_fn`` in BOTH builders (drop-in symmetry). The extra block here
+    deliberately reads ``p[3]`` -- a non-varied slot that exists only in the
+    full vector (theta_NL is length 2) -- so an implementation that wrongly fed
+    theta_NL to ``extra_theory_fn`` would fail on shape, not pass by luck.
     """
     from jaxptpolypol.marginal_likelihood import make_marginal_log_posterior_perbin
     from jaxptpolypol.marginal_taylor import (
@@ -157,19 +163,21 @@ def test_surrogate_with_extra_term():
 
     theory, fpf, packed = _toy_full_setup()
     theta0 = jnp.array([0.3, -0.2])
-    d = theta0.shape[0]
     mu_p = jnp.array([0.4, -0.3])
     sigma_p = jnp.array([0.7, 1.3])
     data = theory(jnp.array([0.3, -0.2, 0.4, -0.3]))
     cov_inv = jnp.linalg.inv(jnp.diag(jnp.array([0.9, 1.4, 0.6])))
 
     rng = np.random.default_rng(0)
-    A_extra = jnp.asarray(rng.normal(size=(4, d)))
-    # theta_NL occupies the first d full-vector slots, so ``p[:d]`` extracts it
-    # whether ``p`` is the full vector (per-bin form) or theta_NL (surrogate).
+    A_extra = jnp.asarray(rng.normal(size=(4, 3)))
+
     def extra_theory_fn(p):
-        return A_extra @ p[:d]
-    extra_data = A_extra @ theta0 + 0.1        # non-zero residual already at theta0
+        # Full-vector slots [0, 1, 3]: theta_NL plus a slot full_params_fn keeps
+        # at its packed value. theta_NL (length 2) has no slot 3 -> a wrong
+        # argument convention gives an empty p[3:4] and a (4,3)@(2,) shape error.
+        return A_extra @ jnp.concatenate([p[:2], p[3:4]])
+
+    extra_data = extra_theory_fn(fpf(theta0)) + 0.1   # non-zero residual at theta0
     extra_cov_inv = jnp.diag(jnp.array([1.0, 0.5, 2.0, 1.5]))
 
     prior_mean_fn = lambda _t: mu_p
@@ -193,13 +201,13 @@ def test_surrogate_with_extra_term():
         extra_cov_inv=extra_cov_inv,
         prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
         log_prior_nl_fn=lambda _t: 0.0, to_physical=lambda x: x,
-        include_logdet=True)
+        full_params_fn=fpf, include_logdet=True)
 
     for dx in (jnp.zeros(2), jnp.array([0.15, -0.2]), jnp.array([-0.3, 0.1])):
         x = theta0 + dx
         np.testing.assert_allclose(float(sur(x)), float(per(x)), rtol=1e-12)
     # The extra term must actually contribute (otherwise the check above is vacuous).
-    r0 = np.asarray(extra_data - extra_theory_fn(theta0))
+    r0 = np.asarray(extra_data - extra_theory_fn(fpf(theta0)))
     assert abs(float(-0.5 * r0 @ np.asarray(extra_cov_inv) @ r0)) > 1e-6
 
 
@@ -224,7 +232,7 @@ def test_surrogate_prior_guard_fires():
     common = dict(
         bin_data=[data], bin_cov_invs=[cov_inv],
         log_prior_nl_fn=lambda _t: 0.0, to_physical=lambda x: x,
-        include_logdet=True)
+        full_params_fn=fpf, include_logdet=True)
 
     # Correct width (2) works.
     ok = make_marginal_log_posterior_taylor(

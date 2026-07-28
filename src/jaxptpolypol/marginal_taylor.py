@@ -236,6 +236,7 @@ def build_taylor_templates(*, bin_theory_fns, bin_lin_idx, full_params_fn,
 def make_marginal_log_posterior_taylor(tt, *, bin_data, bin_cov_invs,
                                        prior_mean_fn, prior_sigma_fn,
                                        log_prior_nl_fn, to_physical,
+                                       full_params_fn,
                                        extra_theory_fn=None, extra_data=None,
                                        extra_cov_inv=None,
                                        include_logdet: bool = True):
@@ -270,15 +271,20 @@ def make_marginal_log_posterior_taylor(tt, *, bin_data, bin_cov_invs,
         bin-major order, sliced per bin by the contiguous per-bin lin counts.
         A returned width that does not match ``sum_b p_b`` raises ``ValueError``
         naming the offending function (the tiling guard).
-    log_prior_nl_fn, to_physical, include_logdet
+    log_prior_nl_fn, to_physical, full_params_fn, include_logdet
         As in :func:`marginal_likelihood.make_marginal_log_posterior_perbin`.
+        ``full_params_fn`` is used *only* for the exact extra term (the
+        precomputed templates never need it); it restores drop-in contract
+        symmetry with the per-bin builder, so the production BAO closure
+        ``lambda p: bao_theory_fn(p[:n_cosmo_params])`` works verbatim against
+        the FULL packed vector. Without it, slicing theta_NL would silently
+        take 5 cosmology + 4 bias entries.
     extra_theory_fn, extra_data, extra_cov_inv : optional
         A theta_lin-independent block (the BAO likelihood), all-or-none, added
         once as a plain ``-0.5 r^T Cinv r`` *outside* the bin loop and evaluated
-        exactly. Because the surrogate carries no ``full_params_fn``, this block
-        is evaluated at the physical theta_NL vector: ``extra_theory_fn`` here
-        receives ``theta_nl`` (not the full packed vector as in the per-bin
-        form).
+        exactly on the full packed vector:
+        ``resid = extra_data - extra_theory_fn(full_params_fn(theta_nl))`` --
+        the same argument convention as the per-bin form.
 
     Returns
     -------
@@ -331,7 +337,7 @@ def make_marginal_log_posterior_taylor(tt, *, bin_data, bin_cov_invs,
                 bin_data[b], m0, M, bin_cov_invs[b], mu_p[sl], sigma_p[sl],
                 include_logdet=include_logdet)
         if has_extra:
-            resid = extra_data - extra_theory_fn(theta_nl)
+            resid = extra_data - extra_theory_fn(full_params_fn(theta_nl))
             out = out - 0.5 * (resid @ extra_cov_inv @ resid)
         return out
 
