@@ -60,3 +60,37 @@ def test_builder_chunking_invariance():
     for x, y in ((a.bin_J[0], b.bin_J[0]), (a.bin_H[0], b.bin_H[0]),
                  (a.bin_dM[0], b.bin_dM[0])):
         np.testing.assert_allclose(np.asarray(x), np.asarray(y), atol=1e-13)
+
+
+def test_builder_nondivisor_chunk_pasting():
+    """Partial final chunk (chunk does not divide d) must paste identically.
+
+    Production runs d=26 with chunk_J=4 (final chunk of 2); this pins that
+    path with a d=3 toy and chunk 2 vs full-width chunk 3.
+    """
+    from jaxptpolypol.marginal_taylor import build_taylor_templates
+    from jaxptpolypol.sampler import make_full_params_fn
+
+    def theory(p):
+        t0, t1, t2, l0 = p[0], p[1], p[2], p[3]
+        m0 = jnp.array([t0 * t1 + t2**2, t0**2 - 2.0 * t2, t1 * t2])
+        M = jnp.array([[1.0 + t0 + t2], [t1 - t2], [0.5 * t0]])
+        return m0 + M @ jnp.array([l0])
+
+    packed = jnp.array([0.4, -0.1, 0.25, 7.7])
+    fpf = make_full_params_fn(packed, (0, 1, 2))
+    theta0 = jnp.array([0.4, -0.1, 0.25])
+
+    a = build_taylor_templates(bin_theory_fns=[theory], bin_lin_idx=[(3,)],
+                               full_params_fn=fpf, theta0=theta0,
+                               chunk_J=2, chunk_H=2)     # non-divisor of d=3
+    b = build_taylor_templates(bin_theory_fns=[theory], bin_lin_idx=[(3,)],
+                               full_params_fn=fpf, theta0=theta0,
+                               chunk_J=3, chunk_H=3)     # full width
+    for x, y in ((a.bin_J[0], b.bin_J[0]), (a.bin_H[0], b.bin_H[0]),
+                 (a.bin_dM[0], b.bin_dM[0])):
+        np.testing.assert_allclose(np.asarray(x), np.asarray(y), atol=1e-13)
+    # and against hand-computed J for direct (not merely mutual) correctness
+    t0, t1, t2 = 0.4, -0.1, 0.25
+    J = [[t1, t0, 2 * t2], [2 * t0, 0, -2.0], [0, t2, t1]]
+    np.testing.assert_allclose(np.asarray(a.bin_J[0]), J, atol=1e-12)
