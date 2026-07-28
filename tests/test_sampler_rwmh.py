@@ -9,7 +9,7 @@ import jax.random as jr
 import numpy as np
 import pytest
 
-from jaxptpolypol.sampler import run_rwmh, run_rwmh_python
+from jaxptpolypol.sampler import run_damh_python, run_rwmh, run_rwmh_python
 
 
 def test_rwmh_recovers_correlated_gaussian():
@@ -275,3 +275,166 @@ def test_cholesky_transform_roundtrip_and_isotropizes():
     # and to_whitened isotropizes them again
     w = np.asarray(to_w(jnp.asarray(phys[0])))
     assert w.shape == (d,)
+
+
+# ---------------------------------------------------------------------------
+# Delayed-acceptance MH (run_damh_python): exact target, surrogate stage-1
+# ---------------------------------------------------------------------------
+
+
+def test_damh_exact_when_surrogate_equals_exact():
+    """When the surrogate IS the exact posterior, every stage-2 ratio is
+    exactly 1, so stage-2 acceptance is exactly 1.0 and the chain reduces to
+    plain RWMH — it must recover the same correlated Gaussian to the same
+    tolerances as run_rwmh, while sparing exact evals on stage-1 rejections."""
+    # Same 3D target and thresholds as test_rwmh_recovers_correlated_gaussian.
+    corr = 0.6
+    cov_true = jnp.array(
+        [
+            [1.0, corr, corr],
+            [corr, 1.0, corr],
+            [corr, corr, 1.0],
+        ]
+    )
+    precision = jnp.linalg.inv(cov_true)
+
+    # SAME function for both the exact and surrogate posteriors.  Because it is
+    # a single pure (jitted) callable, s(y) == p(y) and s(x) == p(x) bitwise,
+    # so the stage-2 log-ratio (p(y)+s(x)) - (p(x)+s(y)) is *exactly* 0.0 and
+    # log(u) < 0 accepts almost surely: stage-2 acceptance is exactly 1.0.
+    @jax.jit
+    def log_post(x):
+        return -0.5 * x @ precision @ x
+
+    num_samples = 20_000
+    key = jr.PRNGKey(0)
+    samples, diag = run_damh_python(
+        key,
+        log_post,          # log_post_exact
+        log_post,          # log_post_surrogate (identical)
+        jnp.zeros(3),
+        num_samples=num_samples,
+        num_chains=2,
+    )
+
+    assert samples.shape == (2, num_samples, 3)
+
+    # Every promoted proposal is also accepted at stage 2 -> exactly 1.0.
+    stage2 = np.asarray(diag["stage2_acceptance"])
+    assert stage2.shape == (2,)
+    assert np.all(stage2 == 1.0)
+
+    # Discard burn-in and pool chains; match the run_rwmh reference bounds.
+    pooled = samples[:, 5_000:, :].reshape(-1, 3)
+    sample_mean = np.asarray(pooled.mean(axis=0))
+    sample_cov = np.asarray(jnp.cov(pooled.T))
+    cov_np = np.asarray(cov_true)
+
+    assert np.all(np.abs(sample_mean) < 0.15)
+    for i in range(3):
+        assert abs(sample_cov[i, i] - cov_np[i, i]) < 0.25 * cov_np[i, i]
+        for j in range(3):
+            if i != j:
+                assert abs(sample_cov[i, j] - cov_np[i, j]) < 0.15
+
+    # Overall move rate == stage-1 rate here (all promotions accepted).
+    acc = np.asarray(diag["acceptance_rate"])
+    assert acc.shape == (2,)
+    assert np.all(acc > 0.1)
+    assert np.all(acc < 0.6)
+
+    # The whole point: the exact posterior is touched only on stage-1
+    # acceptances (~23% of steps) plus one initial eval, NOT every step.
+    n_exact = np.asarray(diag["n_exact_evals"])
+    assert n_exact.shape == (2,)
+    assert np.all(n_exact < num_samples)
+
+
+def test_damh_targets_exact_not_surrogate():
+    """A deliberately-offset surrogate must not bias the chain: the target is
+    the EXACT posterior N(mu=1, 1), never the surrogate N(0, 1)."""
+    # Exact posterior: standard normal shifted to mean 1.0.
+    @jax.jit
+    def log_exact(x):
+        return -0.5 * jnp.sum((x - 1.0) ** 2)
+
+    # Surrogate: centred at 0.0 -- a full 1-sigma off the exact mean.
+    @jax.jit
+    def log_surrogate(x):
+        return -0.5 * jnp.sum(x ** 2)
+
+    num_samples = 40_000
+    key = jr.PRNGKey(0)
+    samples, diag = run_damh_python(
+        key,
+        log_exact,
+        log_surrogate,
+        jnp.zeros(1),
+        num_samples=num_samples,
+        num_chains=1,
+    )
+
+    chain = np.asarray(samples[:, :, 0].reshape(-1))
+    mean = chain.mean()
+
+    # Recovers the EXACT mean (~1.0), not the surrogate mean (0.0).
+    # Measured per-chain Monte-Carlo SE ~ 0.023 at 40k kept steps
+    # (integrated autocorrelation time ~ 21), so tol 0.05 is ~ 2 sigma;
+    # PRNGKey(0) lands at |mean - 1| ~ 0.025 (a ~2x margin below tol).
+    assert abs(mean - 1.0) < 0.05
+    assert mean > 0.5   # unambiguously NOT the surrogate mean of 0.0
+
+    # An imperfect surrogate rejects some promoted proposals at stage 2.
+    stage2 = np.asarray(diag["stage2_acceptance"])
+    assert stage2.shape == (1,)
+    assert np.all(stage2 < 1.0)
+
+    # And exact evals are still only a fraction of the total steps.
+    n_exact = np.asarray(diag["n_exact_evals"])
+    assert n_exact.shape == (1,)
+    assert np.all(n_exact < num_samples)
+
+
+def test_damh_determinism_and_diagnostics_shape():
+    """Same key -> identical samples; diagnostics keys/shapes; scalar sigma."""
+    @jax.jit
+    def log_exact(x):
+        return -0.5 * jnp.sum((x - 1.0) ** 2)
+
+    @jax.jit
+    def log_surrogate(x):
+        return -0.5 * jnp.sum(x ** 2)
+
+    key = jr.PRNGKey(42)
+    init = jnp.zeros(4)
+
+    samples_a, diag_a = run_damh_python(
+        key, log_exact, log_surrogate, init,
+        num_samples=300, num_chains=3, proposal_sigma=0.8,
+    )
+    samples_b, diag_b = run_damh_python(
+        key, log_exact, log_surrogate, init,
+        num_samples=300, num_chains=3, proposal_sigma=0.8,
+    )
+
+    # Shapes.
+    assert samples_a.shape == (3, 300, 4)
+    for k in ("acceptance_rate", "stage1_acceptance",
+              "stage2_acceptance", "n_exact_evals"):
+        assert diag_a[k].shape == (3,)
+
+    # Diagnostics contract: run_rwmh_python keys PLUS the DAMH-specific ones.
+    assert set(diag_a.keys()) == {
+        "acceptance_rate", "proposal_sigma",
+        "stage1_acceptance", "stage2_acceptance", "n_exact_evals",
+    }
+
+    # Scalar proposal_sigma broadcast to a d-vector.
+    assert diag_a["proposal_sigma"].shape == (4,)
+    assert np.allclose(np.asarray(diag_a["proposal_sigma"]), 0.8)
+
+    # Determinism: identical arrays for the same key.
+    assert np.array_equal(np.asarray(samples_a), np.asarray(samples_b))
+    for k in ("acceptance_rate", "stage1_acceptance",
+              "stage2_acceptance", "n_exact_evals"):
+        assert np.array_equal(np.asarray(diag_a[k]), np.asarray(diag_b[k]))

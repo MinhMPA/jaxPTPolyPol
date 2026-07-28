@@ -26,6 +26,7 @@ __all__ = [
     "run_nuts",
     "run_rwmh",
     "run_rwmh_python",
+    "run_damh_python",
     "samples_to_physical",
 ]
 
@@ -1058,6 +1059,229 @@ def run_rwmh_python(rng_key, log_posterior_fn, initial_position, num_samples,
     return samples, {
         "acceptance_rate": jnp.asarray(acceptance, dtype=jnp.float64),
         "proposal_sigma": sigma_vector,
+    }
+
+
+def run_damh_python(rng_key, log_post_exact, log_post_surrogate,
+                    initial_position, num_samples, num_chains=1,
+                    proposal_sigma=None, thin=1,
+                    progress_fn=None, sample_progress_fn=None):
+    """Run Python-driven delayed-acceptance Metropolis-Hastings (DAMH).
+
+    An **exact-target** sampler that uses a cheap surrogate posterior to
+    screen proposals and evaluates the expensive exact posterior only on
+    the (few) proposals that survive the first stage.  This is the two-stage
+    delayed-acceptance chain of Christen & Fox (2005), "Markov chain Monte
+    Carlo Using an Approximation" (J. Comput. Graph. Statist. 14, 795).
+
+    It is the delayed-acceptance analogue of :func:`run_rwmh_python` and
+    shares all of its conventions (see below).  Like that driver it is
+    **Python-driven**: neither posterior is ever wrapped in ``lax.scan`` /
+    ``fori_loop`` — a measured repo rule, because folding the (already huge)
+    marginal-posterior graph into a monolithic scan body never finishes
+    compiling.  Both ``log_post_exact`` and ``log_post_surrogate`` are
+    expected to be **already jit-compiled** by the caller and are called
+    directly, once at a time.
+
+    Algorithm (one step, symmetric proposal ``q``)
+    ----------------------------------------------
+    Let ``s`` be the surrogate posterior density and ``p`` the exact one
+    (both supplied as *log* densities).  From the current state ``x``:
+
+    1. Propose ``y ~ N(x, sigma^2 I)``.
+    2. **Stage 1** (surrogate screen): accept ``y`` for promotion with
+       probability ``min(1, s(y) / s(x))``.  On rejection the step ends
+       immediately with **zero** exact evaluations — the chain stays at ``x``.
+    3. **Stage 2** (exact correction): only for promoted proposals, evaluate
+       the exact posterior once and accept the move with probability
+       ``min(1, [p(y) s(x)] / [p(x) s(y)])``.  On rejection the chain stays
+       at ``x`` (but the exact eval has already been spent).
+
+    The stage-2 ratio ``[p(y) s(x)] / [p(x) s(y)]`` is the algebraic
+    simplification of Christen & Fox's second-stage ratio
+    ``[alpha1(y,x) p(y)] / [alpha1(x,y) p(x)]`` with the stage-1 acceptance
+    ``alpha1(x,y) = min(1, s(y)/s(x))`` and a symmetric proposal; the two
+    forms are identical in both the ``s(y) >= s(x)`` and ``s(y) < s(x)``
+    branches.
+
+    Exactness and economics
+    -----------------------
+    The composed transition satisfies detailed balance with respect to the
+    **exact** posterior ``p``, so the chain targets ``p`` *exactly* for any
+    strictly positive surrogate.  The surrogate quality affects only
+    **efficiency** (how often a promoted proposal is also accepted at stage
+    2, i.e. the mixing rate), **never correctness**: a perfect surrogate
+    (``s == p``) makes every stage-2 ratio exactly 1 and recovers plain
+    RWMH on ``p``; a poor surrogate merely wastes exact evaluations and slows
+    mixing but still samples ``p``.
+
+    The exact posterior is evaluated **once per stage-1 acceptance and never
+    on a stage-1 rejection**, so the number of exact evaluations is
+    ``~ (stage-1 acceptance rate) x (total steps)`` (plus one for the initial
+    state) — at optimal random-walk scaling the stage-1 rate is ~20-25%, so
+    the expensive posterior is touched only a fraction of the time compared
+    with plain RWMH, which evaluates it every step.  Both ``p(x)`` and
+    ``s(x)`` for the current state are cached and reused across steps.
+
+    Shared conventions (identical to :func:`run_rwmh_python`)
+    --------------------------------------------------------
+    ``proposal_sigma`` resolution (``None`` -> ``(2.38 / sqrt(d)) * ones(d)``;
+    scalar -> broadcast; vector -> as-is); the ``0.1 * sigma * normal``
+    per-chain start jitter drawn with **JAX** random from a distinct key per
+    chain (via :func:`jax.random.split`); sequential chains; a per-chain
+    **NumPy** RNG seeded deterministically from the JAX key (so
+    ``same rng_key => identical samples``) that draws both the proposal noise
+    and the (up to two) Metropolis uniforms per step; ``thin`` semantics
+    (``num_samples`` is the number of KEPT draws, total steps per chain is
+    ``num_samples * thin``); and the ``(num_chains, num_samples, d)`` float64
+    return.
+
+    Parameters
+    ----------
+    rng_key : PRNGKey
+        JAX random key.
+    log_post_exact : callable
+        Exact (expensive) log-posterior ``x -> scalar``.  Expected to be
+        **already jit-compiled**; evaluated only at stage-1-accepted
+        proposals.
+    log_post_surrogate : callable
+        Surrogate (cheap) log-posterior ``x -> scalar``.  Expected to be
+        **already jit-compiled**; evaluated at every proposal.
+    initial_position : ndarray, shape (d,)
+        Starting point (typically ``jnp.zeros(d)`` in whitened space).
+    num_samples : int
+        Number of KEPT draws per chain.
+    num_chains : int
+        Number of independent chains (run sequentially).
+    proposal_sigma : None, scalar, or ndarray, optional
+        Per-parameter proposal standard deviations.
+
+        - *None* (default): ``(2.38 / sqrt(d)) * ones(d)``.
+        - scalar: broadcast to a length-*d* vector.
+        - vector, shape ``(d,)``: used as-is.
+    thin : int
+        Keep every ``thin``-th step.  Total steps per chain is
+        ``num_samples * thin``.  Default 1 (keep every step).
+    progress_fn : callable, optional
+        ``progress_fn(chain_number, num_chains)`` called after each chain
+        completes (1-based ``chain_number``).
+    sample_progress_fn : callable, optional
+        Per-draw callback with signature
+        ``sample_progress_fn(chain_number, num_chains, done, total)``, where
+        ``chain_number`` is 1-based and ``done`` counts KEPT draws for that
+        chain (``total`` == ``num_samples``).
+
+    Returns
+    -------
+    samples : ndarray, shape (num_chains, num_samples, d)
+        Samples from the **exact** posterior, in the sampled parameter space.
+    diagnostics : dict
+        ``acceptance_rate``     (num_chains,) overall move rate =
+        stage-2 accepts / total steps (fraction of steps the chain moved).
+        ``proposal_sigma``      (d,) the proposal vector used.
+        ``stage1_acceptance``   (num_chains,) stage-1 accepts / total steps.
+        ``stage2_acceptance``   (num_chains,) stage-2 accepts / stage-1
+        accepts (== 1.0 exactly when the surrogate equals the exact
+        posterior; 0.0 if no proposal was ever promoted).
+        ``n_exact_evals``       (num_chains,) total exact-posterior
+        evaluations = 1 (initial state) + stage-1 accepts.
+    """
+    initial_position = jnp.asarray(initial_position, dtype=jnp.float64)
+    d = initial_position.shape[0]
+
+    thin = int(thin)
+    if thin < 1:
+        raise ValueError(f"thin must be a positive integer, got {thin!r}")
+
+    # Resolve the proposal standard-deviation vector (identical to
+    # run_rwmh_python).
+    if proposal_sigma is None:
+        sigma_vector = (2.38 / jnp.sqrt(d)) * jnp.ones(d, dtype=jnp.float64)
+    else:
+        proposal_sigma = jnp.asarray(proposal_sigma, dtype=jnp.float64)
+        if proposal_sigma.ndim == 0:
+            sigma_vector = proposal_sigma * jnp.ones(d, dtype=jnp.float64)
+        else:
+            sigma_vector = proposal_sigma
+    sigma_vector = jnp.asarray(sigma_vector, dtype=jnp.float64)
+    sigma_np = np.asarray(sigma_vector, dtype=np.float64)
+
+    chain_keys = jax.random.split(rng_key, num_chains)
+    total_steps = num_samples * thin
+
+    all_positions = []
+    acceptance = []
+    stage1_acceptance = []
+    stage2_acceptance = []
+    n_exact_evals = []
+
+    for c in range(num_chains):
+        init_key, sample_key = jax.random.split(chain_keys[c])
+
+        # Per-chain start jitter (JAX random, identical to run_rwmh_python).
+        jitter = 0.1 * sigma_vector * jax.random.normal(init_key, (d,))
+        cur = np.asarray(initial_position + jitter, dtype=np.float64)
+
+        # Per-chain NumPy RNG, seeded deterministically from the JAX key so
+        # that ``same rng_key => identical samples``.
+        seed = int(jax.random.randint(sample_key, (), 0, 2 ** 31 - 1))
+        rng = np.random.default_rng(seed)
+
+        # Cache the exact AND surrogate log-density at the current state.
+        s_cur = float(log_post_surrogate(jnp.asarray(cur)))
+        p_cur = float(log_post_exact(jnp.asarray(cur)))
+        n_exact = 1  # the initial exact evaluation
+
+        kept = np.empty((num_samples, d), dtype=np.float64)
+        kept_count = 0
+        n_stage1 = 0
+        n_stage2 = 0
+
+        for step in range(total_steps):
+            prop = cur + sigma_np * rng.normal(size=d)
+            s_prop = float(log_post_surrogate(jnp.asarray(prop)))
+
+            # STAGE 1: screen the proposal with the cheap surrogate.
+            if np.log(rng.random()) < (s_prop - s_cur):
+                n_stage1 += 1
+                # STAGE 2: correct with a single exact evaluation.
+                p_prop = float(log_post_exact(jnp.asarray(prop)))
+                n_exact += 1
+                stage2_log_ratio = (p_prop + s_cur) - (p_cur + s_prop)
+                if np.log(rng.random()) < stage2_log_ratio:
+                    cur, s_cur, p_cur = prop, s_prop, p_prop
+                    n_stage2 += 1
+
+            if (step + 1) % thin == 0:
+                kept[kept_count] = cur
+                kept_count += 1
+                if sample_progress_fn is not None:
+                    sample_progress_fn(
+                        c + 1, num_chains, kept_count, num_samples
+                    )
+
+        all_positions.append(kept)
+        acceptance.append(
+            n_stage2 / total_steps if total_steps > 0 else 0.0
+        )
+        stage1_acceptance.append(
+            n_stage1 / total_steps if total_steps > 0 else 0.0
+        )
+        stage2_acceptance.append(
+            n_stage2 / n_stage1 if n_stage1 > 0 else 0.0
+        )
+        n_exact_evals.append(n_exact)
+
+        if progress_fn is not None:
+            progress_fn(c + 1, num_chains)
+
+    samples = jnp.asarray(np.stack(all_positions), dtype=jnp.float64)
+    return samples, {
+        "acceptance_rate": jnp.asarray(acceptance, dtype=jnp.float64),
+        "proposal_sigma": sigma_vector,
+        "stage1_acceptance": jnp.asarray(stage1_acceptance, dtype=jnp.float64),
+        "stage2_acceptance": jnp.asarray(stage2_acceptance, dtype=jnp.float64),
+        "n_exact_evals": jnp.asarray(n_exact_evals, dtype=jnp.int64),
     }
 
 
