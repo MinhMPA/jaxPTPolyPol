@@ -69,9 +69,17 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 
-from .marginal_likelihood import make_marginal_templates
+from .marginal_likelihood import (
+    _contiguous_slices,
+    gaussian_marginal_loglike,
+    make_marginal_templates,
+)
 
-__all__ = ["TaylorTemplates", "build_taylor_templates"]
+__all__ = [
+    "TaylorTemplates",
+    "build_taylor_templates",
+    "make_marginal_log_posterior_taylor",
+]
 
 
 @dataclass(frozen=True)
@@ -223,3 +231,108 @@ def build_taylor_templates(*, bin_theory_fns, bin_lin_idx, full_params_fn,
         order2_m0=order2_m0,
         build_diagnostics=build_diagnostics,
     )
+
+
+def make_marginal_log_posterior_taylor(tt, *, bin_data, bin_cov_invs,
+                                       prior_mean_fn, prior_sigma_fn,
+                                       log_prior_nl_fn, to_physical,
+                                       extra_theory_fn=None, extra_data=None,
+                                       extra_cov_inv=None,
+                                       include_logdet: bool = True):
+    """Surrogate marginal log-posterior built from precomputed Taylor templates.
+
+    Drop-in replacement for :func:`marginal_likelihood.
+    make_marginal_log_posterior_perbin` that consumes a :class:`TaylorTemplates`
+    instead of re-tracing the theory: each per-bin ``(m0, M)`` is reconstructed
+    from the carried tensors as dense contractions (~ms) rather than a
+    ``jax.linearize`` pass through ps_1loop_jax (~s). On models the expansion
+    represents exactly (``m0`` quadratic, ``M`` linear in theta_NL) the surrogate
+    reproduces the exact per-bin posterior to the float64 floor; otherwise it is
+    the F5-b Taylor approximation (see the module docstring).
+
+    Per bin ``b`` with ``delta = to_physical(x) - tt.theta0``:
+
+        m0 = m00 + J @ delta  (+ 1/2 delta^T H delta   if ``tt.order2_m0``)
+        M  = M0 + dM @ delta
+
+    then :func:`gaussian_marginal_loglike` on ``(bin_data[b], m0, M,
+    bin_cov_invs[b], mu_p[sl_b], sigma_p[sl_b])`` summed over bins.
+
+    Parameters
+    ----------
+    tt : TaylorTemplates
+        Output of :func:`build_taylor_templates`. The per-bin linear-parameter
+        counts (``tt.bin_M0[b].shape[1]``) fix the prior-vector tiling.
+    bin_data, bin_cov_invs : sequences
+        Per-bin data vectors ``(n_b,)`` and inverse covariances ``(n_b, n_b)``.
+    prior_mean_fn, prior_sigma_fn : callables
+        Same contract as the per-bin builder: ``fn(theta_nl) -> (n_lin,)`` in
+        bin-major order, sliced per bin by the contiguous per-bin lin counts.
+        A returned width that does not match ``sum_b p_b`` raises ``ValueError``
+        naming the offending function (the tiling guard).
+    log_prior_nl_fn, to_physical, include_logdet
+        As in :func:`marginal_likelihood.make_marginal_log_posterior_perbin`.
+    extra_theory_fn, extra_data, extra_cov_inv : optional
+        A theta_lin-independent block (the BAO likelihood), all-or-none, added
+        once as a plain ``-0.5 r^T Cinv r`` *outside* the bin loop and evaluated
+        exactly. Because the surrogate carries no ``full_params_fn``, this block
+        is evaluated at the physical theta_NL vector: ``extra_theory_fn`` here
+        receives ``theta_nl`` (not the full packed vector as in the per-bin
+        form).
+
+    Returns
+    -------
+    jitted ``log_posterior(x)`` in whitened theta_NL space.
+    """
+    n_bins = len(tt.bin_M0)
+    if not (len(bin_data) == len(bin_cov_invs) == n_bins):
+        raise ValueError(
+            "bin_data and bin_cov_invs must match the number of bins in tt; "
+            f"got {len(bin_data)}, {len(bin_cov_invs)} vs {n_bins} bins")
+    has_extra = extra_theory_fn is not None
+    if has_extra and (extra_data is None or extra_cov_inv is None):
+        raise ValueError(
+            "extra_theory_fn requires both extra_data and extra_cov_inv")
+
+    bin_data = tuple(jnp.asarray(d, dtype=jnp.float64) for d in bin_data)
+    bin_cov_invs = tuple(jnp.asarray(c, dtype=jnp.float64) for c in bin_cov_invs)
+    theta0 = tt.theta0
+    order2 = tt.order2_m0
+    bin_counts = [int(M0.shape[1]) for M0 in tt.bin_M0]
+    prior_slices = _contiguous_slices(bin_counts)
+    n_lin_total = prior_slices[-1].stop
+    if has_extra:
+        extra_data = jnp.asarray(extra_data, dtype=jnp.float64)
+        extra_cov_inv = jnp.asarray(extra_cov_inv, dtype=jnp.float64)
+
+    @jax.jit
+    def log_posterior(x):
+        theta_nl = to_physical(x)
+        delta = theta_nl - theta0
+        mu_p = prior_mean_fn(theta_nl)
+        sigma_p = prior_sigma_fn(theta_nl)
+        # The per-bin prior slices must tile the prior vectors exactly (same guard
+        # as the per-bin builder): a mis-sized prior width would otherwise give a
+        # silently wrong posterior. Shapes are static at trace time -- free.
+        for name, vec in (("prior_mean_fn", mu_p), ("prior_sigma_fn", sigma_p)):
+            if vec.shape != (n_lin_total,):
+                raise ValueError(
+                    f"{name} returned shape {vec.shape}, but tt implies "
+                    f"{(n_lin_total,)} linear parameters ({bin_counts} per bin)")
+        out = log_prior_nl_fn(theta_nl)
+        for b in range(n_bins):
+            m0 = tt.bin_m00[b] + tt.bin_J[b] @ delta
+            if order2:
+                m0 = m0 + 0.5 * jnp.einsum(
+                    "ijk,j,k->i", tt.bin_H[b], delta, delta)
+            M = tt.bin_M0[b] + jnp.einsum("ijk,k->ij", tt.bin_dM[b], delta)
+            sl = prior_slices[b]
+            out = out + gaussian_marginal_loglike(
+                bin_data[b], m0, M, bin_cov_invs[b], mu_p[sl], sigma_p[sl],
+                include_logdet=include_logdet)
+        if has_extra:
+            resid = extra_data - extra_theory_fn(theta_nl)
+            out = out - 0.5 * (resid @ extra_cov_inv @ resid)
+        return out
+
+    return log_posterior

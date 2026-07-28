@@ -2,6 +2,7 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 
 def _toy_full_setup():
@@ -94,3 +95,153 @@ def test_builder_nondivisor_chunk_pasting():
     t0, t1, t2 = 0.4, -0.1, 0.25
     J = [[t1, t0, 2 * t2], [2 * t0, 0, -2.0], [0, t2, t1]]
     np.testing.assert_allclose(np.asarray(a.bin_J[0]), J, atol=1e-12)
+
+
+def test_surrogate_equals_perbin_on_representable_toy():
+    """The surrogate reproduces the exact per-bin posterior on the toy.
+
+    The toy's ``m0`` is quadratic and ``M`` is linear in theta_NL, so the carried
+    Taylor expansion (H for m0, dM for M) reconstructs ``(m0, M)`` *exactly* at
+    every theta_NL. The surrogate marginal log-posterior must therefore equal the
+    exact :func:`make_marginal_log_posterior_perbin` value -- at the expansion
+    centre AND at displaced points -- to the float64 floor, logdet included.
+    """
+    from jaxptpolypol.marginal_likelihood import make_marginal_log_posterior_perbin
+    from jaxptpolypol.marginal_taylor import (
+        build_taylor_templates, make_marginal_log_posterior_taylor)
+
+    theory, fpf, packed = _toy_full_setup()
+    theta0 = jnp.array([0.3, -0.2])
+    mu_p = jnp.array([0.4, -0.3])
+    sigma_p = jnp.array([0.7, 1.3])
+    # Data = theory at theta_NL = theta0 with the lin values the priors center on.
+    data = theory(jnp.array([0.3, -0.2, 0.4, -0.3]))
+    cov_inv = jnp.linalg.inv(jnp.diag(jnp.array([0.9, 1.4, 0.6])))  # non-identity
+
+    prior_mean_fn = lambda _t: mu_p
+    prior_sigma_fn = lambda _t: sigma_p
+
+    per = make_marginal_log_posterior_perbin(
+        bin_theory_fns=[theory], bin_data=[data], bin_cov_invs=[cov_inv],
+        bin_lin_idx=[(2, 3)],
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda _t: 0.0, to_physical=lambda x: x,
+        full_params_fn=fpf, include_logdet=True)
+
+    tt = build_taylor_templates(
+        bin_theory_fns=[theory], bin_lin_idx=[(2, 3)], full_params_fn=fpf,
+        theta0=theta0, order2_m0=True)
+    sur = make_marginal_log_posterior_taylor(
+        tt, bin_data=[data], bin_cov_invs=[cov_inv],
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda _t: 0.0, to_physical=lambda x: x,
+        include_logdet=True)
+
+    for dx in (jnp.zeros(2), jnp.array([0.15, -0.2]), jnp.array([-0.3, 0.1])):
+        x = theta0 + dx
+        np.testing.assert_allclose(float(sur(x)), float(per(x)), rtol=1e-12)
+    # The displaced points must actually move the posterior (else the check is vacuous).
+    assert abs(float(sur(theta0 + jnp.array([0.15, -0.2]))) - float(sur(theta0))) > 1e-6
+
+
+def test_surrogate_with_extra_term():
+    """A cosmology-only linear extra (BAO stand-in) block, added once and exactly.
+
+    The extra term carries no theta_lin dependence and is evaluated exactly in
+    both posteriors, so the surrogate still equals the per-bin form to the
+    float64 floor at the centre and at displaced points.
+    """
+    from jaxptpolypol.marginal_likelihood import make_marginal_log_posterior_perbin
+    from jaxptpolypol.marginal_taylor import (
+        build_taylor_templates, make_marginal_log_posterior_taylor)
+
+    theory, fpf, packed = _toy_full_setup()
+    theta0 = jnp.array([0.3, -0.2])
+    d = theta0.shape[0]
+    mu_p = jnp.array([0.4, -0.3])
+    sigma_p = jnp.array([0.7, 1.3])
+    data = theory(jnp.array([0.3, -0.2, 0.4, -0.3]))
+    cov_inv = jnp.linalg.inv(jnp.diag(jnp.array([0.9, 1.4, 0.6])))
+
+    rng = np.random.default_rng(0)
+    A_extra = jnp.asarray(rng.normal(size=(4, d)))
+    # theta_NL occupies the first d full-vector slots, so ``p[:d]`` extracts it
+    # whether ``p`` is the full vector (per-bin form) or theta_NL (surrogate).
+    def extra_theory_fn(p):
+        return A_extra @ p[:d]
+    extra_data = A_extra @ theta0 + 0.1        # non-zero residual already at theta0
+    extra_cov_inv = jnp.diag(jnp.array([1.0, 0.5, 2.0, 1.5]))
+
+    prior_mean_fn = lambda _t: mu_p
+    prior_sigma_fn = lambda _t: sigma_p
+
+    per = make_marginal_log_posterior_perbin(
+        bin_theory_fns=[theory], bin_data=[data], bin_cov_invs=[cov_inv],
+        bin_lin_idx=[(2, 3)],
+        extra_theory_fn=extra_theory_fn, extra_data=extra_data,
+        extra_cov_inv=extra_cov_inv,
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda _t: 0.0, to_physical=lambda x: x,
+        full_params_fn=fpf, include_logdet=True)
+
+    tt = build_taylor_templates(
+        bin_theory_fns=[theory], bin_lin_idx=[(2, 3)], full_params_fn=fpf,
+        theta0=theta0, order2_m0=True)
+    sur = make_marginal_log_posterior_taylor(
+        tt, bin_data=[data], bin_cov_invs=[cov_inv],
+        extra_theory_fn=extra_theory_fn, extra_data=extra_data,
+        extra_cov_inv=extra_cov_inv,
+        prior_mean_fn=prior_mean_fn, prior_sigma_fn=prior_sigma_fn,
+        log_prior_nl_fn=lambda _t: 0.0, to_physical=lambda x: x,
+        include_logdet=True)
+
+    for dx in (jnp.zeros(2), jnp.array([0.15, -0.2]), jnp.array([-0.3, 0.1])):
+        x = theta0 + dx
+        np.testing.assert_allclose(float(sur(x)), float(per(x)), rtol=1e-12)
+    # The extra term must actually contribute (otherwise the check above is vacuous).
+    r0 = np.asarray(extra_data - extra_theory_fn(theta0))
+    assert abs(float(-0.5 * r0 @ np.asarray(extra_cov_inv) @ r0)) > 1e-6
+
+
+def test_surrogate_prior_guard_fires():
+    """The prior-slice tiling guard must fire, naming the offending function.
+
+    Mirrors tests/test_marginal_perbin.py::
+    test_perbin_rejects_prior_vector_that_does_not_tile_bins: a prior function
+    returning the wrong number of entries is a mis-configured split, and must
+    raise rather than silently mis-slice.
+    """
+    from jaxptpolypol.marginal_taylor import (
+        build_taylor_templates, make_marginal_log_posterior_taylor)
+
+    theory, fpf, packed = _toy_full_setup()
+    theta0 = jnp.array([0.3, -0.2])
+    data = theory(jnp.array([0.3, -0.2, 0.4, -0.3]))
+    cov_inv = jnp.linalg.inv(jnp.diag(jnp.array([0.9, 1.4, 0.6])))
+    tt = build_taylor_templates(
+        bin_theory_fns=[theory], bin_lin_idx=[(2, 3)], full_params_fn=fpf,
+        theta0=theta0, order2_m0=True)                 # 2 lin params -> n_lin = 2
+    common = dict(
+        bin_data=[data], bin_cov_invs=[cov_inv],
+        log_prior_nl_fn=lambda _t: 0.0, to_physical=lambda x: x,
+        include_logdet=True)
+
+    # Correct width (2) works.
+    ok = make_marginal_log_posterior_taylor(
+        tt, prior_mean_fn=lambda _t: jnp.zeros(2),
+        prior_sigma_fn=lambda _t: jnp.ones(2), **common)
+    assert np.isfinite(float(ok(theta0)))
+
+    # Wrong mean width (3) must raise, naming the offending function.
+    bad = make_marginal_log_posterior_taylor(
+        tt, prior_mean_fn=lambda _t: jnp.zeros(3),
+        prior_sigma_fn=lambda _t: jnp.ones(2), **common)
+    with pytest.raises(ValueError, match="prior_mean_fn"):
+        bad(theta0)
+
+    # Wrong sigma width (3) must raise, naming the offending function.
+    bad_sigma = make_marginal_log_posterior_taylor(
+        tt, prior_mean_fn=lambda _t: jnp.zeros(2),
+        prior_sigma_fn=lambda _t: jnp.ones(3), **common)
+    with pytest.raises(ValueError, match="prior_sigma_fn"):
+        bad_sigma(theta0)
