@@ -1,4 +1,8 @@
-"""Tier-2 validation: the Taylor surrogate against the REAL P+B per-bin pipeline.
+"""
+NOTE: this suite costs ~20 min (template build + exact-eval compiles dominate).
+The radius metric is GEOMETRIC (r x 5% of each fiducial), NOT posterior-sigma:
+r=1 reaches ~2.4 sigma_F along tight cosmology dims; chains live near r~0.4.
+Tier-2 validation: the Taylor surrogate against the REAL P+B per-bin pipeline.
 
 Tasks 1-3 validated ``build_taylor_templates`` /
 ``make_marginal_log_posterior_taylor`` on analytic toys where the expansion is
@@ -138,7 +142,7 @@ def test_gradient_matches_at_center(taylor_pipeline):
 @needs_emulator
 def test_radius_error_profile(taylor_pipeline):
     """Calibration record: |surrogate - exact| along 6 fixed random directions,
-    at whitened radii r in {1, 2, 3} (each param moves r x 5% of its fiducial
+    at 5%-of-fiducial (fractional) radii r in {1, 2, 3} (each param moves r x 5% of its fiducial
     magnitude). The median error must increase monotonically in r and be < 0.5
     log-units at r=1. The full profile is printed for the Task-7 IS/DA layer.
     """
