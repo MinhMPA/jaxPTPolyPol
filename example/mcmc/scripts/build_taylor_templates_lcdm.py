@@ -25,14 +25,16 @@ ideally under ``caffeinate`` so the laptop cannot sleep mid-build::
     caffeinate -i python3 scripts/build_taylor_templates_lcdm.py
 
 An RSS watchdog thread (samples ``ps -o rss=`` every 2 s) hard-aborts the
-process if resident memory exceeds the per-stage limit: 105 GB for the Fisher
-stage, 70 GB for the template stage (the machine has 128 GB). The Fisher limit
-was measured, not guessed: a first run with the planned 90 GB limit aborted at
-91.5 GB during the fresh-process jacfwd compile transient (the 77.6 GB
-reference number was taken inside an already-warm notebook kernel). If the
-template stage trips only because of residual heap left by the Fisher stage,
-re-run in a fresh process with ``--templates-only`` (stage 2 is skipped; the
-whitening npz from the earlier run is kept).
+process if resident memory exceeds the per-stage limit: 105 GB for both the
+Fisher stage and the template stage (the machine has 128 GB). Both limits are
+measured, not guessed: the planned 90 GB Fisher limit aborted at 91.5 GB
+during the fresh-process jacfwd compile transient (the 77.6 GB reference was
+taken inside an already-warm notebook kernel), and the planned 70 GB template
+limit aborted at 83.8 GB (chunk_H=2) and again at 80.8 GB (chunk_H=1) during
+the first second-order H chunk -- the H build's inner full-d Jacobian pass
+sets an ~82 GB floor that no chunk knob reduces. To redo only the template
+stage (e.g. after a template-stage abort), re-run in a fresh process with
+``--templates-only``; the whitening npz from the earlier run is kept.
 """
 
 from functools import partial
@@ -187,12 +189,14 @@ COSMO_PRIORS = {'ombh2': 0.00055, 'ns': 0.042}  # BBN + ns10 (arXiv:2411.12022)
 
 # Taylor-build knobs + the config stamp for the stale-template guard.
 # META values MUST be native str/int/float/bool.
-# chunk_H=1, not the planned 2: at chunk_H=2 the FIRST H (jacfwd-of-jacfwd)
-# chunk spiked 10 -> 83.8 GB and tripped the 70 GB watchdog (measured
-# 2026-07-29; the 18-25 GB prediction did not hold on production grids).
-# Halving the outer tangent width is the knob the builder documents for
-# exactly this; J chunks (4-wide, first order) stayed under 34 GB.
-CHUNK_J, CHUNK_H = 4, 1
+# MEASURED (2026-07-29): the first H (jacfwd-of-jacfwd) chunk spiked to
+# 83.8 GB at chunk_H=2 and 80.8 GB at chunk_H=1 -- the planned 18-25 GB
+# prediction did not hold, and lowering chunk_H does NOT reduce the peak,
+# because the builder's inner m0 Jacobian is a full-d (26-tangent) pass
+# regardless of chunk_H. chunk_H=2 is kept (halves the outer-chunk count,
+# ~2x faster H build, same memory); the stage watchdog is set to 105 GB
+# below instead of the planned 70 GB. J chunks (4-wide) stayed under 34 GB.
+CHUNK_J, CHUNK_H = 4, 2
 META = {
     "n_bins": 7, "n_k": 37, "n_tri": 264, "n_gl": 16,
     "num_mu": 65, "num_phi": 65,
@@ -460,7 +464,9 @@ if not TEMPLATES_ONLY:
 # Stage 3: Taylor-template build (chunked forward-over-forward).
 # ---------------------------------------------------------------------------
 
-set_stage("taylor-template build", 70.0)
+# 105 GB, not the planned 70: the H build's inner full-d jacfwd peaks at
+# ~81-84 GB regardless of chunk_H (both measured; see the CHUNK_H comment).
+set_stage("taylor-template build", 105.0)
 t_stage3 = time.perf_counter()
 
 full_params_fn = make_full_params_fn(packed_params, split.nl_idx)
