@@ -204,10 +204,27 @@ def build_taylor_templates(*, bin_theory_fns, bin_lin_idx, full_params_fn,
         bin_dM.append(dM)
 
         # Second order (m0 only): jacfwd-of-jacfwd, full-d inner x chunk_H outer.
+        #
+        # CRITICAL memory detail: differentiate an m0-ONLY closure (the theory
+        # evaluated at theta_lin = 0), NOT f_b(th)[0]. f_b runs the full
+        # _linear_templates machinery -- jax.linearize + a p_b-lane vmap that
+        # builds M -- and under nested jacfwd tracing there is no jit boundary
+        # to dead-code-eliminate the discarded M, so its p_b tangent lanes
+        # multiply BOTH jacfwd widths (measured at production: the inner
+        # full-d pass floored at ~82 GB regardless of chunk_H). The m0-only
+        # closure reproduces m0 bit-identically (m0 == theory at theta_lin=0,
+        # the same .at[].set(0.0) op _linear_templates uses) with plain
+        # d-wide tangents: ~9 GB inner at production. The toy tests pin H
+        # exactly, proving behavior identity.
         if order2_m0:
-            def m0_jac(theta, _f=f_b):
+            lin_idx_arr_b = jnp.array(bin_lin_idx[b])
+
+            def m0_only(theta_nl, _fn=bin_theory_fns[b], _idx=lin_idx_arr_b):
+                return _fn(full_params_fn(theta_nl).at[_idx].set(0.0))
+
+            def m0_jac(theta, _f=m0_only):
                 d = theta.shape[0]
-                return _chunked_jacfwd(lambda th: _f(th)[0], theta, d)  # (n_b, d)
+                return _chunked_jacfwd(_f, theta, d)              # (n_b, d)
 
             H = _chunked_jacfwd(m0_jac, theta0, chunk_H)          # (n_b, d, d)
             H_T = jnp.transpose(H, (0, 2, 1))
