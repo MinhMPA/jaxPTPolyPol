@@ -780,10 +780,24 @@ def run_rwmh(rng_key, log_posterior_fn, initial_position, num_samples,
              progress_fn=None, sample_progress_fn=None):
     """Run gradient-free random-walk Metropolis-Hastings (RWMH).
 
+    .. warning::
+
+       **For expensive posteriors (e.g. marginal-likelihood), use**
+       :func:`run_rwmh_python` **instead.**  This function wraps each MH
+       transition in ``jax.lax.scan``, which folds the *entire* posterior
+       graph into a single XLA program.  On the production 7-bin marginal
+       posterior that program never finished compiling — measured **zero
+       draws in 60 min at 94 GB** (see
+       ``docs/design/perbin-compile-measurements.md``, "The notebook
+       blocker, resolved").  :func:`run_rwmh_python` drives the identical
+       chain from a plain Python loop over an already-compiled
+       ``log_posterior_fn`` and yields draws incrementally.  ``run_rwmh``
+       remains fine for **cheap toy posteriors** whose graph compiles
+       quickly inside a scan body.
+
     A forward-evaluation-only alternative to :func:`run_nuts` for
     posteriors whose gradient is intractable or explodes the XLA
-    compilation graph (e.g. marginal-likelihood posteriors, whose
-    gradient is a second-order graph).  This mirrors the Metropolis-
+    compilation graph.  This mirrors the Metropolis-
     Hastings usage in Chudaykin, Ivanov & Philcox (arXiv:2511.20757,
     §II), which drives inference with forward posterior calls only.
 

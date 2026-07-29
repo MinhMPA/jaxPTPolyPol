@@ -4,6 +4,17 @@ The 2-bin small config below is copied verbatim from
 ``tests/test_marginal_perbin.py`` (its third+ consumer). pytest resolves this
 conftest ``cfg`` fixture for new test files while the older suites keep their own
 shadowing local copies, so moving it here changes no existing behaviour.
+
+Heavy-test gating
+-----------------
+A bare ``pytest tests/`` used to stack the fixtures of the memory-heavy modules
+(``test_marginal_pipeline``, ``test_marginal_perbin``, ``test_theory_perbin``,
+``test_marginal_taylor_pipeline``) to ~85 GB in a single process — the per-bin
+theory/marginal graphs and their compiled evals are not freed between modules,
+so their peaks accumulate. To keep the default run safe, every item in those
+modules is marked ``heavy`` and **deselected unless ``--run-heavy`` is passed**.
+Run the heavy files individually (``pytest tests/test_theory_perbin.py``) or opt
+in deliberately with ``pytest tests/ --run-heavy``.
 """
 import os
 import pathlib
@@ -13,6 +24,49 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import numpy as np
 import pytest
+
+# Modules whose fixtures/compiled evals accumulate to ~85 GB when collected in
+# one process. Gated behind --run-heavy (see the module docstring).
+HEAVY_MODULES = {
+    "test_marginal_pipeline",
+    "test_marginal_perbin",
+    "test_theory_perbin",
+    "test_marginal_taylor_pipeline",
+}
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-heavy",
+        action="store_true",
+        default=False,
+        help="Run the memory-heavy marginal/theory per-bin suites "
+             "(~85 GB stacked); otherwise they are deselected.",
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "heavy: memory-heavy suite; deselected unless --run-heavy is passed.",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    run_heavy = config.getoption("--run-heavy")
+    heavy_marker = pytest.mark.heavy
+    selected, deselected = [], []
+    for item in items:
+        if item.path.stem in HEAVY_MODULES:
+            item.add_marker(heavy_marker)
+            if not run_heavy:
+                deselected.append(item)
+                continue
+        selected.append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+
 
 EMULATOR_PATH = os.environ.get(
     "PFS_EMULATOR_PATH",

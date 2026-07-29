@@ -256,8 +256,18 @@ Validation (`scripts/taylor_surrogate_validation.py`, `cache/taylor_validation.j
 | 3 importance sampling | **PASS** | ess_frac **0.973** (389/400), max_weight 0.0044, reweighted mean shifts ≤ 0.094 σ_F, center diff −1.4e-14 |
 
 **Headline: 0.65 ms/step in-chain (200 000 draws in 131 s), acceptance 0.243 —
-~11 400× faster than the 7.4 s/step exact chain.** Single fresh eval 17.7 ms.
-The options-review 10³–10⁴× projection is verified mid-band.
+~11 400× faster than the 7.4 s/step exact chain.** The options-review 10³–10⁴×
+projection is verified mid-band.
+
+The 0.65 ms and the "17.7 ms single fresh eval" are **both real** and measure
+different things. 17.7 ms is a **cold-dispatch single call** — one isolated
+`fn(x)` whose wall time is dominated by Python-side dispatch and the device
+synchronization on `block_until_ready`, amortized over exactly one evaluation.
+0.65 ms is the **steady-state per-step cost** averaged over the 200 000 in-loop
+calls, where dispatch overlaps across iterations and the fixed per-call costs are
+amortized away, leaving the microsecond-scale dense-algebra body. The in-chain
+number is the relevant one for chain throughput; the single-eval number is what
+you see timing one call in isolation.
 
 **Gate-2 interpretation:** the reference exact chain has ESS 30–83, so its own
 MC error is ~0.11–0.18 σ_F on means, ~8–13 % on widths, ~0.11–0.18 on
@@ -306,12 +316,26 @@ whitening -> physical transform. Mean pull is (mean - fiducial)/sigma_F:
 **Physics question — is the open logA/ns Tier-2 mean residual (means ~0.3-0.45
 σ_F below the fiducial) genuine posterior skew?** A left-skewed (skew < 0)
 marginal pulls the *mean* below the *mode*, so a negative mean pull is the
-expected signature of skew when the mode sits near the fiducial. Verdict
-(surrogate NUTS AND RWMH both showing skew < 0 at > 3 bootstrap-σ):
-logA **NOT skew-explained**,
-ns **NOT skew-explained**. The
-surrogate chains (clean, ESS ~ 10^3-10^4) and the noisy exact Tier-2 chain
-(ESS 30-83) are compared directly in the table; agreement of the surrogate NUTS
-and RWMH skews cross-checks that the sampling — not the sampler — sets the shape.
-Written by `scripts/taylor_surrogate_nuts.py`; numbers in
-`cache/taylor_nuts_result.json`.
+expected signature of skew when the mode sits near the fiducial. Verdict:
+logA **NOT skew-explained**, ns **NOT skew-explained** — **both samplers find
+|skew| ≲ 0.05 for logA and ns** (near-symmetric marginals), far too small to
+source the 0.3-0.66 σ_F mean pulls. The mean-residual-is-not-skew conclusion is
+unchanged.
+
+The NUTS and RWMH *skews* do **not** agree in sign (ns: NUTS −0.0405 vs RWMH
++0.0338; logA: NUTS +0.0318 vs RWMH −0.0026), but this is not a real tension.
+The RWMH ns skew reads +0.0338 ± 0.0059 — an apparent ~5.7σ "detection" of
+positive skew — but that ±0.0059 is an **iid bootstrap over ~180k
+autocorrelated draws** and therefore badly understates the true error; the
+significance, and the apparent NUTS/RWMH sign discrepancy, are spurious. Once
+autocorrelation is folded into the error bars both estimates are consistent with
+|skew| ≲ 0.05 and with each other.
+
+The genuine cross-check that the residual is posterior *geometry* and not a
+sampler artifact is the tight agreement of the mean **pulls** — not the skews —
+between the two independent samplers (logA −0.652 vs −0.659; ns −0.279 vs
+−0.295), with the noisy exact Tier-2 chain (ESS 30-83) in the same direction
+(−0.448, −0.316). The residual is a shift of the whole posterior *center*
+(consistent with the logdet / prior-volume marginalization tilt, Gate-1 cosine
+≈ 1), not a mean-vs-mode skew. Written by `scripts/taylor_surrogate_nuts.py`;
+numbers in `cache/taylor_nuts_result.json`.
