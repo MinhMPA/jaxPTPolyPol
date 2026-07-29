@@ -235,3 +235,36 @@ Honest throughput: 10.5 steps/min => ~159 h for 100k single-chain steps. Since
 the 5.06 s evaluation is dominated by *template construction* (77 bin-JVP units
 rebuilt every call) and not by the marginalization algebra, the correctly aimed
 speedup is to stop rebuilding templates per call.
+
+---
+
+## Taylor surrogate (production, added 2026-07-29)
+
+Build (`scripts/build_taylor_templates_lcdm.py`): Fisher/whitening stage 183.6 s
+at 87.6-91.5 GB peak (whitening matches the tier-2 chain's to 1.1e-16);
+template stage 2446 s (41 min) at **36.2 GB peak** after the m0-only-closure fix
+(`5fa3c49` — the original H path floored at ~82 GB regardless of `chunk_H`
+because the discarded `linearize`/M lanes multiplied both jacfwd widths).
+H symmetry errors ~1e-16 across all 7 bins; templates 20.0 MB.
+
+Validation (`scripts/taylor_surrogate_validation.py`, `cache/taylor_validation.json`):
+
+| gate | result | numbers |
+|---|---|---|
+| 1 tilt | **PASS** | cosine 1 − 1e-12, norm ratio 1.0000001 vs the recorded exact `g_w` |
+| 2 chain-vs-chain | REVIEW | widths [1.035, 0.964, **0.896**, 1.053, 1.031], corr diff 0.105; mean diffs ≤ 0.21 σ_F |
+| 3 importance sampling | **PASS** | ess_frac **0.973** (389/400), max_weight 0.0044, reweighted mean shifts ≤ 0.094 σ_F, center diff −1.4e-14 |
+
+**Headline: 0.65 ms/step in-chain (200 000 draws in 131 s), acceptance 0.243 —
+~11 400× faster than the 7.4 s/step exact chain.** Single fresh eval 17.7 ms.
+The options-review 10³–10⁴× projection is verified mid-band.
+
+**Gate-2 interpretation:** the reference exact chain has ESS 30–83, so its own
+MC error is ~0.11–0.18 σ_F on means, ~8–13 % on widths, ~0.11–0.18 on
+correlations — i.e. the gate-2 tolerance band (±10 % widths, 0.1 corr) is
+TIGHTER than the reference's noise. Every gate-2 deviation is ≤ ~1.5× the
+reference noise (logA's 0.896 is 0.9σ of the reference width error), while
+gates 1 and 3 — which do not depend on the noisy reference — pass decisively.
+The REVIEW flags the reference chain's precision, not a surrogate defect. A
+definitive width check needs a higher-ESS exact-target reference (extended
+exact chain, or a DA-MH chain: ~20 k steps ≈ 4.8 k exact evals ≈ 7 h).
