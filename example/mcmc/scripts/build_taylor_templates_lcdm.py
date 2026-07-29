@@ -185,9 +185,14 @@ BAO_DATA_DIR = "../../ext_data/bao_data/desi_bao_dr2"   # chdir-sensitive: run f
 
 COSMO_PRIORS = {'ombh2': 0.00055, 'ns': 0.042}  # BBN + ns10 (arXiv:2411.12022)
 
-# Taylor-build knobs (task 7 dispatch) + the config stamp for the
-# stale-template guard. META values MUST be native str/int/float/bool.
-CHUNK_J, CHUNK_H = 4, 2
+# Taylor-build knobs + the config stamp for the stale-template guard.
+# META values MUST be native str/int/float/bool.
+# chunk_H=1, not the planned 2: at chunk_H=2 the FIRST H (jacfwd-of-jacfwd)
+# chunk spiked 10 -> 83.8 GB and tripped the 70 GB watchdog (measured
+# 2026-07-29; the 18-25 GB prediction did not hold on production grids).
+# Halving the outer tangent width is the knob the builder documents for
+# exactly this; J chunks (4-wide, first order) stayed under 34 GB.
+CHUNK_J, CHUNK_H = 4, 1
 META = {
     "n_bins": 7, "n_k": 37, "n_tri": 264, "n_gl": 16,
     "num_mu": 65, "num_phi": 65,
