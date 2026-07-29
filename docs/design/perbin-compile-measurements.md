@@ -268,3 +268,50 @@ gates 1 and 3 — which do not depend on the noisy reference — pass decisively
 The REVIEW flags the reference chain's precision, not a surrogate defect. A
 definitive width check needs a higher-ESS exact-target reference (extended
 exact chain, or a DA-MH chain: ~20 k steps ≈ 4.8 k exact evals ≈ 7 h).
+
+
+## NUTS on the surrogate (added 2026-07-29)
+
+Gradient-based sampling on the Taylor surrogate (Task 8). The surrogate body is
+microsecond-scale dense algebra (linear templates + logdet tilt + Gaussian
+priors, ~0.65 ms/step in-chain), so the scan-trap rule recorded above (a ~50k-op
+body inside a `while` defeats XLA) does **not** apply: the body is tiny and
+homogeneous, so blackjax `window_adaptation` + chunked-scan production
+(`sampler.run_nuts`) is the right tool. Sampler used: **nuts_window_adaptation**
+(fallback to fixed-L HMC triggers only on R-hat > 1.01 or divergences >
+2%).
+
+4 chains x 5000 draws (1000 adaptation), whitened space.
+Mean acceptance 0.897, mean integration steps 7.9,
+divergence fraction 0.0000, wall 680s.
+
+| cosmo param | R-hat | ESS |
+|---|---|---|
+| ombh2 | 0.99990 | 27199 |
+| omch2 | 1.00017 | 24832 |
+| logA | 1.00012 | 26318 |
+| ns | 0.99996 | 22357 |
+| h | 0.99996 | 26888 |
+
+**Skew of the logA / ns marginals** (scipy.stats.skew ± 1000-resample
+bootstrap error), all three chains mapped through the SAME Cholesky
+whitening -> physical transform. Mean pull is (mean - fiducial)/sigma_F:
+
+| chain | n | skew(logA) | skew(ns) | pull(logA) [σ_F] | pull(ns) [σ_F] |
+|---|---|---|---|---|---|
+| nuts_window_adaptation | 20000 | +0.0318 ± 0.0167 | -0.0405 ± 0.0167 | -0.652 | -0.279 |
+| surrogate_rwmh | 180000 | -0.0026 ± 0.0059 | +0.0338 ± 0.0059 | -0.659 | -0.295 |
+| exact_tier2 | 5000 | +0.2188 ± 0.0294 | +0.0350 ± 0.0302 | -0.448 | -0.316 |
+
+**Physics question — is the open logA/ns Tier-2 mean residual (means ~0.3-0.45
+σ_F below the fiducial) genuine posterior skew?** A left-skewed (skew < 0)
+marginal pulls the *mean* below the *mode*, so a negative mean pull is the
+expected signature of skew when the mode sits near the fiducial. Verdict
+(surrogate NUTS AND RWMH both showing skew < 0 at > 3 bootstrap-σ):
+logA **NOT skew-explained**,
+ns **NOT skew-explained**. The
+surrogate chains (clean, ESS ~ 10^3-10^4) and the noisy exact Tier-2 chain
+(ESS 30-83) are compared directly in the table; agreement of the surrogate NUTS
+and RWMH skews cross-checks that the sampling — not the sampler — sets the shape.
+Written by `scripts/taylor_surrogate_nuts.py`; numbers in
+`cache/taylor_nuts_result.json`.

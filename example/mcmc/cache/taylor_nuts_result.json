@@ -1,0 +1,90 @@
+{
+ "config": {
+  "meta": {
+   "n_bins": 7,
+   "n_k": 37,
+   "n_tri": 264,
+   "n_gl": 16,
+   "num_mu": 65,
+   "num_phi": 65,
+   "k_min": 0.02,
+   "k_max": 0.2,
+   "k_bk_max": 0.08,
+   "k_nl_rsd": 0.45,
+   "order2_m0": true
+  },
+  "nuts_seed": 20260731,
+  "n_warmup": 1000,
+  "n_samples": 5000,
+  "n_chains": 4,
+  "rhat_limit": 1.01,
+  "divergence_frac_limit": 0.02,
+  "cosmo_names": [
+   "ombh2",
+   "omch2",
+   "logA",
+   "ns",
+   "h"
+  ]
+ },
+ "surrogate_lp0": -57.933001461964395,
+ "nuts": {
+  "wall_s": 679.7,
+  "mean_acceptance": 0.8965898097718529,
+  "mean_integration_steps": 7.9146,
+  "divergence_frac": 0.0,
+  "rhat": [
+   0.9999021373989696,
+   1.0001671670722196,
+   1.000116615593266,
+   0.9999631698671788,
+   0.9999643900404028
+  ],
+  "ess": [
+   27199.198750530057,
+   24832.054798333596,
+   26317.55480265473,
+   22356.506667758815,
+   26888.137390481807
+  ],
+  "rhat_max": 1.0001671670722196,
+  "adaptation_ok": true
+ },
+ "sampler_used": "nuts_window_adaptation",
+ "skew": {
+  "nuts_window_adaptation": {
+   "n": 20000,
+   "skew_logA": 0.03182465427440451,
+   "skew_logA_err": 0.016659310891923136,
+   "skew_ns": -0.04046670622199256,
+   "skew_ns_err": 0.016745248595255027,
+   "meanpull_logA_sigmaF": -0.6519296793435383,
+   "meanpull_ns_sigmaF": -0.27916220887177934
+  },
+  "surrogate_rwmh": {
+   "n": 180000,
+   "skew_logA": -0.0026434615945738465,
+   "skew_logA_err": 0.005941621367218383,
+   "skew_ns": 0.033752713024008285,
+   "skew_ns_err": 0.005862071897353882,
+   "meanpull_logA_sigmaF": -0.659041452192589,
+   "meanpull_ns_sigmaF": -0.29464355541508935
+  },
+  "exact_tier2": {
+   "n": 5000,
+   "skew_logA": 0.21884820493942528,
+   "skew_logA_err": 0.02941867695989185,
+   "skew_ns": 0.035028116303151675,
+   "skew_ns_err": 0.030178750092787178,
+   "meanpull_logA_sigmaF": -0.4475633713604843,
+   "meanpull_ns_sigmaF": -0.3158323871362316
+  }
+ },
+ "rwmh_rerun": false,
+ "skew_verdict": {
+  "logA_residual_skew_explained": false,
+  "ns_residual_skew_explained": false,
+  "criterion": "surrogate NUTS AND RWMH both show skew<0 at >3 bootstrap-sigma"
+ },
+ "total_wall_s": 687.0
+}
