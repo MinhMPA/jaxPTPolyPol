@@ -25,11 +25,14 @@ ideally under ``caffeinate`` so the laptop cannot sleep mid-build::
     caffeinate -i python3 scripts/build_taylor_templates_lcdm.py
 
 An RSS watchdog thread (samples ``ps -o rss=`` every 2 s) hard-aborts the
-process if resident memory exceeds the per-stage limit: 90 GB for the Fisher
-stage, 70 GB for the template stage (the machine has 128 GB). If the template
-stage trips only because of residual heap left by the Fisher stage, re-run in
-a fresh process with ``--templates-only`` (stage 2 is skipped; the whitening
-npz from the earlier run is kept).
+process if resident memory exceeds the per-stage limit: 105 GB for the Fisher
+stage, 70 GB for the template stage (the machine has 128 GB). The Fisher limit
+was measured, not guessed: a first run with the planned 90 GB limit aborted at
+91.5 GB during the fresh-process jacfwd compile transient (the 77.6 GB
+reference number was taken inside an already-warm notebook kernel). If the
+template stage trips only because of residual heap left by the Fisher stage,
+re-run in a fresh process with ``--templates-only`` (stage 2 is skipped; the
+whitening npz from the earlier run is kept).
 """
 
 from functools import partial
@@ -311,7 +314,10 @@ t_stage1 = time.perf_counter() - t_stage1
 
 t_stage2 = 0.0
 if not TEMPLATES_ONLY:
-    set_stage("data vector + Fisher + whitening", 90.0)
+    # 105 GB, not the planned 90: the fresh-process jacfwd compile transient
+    # measured 91.5 GB (watchdog abort on the first attempt); the warm-kernel
+    # notebook reference was 77.6 GB. 105 GB leaves ~23 GB headroom on 128 GB.
+    set_stage("data vector + Fisher + whitening", 105.0)
     t_stage2 = time.perf_counter()
 
     joint_fn = make_joint_pk_bk_fn(**joint_theory_kwargs)
