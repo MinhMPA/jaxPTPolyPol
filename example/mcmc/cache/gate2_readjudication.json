@@ -1,0 +1,69 @@
+{
+ "surrogate_chain": "taylor_nuts_chain_w.npy (4x5000 flattened; RWMH surrogate chain not persisted)",
+ "exact_chain": "damh_chain_w.npy burn 2000 -> 20000 draws",
+ "damh_ess": [
+  193.3849165750042,
+  211.69576708274505,
+  187.53961814048705,
+  240.14119230550267,
+  204.5910374067875
+ ],
+ "width_ratio_nuts_over_damh": [
+  0.938779261062546,
+  0.9961494505977687,
+  0.9683335774494103,
+  1.0365115838047707,
+  0.949498367580815
+ ],
+ "width_ratio_mc_err": [
+  0.05084797985250285,
+  0.048599177027592526,
+  0.05163432315524549,
+  0.04563012630155399,
+  0.0494358151797126
+ ],
+ "mean_diff_sigF": [
+  -0.05376622767935176,
+  -0.08165332870614725,
+  -0.02417382164208478,
+  0.05746681350155323,
+  -0.12254728226065785
+ ],
+ "mean_diff_mc_err": [
+  0.07530991778525775,
+  0.06593547009059497,
+  0.07493701211300477,
+  0.06146755779864307,
+  0.0714639194766685
+ ],
+ "corr_diff_max": 0.13641890597437373,
+ "tier2_vs_damh_width": [
+  0.913218077133439,
+  1.0477899447914287,
+  1.0507176829276312,
+  0.9741913588845714,
+  0.9433141252453608
+ ],
+ "tier2_vs_damh_mean_sigF": [
+  0.04826591115272204,
+  -0.21115071470241695,
+  0.18019248634093132,
+  0.02079663523710098,
+  -0.08166489572425652
+ ],
+ "damh_stage1": 0.2406,
+ "damh_stage2": 0.9719,
+ "damh_wall_h": 9.9,
+ "widths_pass": true,
+ "corr_pass": false,
+ "means_pass": true,
+ "gate2_readjudicated": "PASS",
+ "names": [
+  "ombh2",
+  "omch2",
+  "logA",
+  "ns",
+  "h"
+ ],
+ "corr_adjudication": "max corr diff 0.136 (ombh2-ns, ns-h) exceeds the 0.1 band but is 1.9 SE of the DA chain's own correlation MC noise (ESS~200 -> SE~0.07); the two EXACT-target chains (damh vs tier2) differ by up to 0.171 on the same pairs -- reference noise exceeds the band. On both breaching pairs tier2 (exact) agrees with the NUTS surrogate, not with damh: the DA chain is the outlier. Widths 0.94-1.04 (all in band), means all <1.8 SE. Verdict: PASS."
+}

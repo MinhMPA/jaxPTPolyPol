@@ -339,3 +339,36 @@ between the two independent samplers (logA −0.652 vs −0.659; ns −0.279 vs
 (consistent with the logdet / prior-volume marginalization tilt, Gate-1 cosine
 ≈ 1), not a mean-vs-mode skew. Written by `scripts/taylor_surrogate_nuts.py`;
 numbers in `cache/taylor_nuts_result.json`.
+
+## Gate-2 re-adjudication vs the DA-MH exact-target chain (2026-07-30)
+
+The definitive width check promised above. `scripts/damh_exact_chain_lcdm.py`
+ran 22 000 delayed-acceptance steps overnight (surrogate stage-1 proposal
+filter, exact-target stage-2 correction — Christen & Fox 2005, target exactly
+the marginal posterior): stage-1 acceptance 0.2406, **stage-2 acceptance
+0.9719** (the surrogate is that good a proposal), 5 295 exact evaluations,
+9.90 h wall, 30 GB peak. Burn 2 000 → 20 000 exact-target draws, cosmology
+ESS **188–240** (vs tier2's 30–83) → reference MC error ~5 % on widths,
+~0.07 σ_F on means. Surrogate side: the NUTS chain (4×5000 flattened, ESS
+~25k, same surrogate target as the RWMH chain, which was not persisted).
+
+| param | width ratio (sur/exact) | mean diff (σ_F) |
+|-------|------------------------|-----------------|
+| ombh2 | 0.939 ± 0.051 | −0.054 ± 0.075 |
+| omch2 | 0.996 ± 0.049 | −0.082 ± 0.066 |
+| logA  | 0.968 ± 0.052 | −0.024 ± 0.075 |
+| ns    | 1.037 ± 0.046 | +0.057 ± 0.061 |
+| h     | 0.949 ± 0.049 | −0.123 ± 0.071 |
+
+**Widths all inside [0.9, 1.1]** (the tier2-round outlier 0.896 for logA is
+now 0.968 — it was reference noise, as diagnosed). **Means all consistent
+with zero** (≤ 1.8 SE). Correlations: max diff 0.136 (ombh2–ns and ns–h)
+nominally breaches the 0.1 band, but (a) it is 1.9 SE of the DA chain's own
+correlation noise (ESS ~200 → SE ≈ 0.07/pair), (b) the two **exact-target**
+chains (DA vs tier2) differ by up to 0.171 on the same pairs — the
+exact-vs-exact scatter exceeds the band — and (c) on both breaching pairs
+tier2 agrees with the surrogate (+0.073/+0.096) and not with DA
+(−0.022/−0.075): the DA chain is the outlier on these near-zero
+correlations. **Gate 2: PASS.** Numbers in
+`example/mcmc/cache/gate2_readjudication.json`; summary stamped into
+`cache/taylor_validation.json` (`gate2_final`).
