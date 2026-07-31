@@ -54,3 +54,8 @@ from .marginal_taylor import (
     reweighted_moments,
     save_taylor_templates,
 )
+from .desi_priors import (
+    DesiPriorSpec,
+    SpecValidationError,
+    load_desi_prior_spec,
+)
