@@ -372,3 +372,27 @@ tier2 agrees with the surrogate (+0.073/+0.096) and not with DA
 correlations. **Gate 2: PASS.** Numbers in
 `example/mcmc/cache/gate2_readjudication.json`; summary stamped into
 `cache/taylor_validation.json` (`gate2_final`).
+
+## Stream-B Task E: cross-branch equivalence of the two ctr-prior representations (2026-07-31)
+
+The two exact representations of the per-multipole ctr prior — `stream-b-rotation`
+(templates rotated by L(f), diagonal Table-I prior verbatim) and `stream-b-sigmap`
+(templates untouched, correlated per-bin Σ_p = L·diag(σ²)·Lᵀ through the extended
+full-covariance marginal likelihood) — were compared on 64 shared-seed whitened
+points (PRNGKey 20260731, scale 0.5, include_logdet=True):
+
+**max |Δ log_post| = 4.235e-12 (mean 1.6e-12, max relative 2.4e-14) — PASS**
+(criterion 1e-5; the marginal likelihood incl. the logdet term is exactly invariant
+under a linear θ_lin reparameterization, and both implementations hit the float64
+floor). The two 200k production chains produced gate statistics agreeing to
+4e-14 (width ratios) / 6e-13 (mean pulls) — same posterior, same trajectory.
+
+Both gates: G1 widths PASS (0.986–1.014), G2 correlations PASS (max diff 0.021),
+G3 means REVIEW with a corroborated physics diagnosis: the AD-tilted center
+fid + F⁻¹∇logpost(fid) lands on the MODE (Newton-converged to ≤0.06 σ_F), while
+the chain MEAN sits ~1.1 σ_F lower along logA — persisting with
+include_logdet=False — i.e. genuine posterior asymmetry from the θ_NL-dependent
+A_AP·A_amp prior widths (the documented σ8/logA-low volume pull of EFT
+full-shape priors), not a wiring or representation error. Evidence:
+`example/mcmc/cache/{task_e_equivalence,branch_equiv_rotation,branch_equiv_sigmap,desi_prior_validation_rotation,desi_prior_validation_sigmap}.json`
+plus the noLD corroboration JSON on the rotation branch.

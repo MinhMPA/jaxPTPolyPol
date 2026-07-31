@@ -1,0 +1,16 @@
+{
+ "points_seed": 20260731,
+ "n": 64,
+ "scale": 0.5,
+ "max_abs_dlogpost": 4.234834705130197e-12,
+ "mean_abs_dlogpost": 1.6142642778049776e-12,
+ "max_rel": 2.4250896637374444e-14,
+ "criterion": "max<1e-5",
+ "verdict": "PASS",
+ "gate_width_ratio_max_diff": 4.218847493575595e-14,
+ "gate_mean_pull_max_diff": 6.092903959142859e-13,
+ "gate_verdicts": {
+  "rotation": "REVIEW",
+  "sigmap": "REVIEW"
+ }
+}
