@@ -192,7 +192,7 @@ Gaussian with mean `L(f)·(0,30,0) = (−(f/3)·30, 30, 0)` and covariance `30²
 mnu=0.06`; `f(z)` from `ps_1loop_jax.background.growth_rate`, source = the growth ODE at
 that fiducial):
 
-| bin | z | f(z) | our_c0 mean | our_c0 width | our_c2 mean | our_c2 width | our_c4 width | corr(c2,c4) | corr(c0,c4) | corr(c0,c2) |
+| bin | z | f(z) | our_c0 mean | our_c0 width | our_c2 mean | our_c2 width | our_c4 width | corr(c2,c4) | corr(c0,c2) | corr(c0,c4) |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 0 | 0.7 | 0.8155 | −8.15 | 31.14 | 30 | 36.60 | 30 | −0.573 | −0.246 | +0.055 |
 | 1 | 0.9 | 0.8579 | −8.58 | 31.26 | 30 | 37.24 | 30 | −0.592 | −0.257 | +0.061 |
@@ -418,7 +418,9 @@ marginalized:
      paper_variable: "c2*A_AP*A_amp", factor: 1.0, offset: 0.0,
      mean: 30.0, sigma: 30.0, rescale: "A_AP*A_amp",
      factor_formula: null, mean_formula: null}
-  # EXACT (c4 = c_tilde4, no basis mixing).
+  # Marginal EXACT (c4 = c_tilde4, no basis mixing of c4 itself); its
+  # correlation with our c0/c2 (induced by their c4-mixing) is dropped in
+  # this diagonal encoding, same as the other two PROVISIONAL rows.
   pk.ctr.c4:
     {paper_mean: 0.0, paper_sigma: 30.0, paper_units: "(Mpc/h)^2",
      paper_variable: "c4*A_AP*A_amp", factor: 1.0, offset: 0.0,
