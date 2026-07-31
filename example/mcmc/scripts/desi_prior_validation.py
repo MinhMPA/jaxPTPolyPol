@@ -71,32 +71,26 @@ jax.config.update("jax_compilation_cache_dir",
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 10)
 import jax.numpy as jnp
 
-from ps_1loop_jax import background as bg
-
-from jaxptpolypol import (
-    load_taylor_templates,
-    make_marginal_log_posterior_taylor,
-    split_marginal_indices,
+from stream_common import (
+    DEFAULT_BAO_DATA_DIR, META, MNU_FIXED, PFS_EMULATOR, SHARED_KEYS,
+    build_bao, build_fiducial_surveys, build_kgrid_and_blocks, build_split,
+    knl_bins, load_templates_and_whitening, n_zbins, z_bins,
 )
-from jaxptpolypol.bao import load_desi_dr2, make_bao_theory_fn
+
+from jaxptpolypol import make_marginal_log_posterior_taylor
 from jaxptpolypol.desi_priors import (
     load_desi_prior_spec,
     make_desi_prior_fns,
     make_lcdm_rescaling_fns,
 )
 from jaxptpolypol.model import CosmoEmulator
-from jaxptpolypol.params import (
-    CosmoParams,
-    FullShapeSurveyParams,
-    pack_joint_params,
-)
+from jaxptpolypol.params import pack_joint_params
 from jaxptpolypol.sampler import (
     make_cholesky_transform,
     make_full_params_fn,
     make_gaussian_log_prior,
     run_rwmh_python,
 )
-from jaxptpolypol.theory import build_bispectrum_triangles_from_k_grid
 
 # ---------------------------------------------------------------------------
 # RSS watchdog (same protocol as taylor_surrogate_validation.py; surrogate-only
@@ -134,32 +128,16 @@ def _watchdog():
 threading.Thread(target=_watchdog, daemon=True).start()
 
 # ---------------------------------------------------------------------------
-# Configuration -- copied VERBATIM from taylor_surrogate_validation.py (which in
-# turn mirrors mcmc_joint_PFS_BAO_BBN_ns_LCDM.ipynb). Must stay in lockstep with
+# Configuration. Shared production constants (fiducial cosmology, redshift bins,
+# k-grid, quadrature, PFS_EMULATOR, SHARED_KEYS, META) are imported from
+# stream_common (single source of truth, in lockstep with
 # build_taylor_templates_lcdm.py; the META guard + packed/split/bao tripwires
-# enforce it.
+# enforce it). Only the DESI-specific pieces stay local.
 # ---------------------------------------------------------------------------
 
-FIDUCIAL = {
-    'ombh2': 0.02242, 'omch2': 0.11933, 'logA': 3.047,
-    'ns': 0.9665, 'h': 0.6766, 'tau': 0.0561,
-}
-MNU_FIXED = 0.06  # eV, not varied in LCDM
+N_COSMO_NL = len(SHARED_KEYS)                          # == 5, gate cosmo block
 
-z_bins   = (0.7,  0.9,  1.1,  1.3,  1.5,  1.8,  2.2)
-knl_bins = (0.52, 0.65, 0.82, 1.02, 1.29, 1.82, 2.88)
-n_bar    = (3.06e-4, 9.61e-4, 9.75e-4, 6.54e-4, 3.40e-4, 2.02e-4, 3.51e-4)
-n_zbins  = len(z_bins)
-
-K_PK_MIN, K_PK_MAX, N_K = 0.02, 0.20, 37
-K_BK_MIN, K_BK_MAX = 0.02, 0.08
-K_NL_RSD = 0.45
-NUM_MU = NUM_PHI = 65
-N_GL = 16
-BACKGROUND_MODE = 'direct'
-
-PFS_EMULATOR = '/Users/nguyenmn/cosmopower-jax-for-pfs/cosmology/jense2024/jense_2023_camb_lcdm/networks/jense_2023_camb_lcdm_Pk_lin.npz'
-BAO_DATA_DIR = "../../ext_data/bao_data/desi_bao_dr2"   # chdir-sensitive
+BAO_DATA_DIR = DEFAULT_BAO_DATA_DIR                    # chdir-sensitive
 # In a worktree ext_data is only partially checked out (like cache); the DR2
 # BAO data lives in master's ext_data. Fall back to it if absent locally.
 if not pathlib.Path(BAO_DATA_DIR).is_dir():
@@ -167,16 +145,6 @@ if not pathlib.Path(BAO_DATA_DIR).is_dir():
         "/Users/nguyenmn/jaxPTPolyPol/ext_data/bao_data/desi_bao_dr2")
     if _master_bao.is_dir():
         BAO_DATA_DIR = str(_master_bao)
-
-SHARED_KEYS = ('ombh2', 'omch2', 'logA', 'ns', 'h')   # sampled cosmo (nl block)
-N_COSMO_NL = len(SHARED_KEYS)                          # == 5, gate cosmo block
-
-META = {
-    "n_bins": 7, "n_k": 37, "n_tri": 264, "n_gl": 16,
-    "num_mu": 65, "num_phi": 65,
-    "k_min": 0.02, "k_max": 0.20, "k_bk_max": 0.08, "k_nl_rsd": 0.45,
-    "order2_m0": True,
-}
 
 # Gate parameters (task 7sigma dispatch).
 RNG_SEED_CHAIN = 20260731
@@ -245,12 +213,7 @@ save_results()
 _watch["stage"] = "load + assemble surrogate"
 print(f"===== {_watch['stage']} (smoke={SMOKE}) =====", flush=True)
 
-tt = load_taylor_templates(TEMPLATES_PATH, expect_meta=META)
-wz = np.load(WHITENING_PATH)
-stored_meta = json.loads(str(wz["meta"].item()))
-if stored_meta != META:
-    sys.exit(f"Whitening npz meta mismatch:\nstored   {stored_meta}\n"
-             f"expected {META}")
+tt, wz = load_templates_and_whitening(TEMPLATES_PATH, WHITENING_PATH)
 
 packed_params = jnp.asarray(wz["packed_params"])
 pb_fid = jnp.asarray(wz["pb_fid"])
@@ -276,39 +239,7 @@ nl_prior_entries = [
 # and the exact per-bin posterior are NOT needed here.
 pklin_emulator = CosmoEmulator(probe='custom_log', emulator_path=PFS_EMULATOR)
 
-cosmo_dict = {
-    'ombh2': FIDUCIAL['ombh2'], 'omch2': FIDUCIAL['omch2'],
-    'logA':  FIDUCIAL['logA'],  'ns':    FIDUCIAL['ns'], 'h': FIDUCIAL['h'],
-    'z': 0.7, 'A_b': 3.13, 'eta_b': 0.603, 'logT_AGN': 7.8,
-}
-cosmo = CosmoParams(cosmo_dict)
-
-
-def b1z(z): return 0.9 + 0.4 * z
-def b2z(z): return -0.704 - 0.208 * z + 0.183 * z**2 - 0.00771 * z**3
-def bG2z(z): return -(2. / 7.) * (b1z(z) - 1.)
-def bGamma3z(z): return (23. / 42.) * (b1z(z) - 1.)
-def Dplusz(z):
-    return float(bg.growth_factor(
-        cosmo_dict['ombh2'], cosmo_dict['omch2'], cosmo_dict['h'], z,
-        mnu=MNU_FIXED))
-def c0z(z): return 25. * Dplusz(z)**2
-def c2z(z): return 25. * Dplusz(z)**2
-def c4z(z): return Dplusz(z)**2
-
-
-surveys = []
-for z, knl, nd in zip(z_bins, knl_bins, n_bar):
-    surveys.append(FullShapeSurveyParams(
-        shared={'bias': {'b1': b1z(z), 'b2': b2z(z), 'bG2': bG2z(z),
-                         'bGamma3': bGamma3z(z)},
-                'stoch': {'P_shot': 1.0}, 'k_nl': knl, 'ndens': nd},
-        pk={'ctr': {'c0': c0z(z), 'c2': c2z(z), 'c4': c4z(z),
-                    'cfog': knl**(-4)},
-            'stoch': {'a0': 0., 'a2': 0.}},
-        bk={'ctr': {'c1': 0.0}, 'stoch': {'B_shot': 1.0, 'A_shot': 1.0}},
-    ))
-joint_survey_keys = surveys[0].joint_param_keys
+cosmo_dict, cosmo, surveys, joint_survey_keys = build_fiducial_surveys()
 n_cosmo_params = sum(cosmo.param_sizes)
 
 # Config-drift tripwire: the rebuilt fiducial packed vector must equal the one
@@ -318,32 +249,17 @@ if not np.array_equal(np.asarray(packed_rebuilt), np.asarray(packed_params)):
     sys.exit("ABORT: rebuilt packed fiducial vector differs from the stored "
              "one -- config drift between build and validation scripts.")
 
-split = split_marginal_indices(
-    n_cosmo_params=n_cosmo_params, survey_keys=joint_survey_keys,
-    n_bins=n_zbins, fixed_cosmo=[5, 6, 7, 8],
-    fixed_survey_keys={('shared', 'k_nl', None), ('shared', 'ndens', None)})
+split = build_split(n_cosmo_params, joint_survey_keys)
 if (not np.array_equal(np.asarray(split.nl_idx), wz["nl_idx"])
         or not np.array_equal(np.asarray(split.lin_idx), wz["lin_idx"])):
     sys.exit("ABORT: rebuilt marginal split differs from the stored one.")
 n_nl = split.n_nl
 
-k = jnp.linspace(K_PK_MIN, K_PK_MAX, N_K)
-dk = float(k[1] - k[0])
-triangles, _triangle_dk = build_bispectrum_triangles_from_k_grid(
-    k, k_min=K_BK_MIN, k_max=K_BK_MAX, dk=dk)
-block_len = 3 * int(k.shape[0]) + int(triangles.shape[0])
-bin_blocks = [slice(b * block_len, (b + 1) * block_len)
-              for b in range(n_zbins)]
+k, dk, triangles, block_len, bin_blocks = build_kgrid_and_blocks()
 bin_data = [pb_fid[sl] for sl in bin_blocks]
 
-bao_dr2 = load_desi_dr2("all", data_dir=BAO_DATA_DIR)
-bao_theory_fn = make_bao_theory_fn(
-    bao_dr2, cosmo_keys=cosmo.param_keys, cosmo_sizes=cosmo.param_sizes,
-    mnu_fixed=MNU_FIXED)
-if not np.allclose(np.asarray(bao_theory_fn(packed_params[:n_cosmo_params])),
-                   np.asarray(bao_fid), rtol=1e-10, atol=0.0):
-    sys.exit("ABORT: recomputed BAO fiducial vector differs from the stored "
-             "one beyond 1e-10.")
+bao_dr2, bao_theory_fn = build_bao(
+    BAO_DATA_DIR, cosmo, packed_params[:n_cosmo_params], bao_fid)
 
 # ---------------------------------------------------------------------------
 # DESI priors (NEW): cov-mode survey/EFT prior + BBN/ns cosmology prior.
