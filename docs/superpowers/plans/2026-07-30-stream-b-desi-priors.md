@@ -1149,3 +1149,95 @@ git commit -m "feat(notebook): switch LCDM MCMC notebook to desi_dr1_reanalysis_
 - The toy fixture's numbers (c1 factor 0.2025, P_shot offset 1, c2 factor 0.5) are FIXTURE values exercising the machinery, deliberately including a non-trivial factor; the real spec's numbers come only from the Task-3 appendix.
 - Anchor-row tests encode CONTEXT.md's paper-verified values; the escape hatch (map governs, update both in one commit) is stated in the test docstring.
 - Type consistency: `make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn, a_ap_bins_fn, sigma8_ref_bins)` used identically in Tasks 5, 7, 8; loader name `load_desi_prior_spec` throughout; `MarginalSplit.nl_b1_pos` is the only split field consumed.
+
+---
+
+## Amendment 1 (2026-07-31): two-branch resolution of the ctr-basis escalation
+
+Task 3 confirmed (CLASS-PT Eqs 2.21–2.23, quoted in `docs/design/desi-convention-map.md`
+§3.1) that Table I's c0/c2/c4 priors live on the per-multipole basis while our code's
+coefficients are the μ-space tilde basis, related per bin by the upper-triangular
+`L(f) = [[1, −f/3, 3f²/35], [0, 1, −6f/7], [0, 0, 1]]` mapping (c0,c2,c4)_paper →
+(c0,c2,c4)_ours. USER DECISION: implement BOTH exact representations on two branches;
+their gates plus a machine-precision equivalence test decide the merge. The marginal
+likelihood (including ln det(AΣ_p)) is exactly invariant under a linear θ_lin
+reparameterization with consistently transformed priors, so the two branches must agree
+to float64 precision — this equivalence is the primary cross-validation.
+
+**Branches** (both from master after 6a6d5d7):
+- `stream-b-sigmap` — option 1: full per-bin prior covariance Σ_p.
+- `stream-b-rotation` — option 3: θ_lin ctr slots redefined to the paper basis via L(f).
+
+**Worktree mechanics (both branches):**
+- Worktrees: `/Users/nguyenmn/jaxPTPolyPol-sigmap`, `/Users/nguyenmn/jaxPTPolyPol-rotation`.
+- Tests MUST run with `PYTHONPATH=<worktree>/src` prepended — the editable install points
+  at the master checkout and would silently shadow the branch code.
+- `example/mcmc/cache` is untracked and absent in worktrees: each worktree gets a symlink
+  to `/Users/nguyenmn/jaxPTPolyPol/example/mcmc/cache` (created at branch setup). Branch
+  outputs use per-branch filenames: `desi_prior_validation_<branch>.json`,
+  `branch_equiv_<branch>.json`.
+
+**Shared constants (both branches, verbatim):**
+- `F_FID = (0.8155, 0.8579, 0.8893, 0.9126, 0.9301, 0.9489, 0.9649)` for
+  `z_bins = (0.7, 0.9, 1.1, 1.3, 1.5, 1.8, 2.2)` — from the map §3.1 table. Each branch
+  must also verify `ps_1loop_jax.background.growth_rate_approx(omb, omc, h, z, 0.06)`
+  at the production fiducial (ombh2=0.02242, omch2=0.11933, h=0.6766) reproduces these
+  within 2e-3 and report if not (the hardcoded tuple governs either way — cross-branch
+  identity of L is what the equivalence test needs).
+- ctr slot positions within a bin's 11 θ_lin entries: indices (2, 3, 4) per
+  LIN_SURVEY_KEYS (bGamma3, P_shot, c0, c2, c4, cfog, a0, a2, c1, B_shot, A_shot).
+- Layer-2: R_b(θ) (rescale A_AP*A_amp) divides PAPER-basis quantities in both branches:
+  μ_paper_b = (0, 30, 0)/R_b; σ_paper_b = 30/R_b for all three rows.
+
+**Branch `stream-b-sigmap` contract (Tasks 4σ–7σ = Tasks 4–7 with these deltas):**
+- Spec: c0/c2/c4 rows keep paper values verbatim (factor 1, offset 0) and gain a new
+  optional field `ctr_rotation: "multipole_to_tilde"` (vocabulary {null,
+  multipole_to_tilde}); loader validates the trio carries it all-or-none. PROVISIONAL
+  markers removed on this branch (the representation is exact).
+- `gaussian_marginal_loglike`: `sigma_p` accepts ndim==1 (diag widths, current behavior,
+  backward compatible) or ndim==2 (full Σ_p): then `A = MᵀC⁻¹M + Σ_p⁻¹` via Cholesky
+  solve and `ln det Σ_p` via `2·sum(log(diag(chol(Σ_p))))`. All existing tests must stay
+  green unchanged.
+- `make_marginal_log_posterior_perbin` and `_taylor`: `prior_sigma_fn(θ)` may return
+  `(n_lin,)` (current) or `(n_bins, 11, 11)` stacked per-bin blocks; per-bin consumption
+  takes `[b]`. `prior_mean_fn` unchanged `(n_lin,)`.
+- `make_desi_prior_fns`: when the spec carries ctr_rotation, returns cov-mode
+  `prior_sigma_fn` building per bin: start from the diagonal entries as today, then
+  overwrite the (2:5, 2:5) block with `L(F_FID[b]) · diag(σ_paper_b²) · L(F_FID[b])ᵀ`
+  and set `prior_mean_fn` ctr entries to `L(F_FID[b]) · μ_paper_b`. New toy tests:
+  cov-mode block matches the analytic L·Σ·Lᵀ oracle at and off fiducial; diag-mode
+  path bit-identical to before.
+- Fisher (Task 6σ): `build_prior_sigmas_from_desi_spec` emits the marginal widths
+  `sqrt(diag(LΣLᵀ))` for the ctr trio (documented: legacy-Fisher consumers are
+  diagonal-only; the gate's Hessian-Fisher carries the full block).
+- Gate (Task 7σ): as Task 7, writing `desi_prior_validation_sigmap.json`, PLUS dump
+  `branch_equiv_sigmap.json`: `{"points_seed": 20260731, "n": 64, "scale": 0.5,
+  "log_post": [...]}` — 64 whitened points `0.5 * jax.random.normal(PRNGKey(20260731),
+  (64, n_nl))`, log-posterior at each (include_logdet=True).
+
+**Branch `stream-b-rotation` contract (Tasks 4r–7r = Tasks 4–7 with these deltas):**
+- Spec: c0/c2/c4 rows are the paper's diagonal VERBATIM (factor 1, offset 0, rescale
+  A_AP*A_amp) with `metadata.ctr_basis: "multipole"`; θ_lin keys pk.ctr.{c0,c2,c4} now
+  MEAN the per-multipole coefficients on this branch. PROVISIONAL markers removed.
+- New helper in `desi_priors.py`: `ctr_rotation_matrices(f_bins)` returning the stacked
+  `(n_bins, 3, 3)` L(f) matrices, and `rotate_taylor_templates(tt, L_bins)` returning a
+  new TaylorTemplates with, for each bin b, columns (2,3,4) of `bin_M0[b]` and of
+  `bin_dM[b]` right-multiplied by `L(F_FID[b])` (m0/J/H untouched — they live at
+  θ_lin=0, which L fixes). Unit test: rotating then evaluating the surrogate marginal
+  with the diagonal paper prior == evaluating the UNrotated surrogate with the
+  L-pushforward correlated prior, to 1e-10 (this is the invariance identity in-branch).
+- Exact perbin path: wrap each bin theory fn so the inserted ctr slots are
+  `L(F_FID[b]) @ θ_paper[2:5]` (identity elsewhere) — one wrapper in the notebook/script
+  assembly, NOT a theory.py change.
+- `make_desi_prior_fns`: diagonal machinery unchanged from the pre-amendment plan
+  (the paper prior applies verbatim); no cov-mode.
+- Fisher (Task 6r): paper diagonal verbatim.
+- Gate (Task 7r): as Task 7 on rotated templates, writing
+  `desi_prior_validation_rotation.json` + `branch_equiv_rotation.json` (same seed/spec
+  as σp — the same 64 whitened points).
+
+**Task E (controller-level, after both 7σ and 7r):** compare the two
+`branch_equiv_*.json`: require `max|Δ log_post| < 1e-5` (expect ~1e-9); compare the two
+gate JSONs (same verdicts, width ratios within MC noise). Record in the measurement doc.
+Winner selection is a user decision informed by both gates + code-review simplicity;
+Task 8 (notebook switchover) runs only on the winning branch after merge.
