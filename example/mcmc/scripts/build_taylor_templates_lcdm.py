@@ -39,6 +39,7 @@ stage (e.g. after a template-stage abort), re-run in a fresh process with
 
 from functools import partial
 import gc
+import hashlib
 import json
 import os
 import pathlib
@@ -202,6 +203,33 @@ META = {
     "num_mu": 65, "num_phi": 65,
     "k_min": 0.02, "k_max": 0.20, "k_bk_max": 0.08, "k_nl_rsd": 0.45,
     "order2_m0": True,
+}
+
+# --- Template vs whitening meta stamps -------------------------------------
+# The Taylor tensors (m0, M and their theta_NL derivatives) are functions of the
+# THEORY and GRID only, so the TEMPLATES npz meta carries the theory-config
+# identifiers that determine template validity: a sha256 hash binding the full
+# set, plus the short per-bin tuples verbatim (as strings) for human inspection.
+# Templates are PRIOR-INDEPENDENT -- prior identifiers are deliberately NOT
+# stamped here (changing a prior sigma does not invalidate a template). They go
+# on the WHITENING npz meta below, which DOES depend on the legacy prior spec.
+# (load_taylor_templates treats these new keys as backward-compatible: a cache
+# predating them warns rather than errors -- see marginal_taylor._BACKWARD_...)
+_THEORY_CONFIG = (V_bins, n_bar, knl_bins, z_bins,
+                  (K_PK_MIN, K_PK_MAX, N_K, K_BK_MIN, K_BK_MAX), K_NL_RSD)
+THEORY_CONFIG_HASH = hashlib.sha256(repr(_THEORY_CONFIG).encode()).hexdigest()
+TEMPLATE_META = {
+    **META,
+    "theory_config_hash": THEORY_CONFIG_HASH,
+    "z_bins": str(z_bins), "knl_bins": str(knl_bins),
+    "n_bar": str(n_bar), "V_bins": str(V_bins),
+}
+# Whitening depends on the legacy EFT/stochastic prior spec + the BBN/ns cosmo
+# priors, so its meta records them (the templates' meta does not).
+WHITENING_META = {
+    **META,
+    "prior_spec": "eft_eq12_2405_02252",
+    "cosmo_priors": COSMO_PRIORS,
 }
 
 CACHE = pathlib.Path("cache")
@@ -430,7 +458,7 @@ if not TEMPLATES_ONLY:
 
     np.savez(
         WHITENING_PATH,
-        meta=np.asarray(json.dumps(META)),
+        meta=np.asarray(json.dumps(WHITENING_META)),
         packed_params=np.asarray(packed_params),
         pb_fid=np.asarray(pb_fid),
         bin_cov_invs=np.stack([np.asarray(c) for c in bin_cov_invs]),
@@ -502,7 +530,7 @@ sym_errs = list(tt.build_diagnostics["H_sym_err"])
 print(f"template build: {t_stage3:.1f}s; H sym_err per bin = "
       + np.array2string(np.asarray(sym_errs), precision=3), flush=True)
 
-save_taylor_templates(tt, TEMPLATES_PATH, meta=META)
+save_taylor_templates(tt, TEMPLATES_PATH, meta=TEMPLATE_META)
 print(f"-> {TEMPLATES_PATH} "
       f"({TEMPLATES_PATH.stat().st_size / 1048576:.1f} MB)", flush=True)
 
@@ -520,7 +548,7 @@ summary = {
     "chunk_J": CHUNK_J, "chunk_H": CHUNK_H,
     "n_nl": int(n_nl), "n_lin": int(split.n_lin),
     "block_len": int(block_len), "n_tri": int(n_tri),
-    "meta": META,
+    "meta": TEMPLATE_META,
 }
 SUMMARY_PATH.write_text(json.dumps(summary, indent=1))
 print(f"-> {SUMMARY_PATH}", flush=True)

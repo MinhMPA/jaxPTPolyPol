@@ -230,6 +230,15 @@ def make_marginal_log_posterior(theory_fn, data, cov_inv, lin_idx,
     ``(n_bins, n_lin_per_bin, n_lin_per_bin)`` emitted by cov-mode
     :func:`~jaxptpolypol.desi_priors.make_desi_prior_fns` is NOT handled by this
     dense builder -- only the perbin/taylor builders consume it.
+
+    See Also
+    --------
+    make_marginal_log_posterior_perbin : block-diagonal factorization of this
+        dense form and the production exact path (identical posterior; measured
+        12.9x faster per eval, 3.3x lower compile RSS at 7 bins). Start here.
+    jaxptpolypol.marginal_taylor.make_marginal_log_posterior_taylor :
+        precomputed-Taylor surrogate of the per-bin path (~ms/eval), consuming a
+        ``TaylorTemplates`` instead of re-tracing the theory.
     """
     data = jnp.asarray(data, dtype=jnp.float64)
     cov_inv = jnp.asarray(cov_inv, dtype=jnp.float64)
@@ -344,6 +353,17 @@ def make_marginal_log_posterior_perbin(*, bin_theory_fns, bin_data, bin_cov_invs
     Returns
     -------
     jitted ``log_posterior(x)`` in whitened theta_NL space.
+
+    See Also
+    --------
+    make_marginal_log_posterior : the dense (single ``n_lin`` system) equivalent
+        this factorizes; identical posterior.
+    jaxptpolypol.marginal_taylor.make_marginal_log_posterior_taylor :
+        drop-in Taylor surrogate of this builder (~ms/eval) for gradient-free
+        MCMC; exact on models the expansion represents, approximate otherwise.
+    make_marginal_log_posterior_scan : ``lax.scan`` variant of this loop, kept as
+        a recorded negative result (slower to compile) -- prefer this per-bin
+        form.
     """
     n_bins = len(bin_theory_fns)
     if not (len(bin_data) == len(bin_cov_invs) == len(bin_lin_idx) == n_bins):
@@ -467,6 +487,11 @@ def make_marginal_log_posterior_scan(*, bin_theory_fns, bin_data, bin_cov_invs,
     Returns
     -------
     jitted ``log_posterior(x)`` in whitened theta_NL space.
+
+    See Also
+    --------
+    make_marginal_log_posterior_perbin : the production exact path this scan form
+        was benchmarked against and lost to -- use it, not this.
     """
     n_bins = len(bin_theory_fns)
     if not (len(bin_data) == len(bin_cov_invs) == len(bin_lin_idx) == n_bins):

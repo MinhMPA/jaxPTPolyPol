@@ -65,6 +65,7 @@ and a scan body over them defeats XLA -- a measured lesson recorded alongside
 from __future__ import annotations
 
 import json
+import warnings
 from dataclasses import dataclass
 
 import jax
@@ -312,6 +313,15 @@ def make_marginal_log_posterior_taylor(tt, *, bin_data, bin_cov_invs,
     Returns
     -------
     jitted ``log_posterior(x)`` in whitened theta_NL space.
+
+    See Also
+    --------
+    jaxptpolypol.marginal_likelihood.make_marginal_log_posterior_perbin : the
+        exact production path this surrogate replaces (re-traces the theory each
+        eval; ~s/eval). Reweight this surrogate back onto it with
+        :func:`importance_reweight`.
+    jaxptpolypol.marginal_likelihood.make_marginal_log_posterior : the original
+        dense builder at the head of the chain.
     """
     n_bins = len(tt.bin_M0)
     if not (len(bin_data) == len(bin_cov_invs) == n_bins):
@@ -397,6 +407,22 @@ def make_marginal_log_posterior_taylor(tt, *, bin_data, bin_cov_invs,
 
 _MISSING = "<absent>"
 
+# Meta keys introduced AFTER some cached ``.npz`` files were already written --
+# the theory-config hash and the verbatim grid tuples that
+# ``example/mcmc/scripts/build_taylor_templates_lcdm.py`` now stamps. A cached
+# file predating them legitimately lacks them, so a key from this set that is
+# present in the caller's ``expect_meta`` but ABSENT from the stored meta is a
+# backward-compatibility WARNING, not a stale-template ERROR. Only true absence
+# is tolerated: a VALUE mismatch on one of these keys (present in both, differing)
+# still raises, and any non-listed key that is missing/differing still raises
+# (so the strict guard is intact for every identifier that predates this set).
+# NOTE: these are theory/grid identifiers only -- templates are prior-independent,
+# so prior identifiers (``prior_spec``, ``cosmo_priors``) live on the whitening
+# npz meta, never here, and are deliberately not in this set.
+_BACKWARD_COMPAT_META_KEYS = frozenset({
+    "theory_config_hash", "z_bins", "knl_bins", "n_bar", "V_bins",
+})
+
 
 def save_taylor_templates(tt, path, *, meta: dict):
     """Persist ``tt`` to a single ``.npz`` file with a config-identifier stamp.
@@ -466,18 +492,40 @@ def load_taylor_templates(path, *, expect_meta: dict | None = None):
         expected values, so a regenerated notebook config cannot silently sample
         with tensors built for a different configuration.
 
+        Backward compatibility: a key in :data:`_BACKWARD_COMPAT_META_KEYS`
+        (theory-config identifiers added after some caches were written) that is
+        present in ``expect_meta`` but ABSENT from a stored meta predating it
+        emits a ``UserWarning`` and loads, rather than raising -- so an old cache
+        is still usable. Value mismatches on those keys, and any missing/differing
+        key outside that set, still raise.
+
     Returns
     -------
     TaylorTemplates
+
+    Warns
+    -----
+    UserWarning
+        If ``expect_meta`` carries newer identifiers (see
+        :data:`_BACKWARD_COMPAT_META_KEYS`) that a pre-dating cache lacks.
     """
     with np.load(path, allow_pickle=False) as npz:
         stored_meta = json.loads(str(npz["meta"].item()))
 
         if expect_meta is not None:
             mismatches = []
+            missing_new = []
             for key in sorted(set(stored_meta) | set(expect_meta)):
                 sv = stored_meta.get(key, _MISSING)
                 ev = expect_meta.get(key, _MISSING)
+                # An expected NEW-set key absent from a pre-dating cache is a
+                # backward-compatibility warning, not a mismatch. (Value diffs on
+                # such a key, or its presence-in-stored-only, still fall through
+                # to the strict mismatch path below.)
+                if (key in _BACKWARD_COMPAT_META_KEYS
+                        and key in expect_meta and key not in stored_meta):
+                    missing_new.append(key)
+                    continue
                 if (key not in stored_meta or key not in expect_meta
                         or sv != ev):
                     mismatches.append(
@@ -487,6 +535,13 @@ def load_taylor_templates(path, *, expect_meta: dict | None = None):
                     "Stale Taylor templates: stored config meta does not match "
                     "expect_meta on the following key(s):\n"
                     + "\n".join(mismatches))
+            if missing_new:
+                warnings.warn(
+                    "Taylor-template meta is missing newer theory-config "
+                    f"identifier key(s) {sorted(missing_new)}; this cache "
+                    "predates them. Loading anyway (backward compatibility) -- "
+                    "rebuild via build_taylor_templates_lcdm.py to stamp them.",
+                    UserWarning, stacklevel=2)
 
         n_bins = int(npz["n_bins"])
         order2_m0 = bool(npz["order2_m0"])
@@ -684,7 +739,26 @@ def reweighted_moments(samples, weights, idx=None):
         arr = arr[np.asarray(idx)]
     w = np.asarray(weights, dtype=np.float64)
 
+    # Degenerate-weight guard: the Kish ESS fraction ``ess_frac = 1 /
+    # (m * sum w_i**2)`` collapses toward ``1/m`` when a single sample carries
+    # almost all the weight. Below a small threshold the reweighted moments are
+    # driven by a handful of draws and ``std`` (whose denominator ``1 - sum
+    # w_i**2`` also collapses) is ill-determined -- warn so the caller does not
+    # silently trust them; the fix is to draw the reweighting target from an
+    # exact-target chain (the delayed-acceptance DA-MH path) rather than
+    # importance-reweighting an under-covering surrogate.
+    sum_w2 = np.sum(w ** 2)
+    ess_frac = 1.0 / (w.shape[0] * sum_w2)
+    if ess_frac < 0.01:
+        warnings.warn(
+            f"reweighted_moments: effective sample size fraction ess_frac="
+            f"{ess_frac:.3g} is pathologically small (< 0.01); the weights are "
+            "near-degenerate, so the reweighted mean/std are driven by a few "
+            "draws and are unreliable. Prefer an exact-target chain (the "
+            "delayed-acceptance DA-MH path) over reweighting this surrogate.",
+            UserWarning, stacklevel=2)
+
     mean = np.sum(w[:, None] * arr, axis=0)
     var = (np.sum(w[:, None] * (arr - mean) ** 2, axis=0)
-           / (1.0 - np.sum(w ** 2)))
+           / (1.0 - sum_w2))
     return mean, np.sqrt(var)
