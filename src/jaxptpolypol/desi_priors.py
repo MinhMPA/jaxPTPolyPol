@@ -175,7 +175,7 @@ import jax.numpy as jnp  # noqa: E402
 from .marginal_likelihood import LIN_SURVEY_KEYS  # noqa: E402
 
 __all__ += ["make_desi_prior_fns", "make_lcdm_rescaling_fns",
-            "DESI_F_FID", "ctr_rotation_matrices"]
+            "DESI_F_FID", "ctr_rotation_matrices", "rotate_taylor_templates"]
 
 _LOG2PI = 1.8378770664093453
 
@@ -209,6 +209,63 @@ def ctr_rotation_matrices(f_bins):
     L = L.at[:, 1, 2].set(-6.0 * f / 7.0)
     L = L.at[:, 2, 2].set(1.0)
     return L
+
+
+# ctr slot positions (c0, c2, c4) within a bin's 11 theta_lin entries, per
+# LIN_SURVEY_KEYS (bGamma3, P_shot, c0, c2, c4, cfog, a0, a2, c1, B_shot, A_shot).
+_CTR_COLS = (2, 3, 4)
+
+
+def rotate_taylor_templates(tt, L_bins):
+    """Right-multiply the ctr columns of a :class:`TaylorTemplates` by ``L_bins``.
+
+    Returns a NEW :class:`~jaxptpolypol.marginal_taylor.TaylorTemplates` in which,
+    for each bin ``b``, the ctr columns ``(2, 3, 4)`` of ``bin_M0[b]`` (shape
+    ``(n_b, p_b)``) and of ``bin_dM[b]`` (shape ``(n_b, p_b, d)``) are
+    right-multiplied by ``L_bins[b]`` (``(3, 3)``):
+
+        M0'[:, cols]      = M0[:, cols] @ L_b
+        dM'[:, cols, k]   = dM[:, cols, k] @ L_b     for every theta_NL index k
+
+    i.e. the transform acts on axis 1 of ``bin_dM`` -- the theta_lin (linear
+    parameter) axis, the axis matched to ``M0``'s columns in
+    ``M = M0 + einsum('ijk,k->ij', dM, delta)`` -- NOT the theta_NL axis (axis 2).
+    Because the reconstruction is linear in ``delta``, this makes the surrogate
+    template ``M'(delta) @ theta`` equal ``M(delta) @ theta'`` with
+    ``theta'[cols] = L_b @ theta[cols]`` (an exact linear reparameterization of
+    the ctr slots). ``m0``/``J``/``H``/``theta0`` are passed through untouched --
+    they live at ``theta_lin = 0``, which ``L`` fixes.
+    """
+    from .marginal_taylor import TaylorTemplates
+
+    L_bins = jnp.asarray(L_bins, dtype=jnp.float64)
+    n_bins = len(tt.bin_M0)
+    if L_bins.shape != (n_bins, 3, 3):
+        raise ValueError(
+            f"L_bins must have shape {(n_bins, 3, 3)}, got {L_bins.shape}")
+    cols = jnp.asarray(_CTR_COLS)
+
+    new_M0, new_dM = [], []
+    for b in range(n_bins):
+        L_b = L_bins[b]                                    # (3, 3)
+        M0 = tt.bin_M0[b]                                  # (n_b, p_b)
+        new_M0.append(M0.at[:, cols].set(M0[:, cols] @ L_b))
+        dM = tt.bin_dM[b]                                  # (n_b, p_b, d)
+        # dM[:, cols, :] is (n_b, 3, d); right-multiply the ctr (col) axis by L_b:
+        # out[i, o, k] = sum_a dM[i, cols[a], k] * L_b[a, o].
+        rotated = jnp.einsum("iak,ao->iok", dM[:, cols, :], L_b)
+        new_dM.append(dM.at[:, cols, :].set(rotated))
+
+    return TaylorTemplates(
+        theta0=tt.theta0,
+        bin_m00=tt.bin_m00,
+        bin_J=tt.bin_J,
+        bin_H=tt.bin_H,
+        bin_M0=tuple(new_M0),
+        bin_dM=tuple(new_dM),
+        order2_m0=tt.order2_m0,
+        build_diagnostics=tt.build_diagnostics,
+    )
 
 
 def _rescale_power(token):

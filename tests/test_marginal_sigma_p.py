@@ -162,3 +162,62 @@ def test_taylor_stacked_cov_matches_diagonal_widths():
     for dx in (jnp.zeros(2), jnp.array([0.15, -0.2])):
         x = theta0 + dx
         assert float(cov(x)) == pytest.approx(float(diag(x)), abs=1e-10)
+
+
+# --- permanent two-representation invariance (rotation vs sigmap) -------------
+
+
+@pytest.mark.parametrize("seed", [11, 202607, 999983])
+def test_rotation_vs_sigmap_marginal_invariance(seed):
+    """Exact linear-reparameterization invariance of the marginal likelihood.
+
+    The two production representations of the DESI counterterm prior give the
+    SAME ``gaussian_marginal_loglike``, including the ``ln det`` term:
+
+      * **Rotation** (A): rotate the templates, ``M_rot = M @ T``, and keep the
+        paper's *diagonal* prior widths ``sigma_paper`` with mean ``mu_paper``.
+      * **Sigma_p** (B): keep the templates and pass the *full* rotated prior
+        covariance ``Sigma = T diag(sigma_paper**2) T^T`` with mean
+        ``mu_ours = T @ mu_paper``.
+
+    ``T`` is the 11x11 identity with the counterterm ``(2:5, 2:5)`` block set to
+    ``L = ctr_rotation_matrices((0.8155,))[0]`` -- an invertible upper-triangular
+    map with ``det T = 1``. Because the marginal likelihood fully integrates the
+    linear block, it is invariant under this invertible linear reparameterization
+    of ``theta_lin`` -- the logdet included (the ``+2 ln det T`` from ``A`` and
+    from ``Sigma_p^{-1}`` cancel). This synthetic test locks in the equivalence
+    the end-to-end production Task-E check verified on the real P+B pipeline to
+    ``max|dlogpost| = 4.2e-12`` (``example/mcmc/cache/task_e_equivalence.json``).
+    """
+    from jaxptpolypol.desi_priors import ctr_rotation_matrices
+
+    rng = np.random.default_rng(seed)
+    n_data, n_lin = 8, 11
+    data = jnp.asarray(rng.standard_normal(n_data))
+    m0 = jnp.asarray(rng.standard_normal(n_data))
+    M = jnp.asarray(rng.standard_normal((n_data, n_lin)))
+    araw = rng.standard_normal((n_data, n_data))
+    cov_inv = jnp.asarray(np.linalg.inv(araw @ araw.T + n_data * np.eye(n_data)))
+
+    mu_paper = np.zeros(n_lin)
+    mu_paper[2:5] = [0.0, 30.0, 0.0]                 # ctr slots (c0, c2, c4)
+    mu_paper = jnp.asarray(mu_paper)
+    sigma_paper = jnp.asarray(0.5 + rng.random(n_lin))   # strictly positive widths
+
+    L = ctr_rotation_matrices(jnp.asarray([0.8155]))[0]  # (3, 3)
+    T = np.eye(n_lin)
+    T[2:5, 2:5] = np.asarray(L)                          # embed L at the ctr block
+    T = jnp.asarray(T)
+
+    M_rot = M @ T                                        # representation A
+    Sigma_full = T @ jnp.diag(sigma_paper ** 2) @ T.T    # representation B
+    mu_ours = T @ mu_paper
+
+    for include_logdet in (True, False):
+        ll_A = gaussian_marginal_loglike(
+            data, m0, M_rot, cov_inv, mu_paper, sigma_paper,
+            include_logdet=include_logdet)
+        ll_B = gaussian_marginal_loglike(
+            data, m0, M, cov_inv, mu_ours, Sigma_full,
+            include_logdet=include_logdet)
+        assert float(ll_A) == pytest.approx(float(ll_B), abs=1e-9)

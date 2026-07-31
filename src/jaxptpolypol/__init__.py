@@ -63,4 +63,5 @@ from .desi_priors import (
     load_desi_prior_spec,
     make_desi_prior_fns,
     make_lcdm_rescaling_fns,
+    rotate_taylor_templates,
 )

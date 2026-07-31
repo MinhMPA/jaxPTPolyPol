@@ -418,6 +418,68 @@ def test_ctr_rotation_matrices_structure():
         np.testing.assert_allclose(L[b], exp, rtol=1e-14, atol=1e-14)
 
 
+def _synthetic_tt(seed=20260731, n_pts=5, n_bins=2, p=11, d=4, order2=True):
+    """Tiny random-float64 TaylorTemplates for the column-identity test."""
+    from jaxptpolypol.marginal_taylor import TaylorTemplates
+    rng = np.random.default_rng(seed)
+    theta0 = jnp.asarray(rng.standard_normal(d))
+    bin_m00 = tuple(jnp.asarray(rng.standard_normal(n_pts)) for _ in range(n_bins))
+    bin_J = tuple(jnp.asarray(rng.standard_normal((n_pts, d))) for _ in range(n_bins))
+    bin_H = (tuple(jnp.asarray(rng.standard_normal((n_pts, d, d)))
+                   for _ in range(n_bins)) if order2 else (None,) * n_bins)
+    bin_M0 = tuple(jnp.asarray(rng.standard_normal((n_pts, p))) for _ in range(n_bins))
+    bin_dM = tuple(jnp.asarray(rng.standard_normal((n_pts, p, d)))
+                   for _ in range(n_bins))
+    return TaylorTemplates(
+        theta0=theta0, bin_m00=bin_m00, bin_J=bin_J, bin_H=bin_H,
+        bin_M0=bin_M0, bin_dM=bin_dM, order2_m0=order2,
+        build_diagnostics={"origin": "synthetic"})
+
+
+def test_rotate_taylor_templates_column_identity():
+    """M(delta) from ROTATED templates applied to theta equals M(delta) from
+    UNROTATED templates applied to theta' with theta'[(2,3,4)] = L_b @ theta[(2,3,4)]
+    (exact linear reparameterization of the ctr slots); m0/J/H untouched."""
+    from jaxptpolypol.desi_priors import (
+        ctr_rotation_matrices, rotate_taylor_templates,
+    )
+    tt = _synthetic_tt()
+    n_bins = len(tt.bin_M0)
+    f_bins = (0.8155, 0.9301)
+    assert len(f_bins) == n_bins
+    L_bins = ctr_rotation_matrices(f_bins)
+    rtt = rotate_taylor_templates(tt, L_bins)
+
+    cols = np.array([2, 3, 4])
+    rng = np.random.default_rng(4242)
+    for b in range(n_bins):
+        L_b = np.asarray(L_bins[b])
+        p = int(tt.bin_M0[b].shape[1])
+        d = int(tt.theta0.shape[0])
+        for _ in range(4):
+            theta = rng.standard_normal(p)
+            delta = jnp.asarray(rng.standard_normal(d))
+            M_rot = rtt.bin_M0[b] + jnp.einsum("ijk,k->ij", rtt.bin_dM[b], delta)
+            lhs = M_rot @ jnp.asarray(theta)
+            theta_p = theta.copy()
+            theta_p[cols] = L_b @ theta[cols]
+            M_un = tt.bin_M0[b] + jnp.einsum("ijk,k->ij", tt.bin_dM[b], delta)
+            rhs = M_un @ jnp.asarray(theta_p)
+            assert jnp.allclose(lhs, rhs, rtol=0.0, atol=1e-13)
+
+    # m0/J/H/theta0 pass through untouched (identical arrays).
+    assert jnp.array_equal(rtt.theta0, tt.theta0)
+    assert rtt.order2_m0 == tt.order2_m0
+    for b in range(n_bins):
+        assert jnp.array_equal(rtt.bin_m00[b], tt.bin_m00[b])
+        assert jnp.array_equal(rtt.bin_J[b], tt.bin_J[b])
+        assert jnp.array_equal(rtt.bin_H[b], tt.bin_H[b])
+        # only ctr columns (2,3,4) of M0/dM changed; other columns identical.
+        other = [j for j in range(int(tt.bin_M0[b].shape[1])) if j not in (2, 3, 4)]
+        assert jnp.array_equal(rtt.bin_M0[b][:, other], tt.bin_M0[b][:, other])
+        assert jnp.array_equal(rtt.bin_dM[b][:, other, :], tt.bin_dM[b][:, other, :])
+
+
 # =============================================================================
 # Task 6sigma: build_prior_sigmas_from_desi_spec (Fisher-side fiducial widths)
 # =============================================================================
