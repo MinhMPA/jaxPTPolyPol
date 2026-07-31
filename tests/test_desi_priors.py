@@ -147,3 +147,38 @@ def test_ctr_rotation_partial_trio_raises(tmp_path):
         raw["marginalized"]["pk.ctr.c4"].pop("ctr_rotation", None)
     with pytest.raises(SpecValidationError, match="ctr_rotation"):
         load_desi_prior_spec(_mutated_spec_path(tmp_path, mutate))
+
+
+def test_real_spec_loads():
+    spec = load_desi_prior_spec()
+    assert set(spec.marginalized) == set(LIN_SURVEY_KEYS)
+    assert spec.metadata["source"] == "arXiv:2511.20757"
+
+
+def test_real_spec_verbatim_anchor_rows():
+    """Rows recorded in CONTEXT.md from the primary PDF; if the reconciled
+    map contradicts one of these, the MAP governs -- update CONTEXT.md and
+    this test together in the same commit, quoting the paper."""
+    spec = load_desi_prior_spec()
+    c1 = spec.marginalized[("bk", "ctr", "c1")]
+    assert c1.paper_mean == 0.0 and c1.paper_sigma == 5.0
+    cfog = spec.marginalized[("pk", "ctr", "cfog")]
+    assert cfog.paper_mean == 400.0 and cfog.paper_sigma == 400.0
+    c2 = spec.marginalized[("pk", "ctr", "c2")]
+    assert c2.paper_mean == 30.0
+    for nm in ("b2", "bG2"):
+        assert spec.sampled[nm].paper_sigma == 5.0
+        assert spec.sampled[nm].rescale == "sigma8_sq"
+    bg3 = spec.marginalized[("shared", "bias", "bGamma3")]
+    assert bg3.mean_formula == "coevolution_bGamma3"
+    for k in (("pk", "stoch", "a0"), ("pk", "stoch", "a2")):
+        assert spec.marginalized[k].factor_formula == "knl_over_0p45_sq"
+
+
+def test_real_spec_ctr_rotation_trio():
+    """sigmap branch: the c0/c2/c4 trio carries ctr_rotation all-or-none."""
+    spec = load_desi_prior_spec()
+    for key in (("pk", "ctr", "c0"), ("pk", "ctr", "c2"), ("pk", "ctr", "c4")):
+        assert spec.marginalized[key].ctr_rotation == "multipole_to_tilde"
+    # non-ctr rows leave the token null
+    assert spec.marginalized[("pk", "ctr", "cfog")].ctr_rotation is None
