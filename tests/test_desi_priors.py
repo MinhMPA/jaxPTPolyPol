@@ -416,3 +416,107 @@ def test_ctr_rotation_matrices_structure():
                         [0.0, 1.0, -6.0 * fb / 7.0],
                         [0.0, 0.0, 1.0]])
         np.testing.assert_allclose(L[b], exp, rtol=1e-14, atol=1e-14)
+
+
+# =============================================================================
+# Task 6sigma: build_prior_sigmas_from_desi_spec (Fisher-side fiducial widths)
+# =============================================================================
+from jaxptpolypol.desi_priors import build_prior_sigmas_from_desi_spec
+
+
+def _ctr_marginal_widths(paper_sigmas, f):
+    """Analytic sqrt(diag(L(f) . diag(paper^2) . L(f)^T)) for one bin's f.
+
+    Rows of L(f) = [[1, -f/3, 3f^2/35], [0, 1, -6f/7], [0, 0, 1]] give:
+    c0 = sqrt(s0^2 + (f/3)^2 s2^2 + (3f^2/35)^2 s4^2);
+    c2 = sqrt(s2^2 + (6f/7)^2 s4^2);  c4 = s4 (bottom row of L).
+    """
+    s0, s2, s4 = paper_sigmas
+    c0 = np.sqrt(s0 ** 2 + (f / 3.0) ** 2 * s2 ** 2
+                 + (3.0 * f ** 2 / 35.0) ** 2 * s4 ** 2)
+    c2 = np.sqrt(s2 ** 2 + (6.0 * f / 7.0) ** 2 * s4 ** 2)
+    c4 = s4
+    return c0, c2, c4
+
+
+def test_fisher_sigmas_from_spec(toy_spec_path):
+    """Cov-mode (the toy fixture carries the ctr_rotation token): the ctr trio
+    emits the MARGINAL widths of the correlated L.Sigma.L^T prior; non-ctr rows
+    follow the base-brief formulas unchanged."""
+    spec = load_desi_prior_spec(toy_spec_path)
+    sigma8_ref = np.array([0.6, 0.5])
+    survey_dicts, sampled_bins = build_prior_sigmas_from_desi_spec(
+        spec, knl_bins=KNL_BINS, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID)
+    assert len(survey_dicts) == len(KNL_BINS)
+    # ctr paper sigmas read off the loaded toy spec. c2's PAPER sigma is 30 even
+    # though its MAPPED sigma is 15 (factor 0.5) -- the marginal-width oracle uses
+    # PAPER 30, consistent with make_desi_prior_fns cov-mode. So the base brief's
+    # c2 == 15.0 assertion is REPLACED here by the marginal width.
+    paper_ctr = [spec.marginalized[k].paper_sigma for k in _CTR_KEYS]
+    for b, (knl, f) in enumerate(zip(KNL_BINS, TOY_F_FID)):
+        c0_w, c2_w, c4_w = _ctr_marginal_widths(paper_ctr, f)
+        assert survey_dicts[b][("pk", "ctr", "c4")] == pytest.approx(c4_w)
+        assert survey_dicts[b][("pk", "ctr", "c2")] == pytest.approx(c2_w)
+        assert survey_dicts[b][("pk", "ctr", "c0")] == pytest.approx(c0_w)
+        # non-ctr rows: base-brief behaviour unchanged
+        assert survey_dicts[b][("pk", "stoch", "a0")] == pytest.approx(
+            (knl / 0.45) ** 2)
+        assert survey_dicts[b][("bk", "ctr", "c1")] == pytest.approx(1.0125)
+        assert sampled_bins[b]["b2"] == pytest.approx(5.0 / sigma8_ref[b] ** 2)
+        assert "b1" not in sampled_bins[b]
+
+
+def test_fisher_sigmas_real_spec():
+    """Real DESI spec: bin-0 ctr marginal width at DESI_F_FID; non-ctr rows via
+    the base formulas. c0/c2/c4 paper sigmas are all 30 (map section 3.1 table)."""
+    spec = load_desi_prior_spec()
+    # 7 bins to match DESI_F_FID; bin 0 knl = 0.52 (only bin 0 is asserted).
+    knl_bins = (0.52, 0.65, 0.75, 0.80, 0.85, 0.90, 0.95)
+    assert len(knl_bins) == len(DESI_F_FID)
+    sigma8_ref = np.full(len(DESI_F_FID), 0.6)
+    survey_dicts, sampled_bins = build_prior_sigmas_from_desi_spec(
+        spec, knl_bins=knl_bins, sigma8_ref_bins=sigma8_ref)   # f_bins=DESI_F_FID
+    f0 = 0.8155
+    assert f0 == pytest.approx(DESI_F_FID[0])
+    exp_c0 = np.sqrt(30.0 ** 2 + (f0 / 3.0) ** 2 * 30.0 ** 2
+                     + (3.0 * f0 ** 2 / 35.0) ** 2 * 30.0 ** 2)
+    assert exp_c0 == pytest.approx(31.14, abs=1e-2)
+    assert survey_dicts[0][("pk", "ctr", "c0")] == pytest.approx(exp_c0)
+    # cfog: non-ctr, non-knl -> mapped paper sigma verbatim
+    assert survey_dicts[0][("pk", "ctr", "cfog")] == pytest.approx(400.0)
+    # a0: knl_over_0p45_sq -> paper_sigma * (knl_0/0.45)^2
+    a0_paper = spec.marginalized[("pk", "stoch", "a0")].paper_sigma
+    assert survey_dicts[0][("pk", "stoch", "a0")] == pytest.approx(
+        (0.52 / 0.45) ** 2 * a0_paper)
+
+
+def test_fisher_ctr_blocks_return(toy_spec_path):
+    """return_ctr_blocks=True yields the stacked (n_bins, 3, 3) fiducial (R=1)
+    ctr covariance L.diag(paper^2).L^T: symmetric, diag == marginal widths^2,
+    corr(c2, c4) closed-form for the toy f (paper_c2 == paper_c4)."""
+    spec = load_desi_prior_spec(toy_spec_path)
+    sigma8_ref = np.array([0.6, 0.5])
+    survey_dicts, sampled_bins, blocks = build_prior_sigmas_from_desi_spec(
+        spec, knl_bins=KNL_BINS, sigma8_ref_bins=sigma8_ref,
+        f_bins=TOY_F_FID, return_ctr_blocks=True)
+    blocks = np.asarray(blocks)
+    assert blocks.shape == (N_BINS, 3, 3)
+    paper_ctr = [spec.marginalized[k].paper_sigma for k in _CTR_KEYS]
+    for b, f in enumerate(TOY_F_FID):
+        Bb = blocks[b]
+        np.testing.assert_allclose(Bb, Bb.T, rtol=1e-14, atol=1e-14)
+        c0_w, c2_w, c4_w = _ctr_marginal_widths(paper_ctr, f)
+        np.testing.assert_allclose(
+            np.diag(Bb), np.array([c0_w, c2_w, c4_w]) ** 2, rtol=1e-12)
+        # diag also matches the survey-dict marginal widths (same underlying block)
+        for k, w in zip(_CTR_KEYS, (c0_w, c2_w, c4_w)):
+            assert survey_dicts[b][k] == pytest.approx(w)
+        # corr(c2, c4) = -(6f/7)/sqrt(1 + (6f/7)^2) when paper_c2 == paper_c4
+        g = 6.0 * f / 7.0
+        exp_corr = -g / np.sqrt(1.0 + g ** 2)
+        corr = Bb[1, 2] / np.sqrt(Bb[1, 1] * Bb[2, 2])
+        assert corr == pytest.approx(exp_corr, rel=1e-12)
+    # default call (no flag) still returns the 2-tuple
+    out2 = build_prior_sigmas_from_desi_spec(
+        spec, knl_bins=KNL_BINS, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID)
+    assert len(out2) == 2

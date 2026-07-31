@@ -405,3 +405,99 @@ def make_lcdm_rescaling_fns(*, pklin_emulator, cosmo_keys, cosmo_sizes,
     sigma8_ref_bins = sigma8_bins_fn(
         jnp.asarray(fid_cosmo_native, dtype=jnp.float64))
     return sigma8_bins_fn, a_ap_bins_fn, sigma8_ref_bins
+
+
+# =============================================================================
+# Task 6sigma: Fisher-side fiducial widths from the spec (ctr marginal widths)
+# =============================================================================
+
+__all__ += ["build_prior_sigmas_from_desi_spec"]
+
+
+def build_prior_sigmas_from_desi_spec(spec, *, knl_bins, sigma8_ref_bins,
+                                      f_bins=DESI_F_FID, return_ctr_blocks=False):
+    """Fiducial (R = 1) per-bin prior widths for the Fisher side.
+
+    Returns ``(survey_sigma_dicts, sampled_sigma_bins)``: one dict per bin for
+    the marginalized survey block (mapping ``(section, group, key) -> sigma``,
+    consumable by :func:`inference.build_prior_sigmas` as a per-bin list), and
+    one dict per bin for the sampled bias block (``b2``/``bG2`` raw widths at
+    ``sigma8_ref``; the flat ``b1`` is omitted = no prior).
+
+    Branch stream-b-sigmap (Amendment 1). The counterterm trio ``pk.ctr.c0/c2/c4``
+    -- the rows whose ``ctr_rotation == "multipole_to_tilde"`` -- carries a
+    *correlated* prior in our mu-space tilde basis,
+    ``L_b . diag(paper_sigma**2) . L_b^T`` with
+    ``L_b = ctr_rotation_matrices(f_bins)[b]`` (map section 3.1). Legacy Fisher
+    consumers (:func:`inference.build_prior_sigmas`) are DIAGONAL-ONLY, so the
+    width emitted for each ctr row is the MARGINAL width of that correlated
+    prior: ``sqrt(diag(L_b . diag(paper_sigma**2) . L_b^T))``, with
+    ``paper_sigma`` read from the three rows' ``paper_sigma`` in order
+    ``(c0, c2, c4)`` (NOT the mapped ``row.sigma``; consistent with the cov-mode
+    factory). The off-diagonal correlations are NOT representable in these
+    diagonal dicts -- they live in the gate's Hessian-Fisher
+    (:func:`make_desi_prior_fns` cov-mode + :func:`gaussian_marginal_loglike`).
+
+    Non-ctr rows are unchanged from the base contract: ``sigma * (knl/paper_knl)**2``
+    for a0/a2 (``factor_formula == "knl_over_0p45_sq"``), the mapped paper
+    ``sigma`` otherwise. ``f_bins`` (default :data:`DESI_F_FID`, one entry per
+    bin) is consumed only when the trio carries the token, and is added for
+    signature parity with :func:`make_desi_prior_fns`.
+
+    With ``return_ctr_blocks=True`` a third element is returned:
+    ``ctr_cov_blocks``, the stacked ``(n_bins, 3, 3)`` fiducial (R = 1)
+    counterterm covariance ``L_b . diag(paper_sigma**2) . L_b^T`` (``None`` if the
+    spec's trio is token-less), for consumers that can use the full correlated
+    block rather than its marginal widths.
+    """
+    paper_knl = float(spec.metadata.get("paper_knl", 0.45))
+    knl_bins = tuple(float(k) for k in knl_bins)
+    sigma8_ref_bins = tuple(float(s) for s in sigma8_ref_bins)
+    n_bins = len(knl_bins)
+    if len(sigma8_ref_bins) != n_bins:
+        raise ValueError(
+            f"knl_bins ({n_bins}) and sigma8_ref_bins "
+            f"({len(sigma8_ref_bins)}) must have equal length")
+
+    cov_mode = all(spec.marginalized[k].ctr_rotation is not None
+                   for k in _CTR_TRIO)
+    ctr_cov_blocks = None
+    if cov_mode:
+        f_arr = jnp.asarray(f_bins, dtype=jnp.float64)
+        if f_arr.shape != (n_bins,):
+            raise ValueError(
+                f"f_bins must have length {n_bins} for cov-mode (ctr_rotation) "
+                f"priors; got shape {f_arr.shape}")
+        L_bins = ctr_rotation_matrices(f_arr)                    # (n_bins, 3, 3)
+        paper_sigma_ctr = jnp.array(
+            [spec.marginalized[k].paper_sigma for k in _CTR_TRIO])   # (3,)
+        ctr_cov_blocks = jnp.einsum(
+            "bij,j,bkj->bik", L_bins, paper_sigma_ctr ** 2, L_bins)  # (nb,3,3)
+
+    survey_sigma_dicts = []
+    sampled_sigma_bins = []
+    for b, (knl, s8_ref) in enumerate(zip(knl_bins, sigma8_ref_bins)):
+        d = {}
+        for key, row in spec.marginalized.items():
+            if cov_mode and key in _CTR_TRIO:
+                continue                        # ctr marginal widths added below
+            f_bin = ((knl / paper_knl) ** 2
+                     if row.factor_formula == "knl_over_0p45_sq" else 1.0)
+            d[key] = row.sigma * f_bin
+        if cov_mode:
+            marg = jnp.sqrt(jnp.diagonal(ctr_cov_blocks[b]))     # (3,)
+            for key, width in zip(_CTR_TRIO, marg):
+                d[key] = float(width)
+        survey_sigma_dicts.append(d)
+
+        sb = {}
+        for nm in ("b2", "bG2"):
+            row = spec.sampled[nm]
+            if row.kind == "gaussian":
+                sb[nm] = (row.paper_sigma / s8_ref ** 2
+                          if row.rescale == "sigma8_sq" else row.paper_sigma)
+        sampled_sigma_bins.append(sb)
+
+    if return_ctr_blocks:
+        return survey_sigma_dicts, sampled_sigma_bins, ctr_cov_blocks
+    return survey_sigma_dicts, sampled_sigma_bins
