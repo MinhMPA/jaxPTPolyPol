@@ -48,8 +48,17 @@ def gaussian_marginal_loglike(data, m0, M, cov_inv, mu_p, sigma_p,
     data, m0 : (n_data,) — data vector and linear-model offset t(theta_lin=0).
     M : (n_data, n_lin) — template matrix dt/dtheta_lin.
     cov_inv : (n_data, n_data) — inverse data covariance.
-    mu_p, sigma_p : (n_lin,) — Gaussian prior means and widths on theta_lin.
-        Every entry of sigma_p must be finite and positive (proper prior).
+    mu_p : (n_lin,) — Gaussian prior means on theta_lin.
+    sigma_p : (n_lin,) OR (n_lin, n_lin) — the prior on theta_lin.
+        If 1-d (``ndim == 1``): diagonal prior *widths*; the prior covariance is
+        ``Sigma_p = diag(sigma_p**2)`` and every entry must be finite and
+        positive (proper prior) — the historical behaviour, preserved bit for
+        bit. If 2-d (``ndim == 2``): the full prior **covariance** ``Sigma_p``
+        itself (a symmetric positive-definite matrix; variances on the diagonal,
+        NOT widths). ``Sigma_p**{-1}`` then enters ``A`` via a Cholesky solve and
+        ``ln det Sigma_p = 2 sum log diag(chol(Sigma_p))``. The array rank is a
+        trace-time (static) constant, so the branch is jit-safe. Passing
+        ``sigma_p=jnp.diag(w**2)`` reproduces ``sigma_p=w`` to the float64 floor.
     include_logdet : bool (static)
         If False, drop the ln det(A Sigma_p) term (the "Jeffreys prior"
         best-fit convention of arXiv:2511.20757 SS II.3).
@@ -61,14 +70,25 @@ def gaussian_marginal_loglike(data, m0, M, cov_inv, mu_p, sigma_p,
     """
     resid = data - m0 - M @ mu_p
     Ci_M = cov_inv @ M                                   # (n_data, n_lin)
-    A = M.T @ Ci_M + jnp.diag(1.0 / sigma_p**2)          # (n_lin, n_lin)
+    if jnp.ndim(sigma_p) == 1:
+        Sp_inv = jnp.diag(1.0 / sigma_p**2)              # (n_lin, n_lin)
+        logdet_Sp = jnp.sum(jnp.log(sigma_p**2))         # ln det Sigma_p = sum log sigma^2
+    elif jnp.ndim(sigma_p) == 2:
+        chol_Sp = jnp.linalg.cholesky(sigma_p)           # Sigma_p is the prior covariance
+        Sp_inv = jax.scipy.linalg.cho_solve(
+            (chol_Sp, True), jnp.eye(sigma_p.shape[0], dtype=sigma_p.dtype))
+        logdet_Sp = 2.0 * jnp.sum(jnp.log(jnp.diag(chol_Sp)))
+    else:
+        raise ValueError(
+            "sigma_p must be 1-d (diagonal widths) or 2-d (full Sigma_p "
+            f"covariance); got ndim={jnp.ndim(sigma_p)}")
+    A = M.T @ Ci_M + Sp_inv                              # (n_lin, n_lin)
     b = Ci_M.T @ resid                                   # (n_lin,)
     chol = jnp.linalg.cholesky(A)
     z = jax.scipy.linalg.cho_solve((chol, True), b)
     out = -0.5 * (resid @ cov_inv @ resid - b @ z)
     if include_logdet:
         logdet_A = 2.0 * jnp.sum(jnp.log(jnp.diag(chol)))
-        logdet_Sp = jnp.sum(jnp.log(sigma_p**2))       # ln det Sigma_p = sum log sigma^2
         out = out - 0.5 * (logdet_A + logdet_Sp)
     return out
 
@@ -304,9 +324,12 @@ def make_marginal_log_posterior_perbin(*, bin_theory_fns, bin_data, bin_cov_invs
         An additional block carrying no ``theta_lin`` dependence (the BAO
         likelihood). Enters as a plain ``-0.5 r^T Cinv r`` added once.
     prior_mean_fn, prior_sigma_fn : callables
-        Unchanged Stream-A/B contract: ``fn(theta_nl) -> (n_lin,)`` in
-        ``split.lin_idx`` order. Sliced per bin with the same contiguous
-        bin-major layout as :func:`bin_lin_slices`.
+        ``fn(theta_nl) -> (n_lin,)`` in ``split.lin_idx`` order, sliced per bin
+        with the same contiguous bin-major layout as :func:`bin_lin_slices`.
+        ``prior_sigma_fn`` may alternatively return a stacked per-bin prior
+        *covariance* ``(n_bins, n_per, n_per)`` (full-Sigma_p mode, e.g. the DESI
+        counterterm rotation); then bin ``b`` consumes the ``[b]`` block and
+        :func:`gaussian_marginal_loglike` takes the 2-d Sigma_p branch.
     log_prior_nl_fn, to_physical, full_params_fn, include_logdet
         As in :func:`make_marginal_log_posterior`.
 
@@ -346,18 +369,36 @@ def make_marginal_log_posterior_perbin(*, bin_theory_fns, bin_data, bin_cov_invs
         # that mis-sliced ``split.lin_idx`` (wrong per-bin count, or a dropped
         # bin) would otherwise get a silently wrong posterior instead of an
         # error.  Shapes are static at trace time, so this costs nothing.
-        for name, vec in (("prior_mean_fn", mu_p), ("prior_sigma_fn", sigma_p)):
-            if vec.shape != (n_lin_total,):
+        # ``prior_sigma_fn`` may return either the diagonal widths ``(n_lin,)``
+        # or a stacked per-bin prior *covariance* ``(n_bins, n_per, n_per)``
+        # (full-Sigma_p mode); ``prior_mean_fn`` stays ``(n_lin,)``.
+        if mu_p.shape != (n_lin_total,):
+            raise ValueError(
+                f"prior_mean_fn returned shape {mu_p.shape}, but bin_lin_idx "
+                f"implies {(n_lin_total,)} linear parameters "
+                f"({[len(idx) for idx in bin_lin_idx]} per bin)")
+        sigma_is_cov = sigma_p.ndim == 3
+        if sigma_is_cov:
+            n_per = [len(idx) for idx in bin_lin_idx]
+            if len(set(n_per)) != 1 or sigma_p.shape != (
+                    n_bins, n_per[0], n_per[0]):
                 raise ValueError(
-                    f"{name} returned shape {vec.shape}, but bin_lin_idx "
-                    f"implies {(n_lin_total,)} linear parameters "
-                    f"({[len(idx) for idx in bin_lin_idx]} per bin)")
+                    f"prior_sigma_fn returned shape {sigma_p.shape}; a stacked "
+                    f"per-bin prior covariance must have shape "
+                    f"{(n_bins, n_per[0], n_per[0])} (uniform {n_per} params "
+                    "per bin)")
+        elif sigma_p.shape != (n_lin_total,):
+            raise ValueError(
+                f"prior_sigma_fn returned shape {sigma_p.shape}, but bin_lin_idx "
+                f"implies {(n_lin_total,)} linear parameters "
+                f"({[len(idx) for idx in bin_lin_idx]} per bin)")
         out = log_prior_nl_fn(theta_nl)
         for b in range(n_bins):
             m0, M = bin_templates[b](full)
             sl = prior_slices[b]
+            sig_b = sigma_p[b] if sigma_is_cov else sigma_p[sl]
             out = out + gaussian_marginal_loglike(
-                bin_data[b], m0, M, bin_cov_invs[b], mu_p[sl], sigma_p[sl],
+                bin_data[b], m0, M, bin_cov_invs[b], mu_p[sl], sig_b,
                 include_logdet=include_logdet)
         if has_extra:
             resid = extra_data - extra_theory_fn(full)
