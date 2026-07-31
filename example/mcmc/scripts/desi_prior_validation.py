@@ -185,6 +185,12 @@ EQUIV_N = 64
 EQUIV_SCALE = 0.5
 
 SMOKE = os.environ.get("DESI_GATE_SMOKE") == "1"
+# Frozen-R diagnostic (Stream-B G3 adjudication). When FROZEN_R=1, every
+# theta_NL-dependent prior WIDTH is frozen at its fiducial value (layer-2 R
+# division AND the b2/bG2 sigma8_sq widths) to isolate the prior-volume mean
+# pull; the frozen posterior is DIFFERENT, so its own Hessian-Fisher + tilt are
+# computed below, and it writes to a separate output (no branch_equiv dump).
+FROZEN_R = os.environ.get("FROZEN_R") == "1"
 NUM_SAMPLES = 2_000 if SMOKE else 200_000
 BURN = 200 if SMOKE else 20_000
 
@@ -204,8 +210,9 @@ if (not (CACHE / "taylor_whitening_lcdm.npz").exists()
 
 WHITENING_PATH = CACHE / "taylor_whitening_lcdm.npz"
 TEMPLATES_PATH = CACHE / "taylor_templates_lcdm.npz"
-RESULT_PATH = CACHE / "desi_prior_validation_sigmap.json"
-EQUIV_PATH = CACHE / "branch_equiv_sigmap.json"
+RESULT_PATH = (CACHE / "desi_prior_validation_sigmap_frozenR.json" if FROZEN_R
+               else CACHE / "desi_prior_validation_sigmap.json")
+EQUIV_PATH = CACHE / "branch_equiv_sigmap.json"   # not written in FROZEN_R mode
 
 for p in (WHITENING_PATH, TEMPLATES_PATH):
     if not p.exists():
@@ -218,7 +225,7 @@ if not pathlib.Path(BAO_DATA_DIR).is_dir():
 results = {"config": {"branch": "stream-b-sigmap", "meta": META,
                       "rng_seed_chain": RNG_SEED_CHAIN,
                       "num_samples": NUM_SAMPLES, "burn": BURN,
-                      "smoke": SMOKE,
+                      "smoke": SMOKE, "frozen_r": FROZEN_R,
                       "equiv": {"points_seed": EQUIV_SEED, "n": EQUIV_N,
                                 "scale": EQUIV_SCALE}}}
 
@@ -354,9 +361,26 @@ sigma8_bins_fn, a_ap_bins_fn, sigma8_ref_bins = make_lcdm_rescaling_fns(
     cosmo_sizes=(1,) * N_COSMO_NL, z_bins=z_bins,
     fid_cosmo_native=fid_nl[:N_COSMO_NL], mnu_fixed=MNU_FIXED,
     fixed_cosmo_extras=FIXED_BARYON)
+
+# Frozen-R diagnostic: freeze every theta_NL-dependent prior WIDTH at fiducial
+# by passing constant rescaling closures to make_desi_prior_fns. Setting
+# a_ap == 1 and sigma8 == sigma8_ref forces R == 1 everywhere, which freezes
+# BOTH the layer-2 A_AP*A_amp counterterm width/mean division AND the b2/bG2
+# sigma8_sq sampled widths at their fiducial values. Everything else stays
+# identical: data, templates, BBN/ns priors, and the bGamma3 coevolution MEAN's
+# b1-dependence (a theta-dependent MEAN, not a width -- deliberately left live).
+sigma8_bins_fn_prior, a_ap_bins_fn_prior = sigma8_bins_fn, a_ap_bins_fn
+if FROZEN_R:
+    _sigma8_ref_const = jnp.asarray(sigma8_ref_bins, dtype=jnp.float64)
+    _a_ap_ones = jnp.ones(n_zbins, dtype=jnp.float64)
+    sigma8_bins_fn_prior = lambda theta: _sigma8_ref_const
+    a_ap_bins_fn_prior = lambda theta: _a_ap_ones
+    print("===== FROZEN_R mode: theta-dependent prior WIDTHS frozen at "
+          "fiducial (R==1, b2/bG2 widths at sigma8_ref) =====", flush=True)
+
 desi_prior_mean_fn, desi_prior_sigma_fn, desi_log_prior_nl = make_desi_prior_fns(
     spec, split=split, knl_bins=knl_bins,
-    sigma8_bins_fn=sigma8_bins_fn, a_ap_bins_fn=a_ap_bins_fn,
+    sigma8_bins_fn=sigma8_bins_fn_prior, a_ap_bins_fn=a_ap_bins_fn_prior,
     sigma8_ref_bins=sigma8_ref_bins)
 
 # The spec carries the ctr_rotation trio -> cov-mode: prior_sigma_fn returns
@@ -431,14 +455,18 @@ if not np.all(np.isfinite(mu_tilt_w)):
 # ---------------------------------------------------------------------------
 
 _watch["stage"] = "equivalence dump"
-equiv_pts = EQUIV_SCALE * jax.random.normal(
-    jax.random.PRNGKey(EQUIV_SEED), (EQUIV_N, n_nl))
-equiv_lp = [float(log_post_j(equiv_pts[i])) for i in range(EQUIV_N)]
-EQUIV_PATH.write_text(json.dumps(
-    {"points_seed": EQUIV_SEED, "n": EQUIV_N, "scale": EQUIV_SCALE,
-     "log_post": equiv_lp}, indent=1))
-print(f"equivalence dump -> {EQUIV_PATH} "
-      f"(lp[0]={equiv_lp[0]:.9f}, lp[-1]={equiv_lp[-1]:.9f})", flush=True)
+if FROZEN_R:
+    print("FROZEN_R mode: skipping branch-equivalence dump (the frozen "
+          "posterior is not the cross-branch reference).", flush=True)
+else:
+    equiv_pts = EQUIV_SCALE * jax.random.normal(
+        jax.random.PRNGKey(EQUIV_SEED), (EQUIV_N, n_nl))
+    equiv_lp = [float(log_post_j(equiv_pts[i])) for i in range(EQUIV_N)]
+    EQUIV_PATH.write_text(json.dumps(
+        {"points_seed": EQUIV_SEED, "n": EQUIV_N, "scale": EQUIV_SCALE,
+         "log_post": equiv_lp}, indent=1))
+    print(f"equivalence dump -> {EQUIV_PATH} "
+          f"(lp[0]={equiv_lp[0]:.9f}, lp[-1]={equiv_lp[-1]:.9f})", flush=True)
 
 # ---------------------------------------------------------------------------
 # RWMH chain -- signature/step-scale transplanted from
@@ -543,8 +571,9 @@ results["numbers"] = {
 }
 save_results()
 
-print(f"\n===== VALIDATION {verdict} (smoke={SMOKE}) =====")
+print(f"\n===== VALIDATION {verdict} (smoke={SMOKE}, frozen_r={FROZEN_R}) =====")
 print(f"-> {RESULT_PATH}")
-print(f"-> {EQUIV_PATH}")
+if not FROZEN_R:
+    print(f"-> {EQUIV_PATH}")
 print(f"peak RSS {_watch['peak_gb']:.1f} GB, total "
       f"{time.perf_counter() - _T0:.0f}s", flush=True)

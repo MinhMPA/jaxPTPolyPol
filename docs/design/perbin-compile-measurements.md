@@ -451,3 +451,29 @@ Added a backward-compatible `fixed_cosmo_extras` kwarg to
 `make_lcdm_rescaling_fns` (and `extra_cosmo` to `derived._emulator_input_dict`)
 that injects them as constants (zero θ-derivative); emulator sigma8 is inert to
 them at ~1e-5. Full suite stays 130 green.
+
+### Frozen-R diagnostic (2026-07-31)
+
+Isolation experiment for the G3 mean-vs-mode gap: rerun the full sigmap gate with
+every θ_NL-dependent prior WIDTH frozen at fiducial (`FROZEN_R=1`:
+`sigma8_bins_fn ≡ sigma8_ref_bins`, `a_ap_bins_fn ≡ 1` — freezing both the
+layer-2 A_AP·A_amp division and the b2/bG2 σ8-widths; the bΓ3 coevolution MEAN's
+b1-dependence deliberately stays live). 200k/20k, acceptance 0.386, ESS
+1461–2797, 273 s. Widths 0.933–0.995 (G1 PASS), corr 0.0177 (G2 PASS).
+
+Mean pulls vs the frozen posterior's own tilted center (live-run values in
+parentheses): ombh2 +0.03 (+0.05), omch2 +0.37 (+0.26), **logA −0.78 (−1.15)**,
+**ns −0.06 (−0.28)**, h +0.12 (+0.15).
+
+**Conclusion — the attribution is PARTIAL, and informative.** The θ-dependent
+prior widths fully explain the ns pull and ≈⅓ of the logA pull (−1.15 → −0.78).
+The residual is NOT width-driven: it matches the pre-existing marginal-posterior
+non-Gaussianity documented in the tier2-era logdet-tilt work (with constant
+legacy priors, the logA mean already sat ~0.3–0.45 σ_F beyond the first-order
+tilt) — i.e. marginalization volume through the θ-dependence of A(θ) = MᵀC⁻¹M +
+Σ_p⁻¹ plus model curvature, amplified here by the wider DESI ctr priors. The
+mean-vs-mode methodology rule (CONTEXT.md) is unaffected: the tilted center
+remains the mode-level comparison target; the mean offset is genuine, now
+decomposed into a width-volume part (~0.4 σ_F on logA, all of ns) and an
+intrinsic-curvature part (~0.8 σ_F on logA). Evidence:
+`example/mcmc/cache/desi_prior_validation_sigmap_frozenR.json`.
