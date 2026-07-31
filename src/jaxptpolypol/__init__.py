@@ -55,7 +55,11 @@ from .marginal_taylor import (
     save_taylor_templates,
 )
 from .desi_priors import (
+    DESI_F_FID,
     DesiPriorSpec,
     SpecValidationError,
+    ctr_rotation_matrices,
     load_desi_prior_spec,
+    make_desi_prior_fns,
+    make_lcdm_rescaling_fns,
 )
