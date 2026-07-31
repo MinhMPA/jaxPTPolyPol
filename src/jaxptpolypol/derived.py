@@ -65,9 +65,23 @@ def _emulator_input_dict(
     *,
     emulator_parameters,
     sigma8_redshift: float,
+    extra_cosmo=None,
 ):
-    """Build an emulator input dict, injecting ``z=0`` when required."""
+    """Build an emulator input dict, injecting ``z=0`` when required.
+
+    ``extra_cosmo`` optionally supplies fixed cosmology inputs the emulator
+    expects but that are absent from the sampled native basis (e.g. the
+    baryon-feedback nuisances ``A_b``/``eta_b``/``logT_AGN`` when only the LCDM
+    core is varied). Values are injected as constants, so they carry no
+    derivative w.r.t. the sampled cosmology.
+    """
     base = cosmo_obj.to_dict()
+    if extra_cosmo:
+        base = {
+            **base,
+            **{k: jnp.atleast_1d(jnp.asarray(v, dtype=jnp.float64))
+               for k, v in extra_cosmo.items()},
+        }
     z_value = jnp.atleast_1d(jnp.asarray(sigma8_redshift, dtype=jnp.float64))
 
     if emulator_parameters is None:

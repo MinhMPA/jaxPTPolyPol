@@ -340,7 +340,8 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
 
 
 def make_lcdm_rescaling_fns(*, pklin_emulator, cosmo_keys, cosmo_sizes,
-                            z_bins, fid_cosmo_native, mnu_fixed=0.06):
+                            z_bins, fid_cosmo_native, mnu_fixed=0.06,
+                            fixed_cosmo_extras=None):
     """Build (sigma8_bins_fn, a_ap_bins_fn, sigma8_ref_bins) closures.
 
     theta_NL[: n_cosmo] is interpreted as the native cosmology vector (all
@@ -348,6 +349,14 @@ def make_lcdm_rescaling_fns(*, pklin_emulator, cosmo_keys, cosmo_sizes,
     is sigma8(z_b) at fid_cosmo_native, so A_amp(fid) = 1 exactly. Mirrors the
     emulator wiring of make_lcdm_derived_params_fn (derived.py); background from
     ps_1loop_jax (physical units).
+
+    ``fixed_cosmo_extras`` (mapping ``name -> value``, optional) supplies fixed
+    emulator inputs that are NOT in the sampled ``cosmo_keys`` basis but that the
+    linear-Pk emulator requires -- e.g. the baryon-feedback nuisances
+    ``{'A_b': ..., 'eta_b': ..., 'logT_AGN': ...}`` when only the LCDM core
+    (ombh2, omch2, logA, ns, h) is varied. They are injected as constants into
+    the sigma8 emulator call, so sigma8 (hence the A_amp rescaling) carries no
+    spurious derivative w.r.t. them.
     """
     from ps_1loop_jax import background as bg
 
@@ -381,7 +390,7 @@ def make_lcdm_rescaling_fns(*, pklin_emulator, cosmo_keys, cosmo_sizes,
         for z in z_arr:
             emulator_input = _emulator_input_dict(
                 cosmo_obj, emulator_parameters=emulator_parameters,
-                sigma8_redshift=z)
+                sigma8_redshift=z, extra_cosmo=fixed_cosmo_extras)
             pklin = jnp.ravel(jnp.asarray(
                 pklin_emulator.predict(emulator_input), dtype=jnp.float64))
             vals.append(sigma8_from_linear_pk(emulator_modes / h, pklin))
