@@ -373,6 +373,111 @@ correlations. **Gate 2: PASS.** Numbers in
 `example/mcmc/cache/gate2_readjudication.json`; summary stamped into
 `cache/taylor_validation.json` (`gate2_final`).
 
+## Stream-B gate (DESI priors) — sigmap branch (added 2026-07-31)
+
+Acceptance gate for branch `stream-b-sigmap` (Amendment 1): the production
+Taylor surrogate marginal posterior under the DESI DR1-reanalysis
+(2511.20757) priors, wired through `make_desi_prior_fns` **cov-mode**. The
+surrogate embeds the spec priors, so "Fisher with the same spec" is the
+surrogate's own Hessian at the fiducial, `F = -hess logpost(0)` (whitened
+coords; Tier-1 established curvature == Fisher–Schur there). Gates compare a
+200 000-step RWMH chain (seed 20260731, burn 20 000, gradient-free
+`run_rwmh_python`) against that Hessian-Fisher on the 5-parameter cosmology
+block; the mean check uses the AD-tilted center
+`mu_tilt = fid + F^{-1} grad logpost(fid)`. Config: 7 z-bins, P+B
+(k∈[0.02,0.20], bispectrum k≤0.08) + DESI-DR2 BAO + BBN(ombh2) + ns. Chain
+wall 461 s at 2.31 ms/step, acceptance 0.357, peak RSS 3.25 GB, 569 s total.
+Script: `example/mcmc/scripts/desi_prior_validation.py`; numbers in
+`cache/desi_prior_validation_sigmap.json`.
+
+| param | width ratio (chain/F) | ESS | tilt pred (σ_F) | chain pull (σ_F) | mean pull vs tilt (σ_F) |
+|-------|----------------------|-----|-----------------|------------------|-------------------------|
+| ombh2 | 0.995 | 2719 | −0.72 | −0.67 | +0.047 |
+| omch2 | 0.989 | 1790 | −0.96 | −0.71 | +0.256 |
+| logA  | 1.002 | 1505 | +1.91 | +0.76 | −1.155 |
+| ns    | 1.014 | 1220 | +0.71 | +0.44 | −0.276 |
+| h     | 0.986 | 2196 | −0.97 | −0.82 | +0.151 |
+
+max |corr diff| = 0.021 (< 0.1). **G1 widths PASS, G2 correlations PASS,
+G3 means REVIEW → verdict REVIEW.**
+
+**G3 diagnosis (not a prior-wiring bug).** The DESI counterterm priors
+(c2→30 etc.) tilt the posterior strongly away from the fiducial:
+`|mu_tilt_w| = 3.21` (whitened σ). The single Newton step `mu_tilt` therefore
+extrapolates the mean over a large, mildly non-Gaussian displacement and
+**systematically overshoots** the true MCMC mean in every cosmology
+parameter (|chain pull| < |tilt pred| for all five; worst on logA, the
+amplitude parameter most coupled to the counterterm centering: tilt predicts
++1.91 σ_F, chain moved +0.76 σ_F, residual −1.15 σ_F). This is a limitation of
+the AD-tilt *mean predictor*, not of the prior wiring or the chain: **G1
+(widths, ~1 %) and G2 (correlations, 0.021) both PASS at ESS 1200–2700**, i.e.
+the surrogate chain reproduces the Hessian-Fisher second moments under the
+DESI priors exactly, which a mis-wired prior could not do. The gradient at the
+fiducial is dominated by the expected DESI prior-mean pulls (amplitude/
+counterterm direction), as required by the brief's Step-3 check before
+escalation. Recommended follow-up if a tighter mean gate is wanted: use an
+iterated tilt (Newton refinement) or the chain mean itself as the reference,
+rather than a single first-order step.
+
+**Templates reused unmodified (prior-independence), UNROTATED on this branch.**
+The Taylor tensors (`cache/taylor_templates_lcdm.npz`) are the *same* artifact
+built for the pre-DESI validation — nothing about them depends on the prior. On
+the sigmap branch they also stay in our μ-space tilde counterterm basis
+(unrotated): the exact paper per-multipole c0/c2/c4 prior arrives entirely
+through the cov-mode `(n_bins, 11, 11)` blocks
+`L(f)·diag(paper_σ²)·L(f)ᵀ`, consumed by `gaussian_marginal_loglike`'s
+full-Σ_p branch, so the Hessian-Fisher carries the full correlated counterterm
+prior automatically.
+
+**Cross-branch equivalence (primary cross-validation).** The equivalence dump
+`cache/branch_equiv_sigmap.json` records `log_post` at 64 fixed whitened points
+`0.5·normal(PRNGKey(20260731),(64,n_nl))` (include_logdet). The rotation branch
+(rotated templates + diagonal paper prior) generates the identical points; on
+the three points visible during the parallel run the two branches' `log_post`
+agree to ~1–3×10⁻¹² (≪ the 1e-5 Task-E threshold), and the full 200 000-step
+chains produce **bit-identical gate statistics** (width ratios, mean pulls, ESS
+all matching). The two exact representations are therefore numerically
+equivalent, and the G3 REVIEW is a shared property of the tilted posterior +
+Newton predictor, not a per-branch artifact. (Full 64-point Δ comparison is
+Task E, once both `branch_equiv_*.json` are collocated.)
+
+**One Task-5σ integration fix was required for this gate.** The production
+linear-Pk emulator (`jense_2023_camb_lcdm_Pk_lin`) lists baryon-feedback inputs
+`A_b/eta_b/logT_AGN` among its parameters, but those are *fixed* in the LCDM
+layout and live outside the sampled nl cosmo block, so `make_lcdm_rescaling_fns`
+(which slices `theta_nl[:n_cosmo]`) could not supply them (the Task-5σ toy
+tests used synthetic rescaling closures and never exercised the real emulator).
+Added a backward-compatible `fixed_cosmo_extras` kwarg to
+`make_lcdm_rescaling_fns` (and `extra_cosmo` to `derived._emulator_input_dict`)
+that injects them as constants (zero θ-derivative); emulator sigma8 is inert to
+them at ~1e-5. Full suite stays 130 green.
+
+### Frozen-R diagnostic (2026-07-31)
+
+Isolation experiment for the G3 mean-vs-mode gap: rerun the full sigmap gate with
+every θ_NL-dependent prior WIDTH frozen at fiducial (`FROZEN_R=1`:
+`sigma8_bins_fn ≡ sigma8_ref_bins`, `a_ap_bins_fn ≡ 1` — freezing both the
+layer-2 A_AP·A_amp division and the b2/bG2 σ8-widths; the bΓ3 coevolution MEAN's
+b1-dependence deliberately stays live). 200k/20k, acceptance 0.386, ESS
+1461–2797, 273 s. Widths 0.933–0.995 (G1 PASS), corr 0.0177 (G2 PASS).
+
+Mean pulls vs the frozen posterior's own tilted center (live-run values in
+parentheses): ombh2 +0.03 (+0.05), omch2 +0.37 (+0.26), **logA −0.78 (−1.15)**,
+**ns −0.06 (−0.28)**, h +0.12 (+0.15).
+
+**Conclusion — the attribution is PARTIAL, and informative.** The θ-dependent
+prior widths fully explain the ns pull and ≈⅓ of the logA pull (−1.15 → −0.78).
+The residual is NOT width-driven: it matches the pre-existing marginal-posterior
+non-Gaussianity documented in the tier2-era logdet-tilt work (with constant
+legacy priors, the logA mean already sat ~0.3–0.45 σ_F beyond the first-order
+tilt) — i.e. marginalization volume through the θ-dependence of A(θ) = MᵀC⁻¹M +
+Σ_p⁻¹ plus model curvature, amplified here by the wider DESI ctr priors. The
+mean-vs-mode methodology rule (CONTEXT.md) is unaffected: the tilted center
+remains the mode-level comparison target; the mean offset is genuine, now
+decomposed into a width-volume part (~0.4 σ_F on logA, all of ns) and an
+intrinsic-curvature part (~0.8 σ_F on logA). Evidence:
+`example/mcmc/cache/desi_prior_validation_sigmap_frozenR.json`.
+
 ## Stream-B Task E: cross-branch equivalence of the two ctr-prior representations (2026-07-31)
 
 The two exact representations of the per-multipole ctr prior — `stream-b-rotation`

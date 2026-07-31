@@ -54,3 +54,13 @@ from .marginal_taylor import (
     reweighted_moments,
     save_taylor_templates,
 )
+from .desi_priors import (
+    DESI_F_FID,
+    DesiPriorSpec,
+    SpecValidationError,
+    build_prior_sigmas_from_desi_spec,
+    ctr_rotation_matrices,
+    load_desi_prior_spec,
+    make_desi_prior_fns,
+    make_lcdm_rescaling_fns,
+)

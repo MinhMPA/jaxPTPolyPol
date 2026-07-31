@@ -1,0 +1,91 @@
+metadata:
+  source: "arXiv:2511.20757"
+  table: "I"
+  convention_map: "docs/design/desi-convention-map.md"
+  paper_knl: 0.45
+  production_k_nl_rsd: 0.45
+  deviations:
+    - "c0/c2/c4 carry ctr_rotation: multipole_to_tilde. Paper priors live in the
+       CLASS-PT per-multipole basis (Eq 2.21-2.23); our code coefficients are the
+       mu-space tilde basis (Eq 2.15). The exact per-bin f-dependent correlated prior
+       L(f).diag(sigma_paper^2).L(f)^T is assembled at runtime by make_desi_prior_fns
+       (cov-mode); paper_mean/paper_sigma below are the paper diagonal verbatim
+       (factor 1, offset 0). See desi-convention-map.md section 3.1."
+    - "P_shot/B_shot/A_shot use offset +1 (our mean-1 Poisson amplitude vs paper mean-0
+       deviation)."
+    - "a0/a2 factor is per-bin (knl_b/0.45)^2 via factor_formula knl_over_0p45_sq."
+    - "c1 factor 0.45^2=0.2025 (production k_nl_rsd=0.45); additive bare-Z1 operator
+       verified from ref [160] arXiv:2110.10161 Eq (3.11)."
+    - "b2/bG2 sampled raw; paper priors on b*sigma8^2, raw width 5/sigma8(z)^2."
+marginalized:
+  shared.bias.bGamma3:
+    {paper_mean: null, paper_sigma: 1.0, paper_units: "unit",
+     paper_variable: "bGamma3*A_AP*A_amp^2", factor: 1.0, offset: 0.0,
+     mean: null, sigma: 1.0, rescale: "A_AP*A_amp^2",
+     factor_formula: null, mean_formula: "coevolution_bGamma3"}
+  shared.stoch.P_shot:
+    {paper_mean: 0.0, paper_sigma: 1.0, paper_units: "unit",
+     paper_variable: "P_shot", factor: 1.0, offset: 1.0,
+     mean: 1.0, sigma: 1.0, rescale: "none",
+     factor_formula: null, mean_formula: null}
+  # --- Counterterm trio c0/c2/c4: ctr_rotation multipole_to_tilde (map section 3.1) ---
+  # paper_mean/paper_sigma are the paper's per-multipole-basis diagonal, verbatim
+  # (factor 1, offset 0). The exact per-bin f-dependent correlated prior on our
+  # mu-space tilde coefficients is L(f).diag(sigma_paper^2).L(f)^T, assembled at
+  # runtime by make_desi_prior_fns (cov-mode); this branch's representation is exact.
+  pk.ctr.c0:
+    {paper_mean: 0.0, paper_sigma: 30.0, paper_units: "(Mpc/h)^2",
+     paper_variable: "c0*A_AP*A_amp", factor: 1.0, offset: 0.0,
+     mean: 0.0, sigma: 30.0, rescale: "A_AP*A_amp",
+     factor_formula: null, mean_formula: null, ctr_rotation: "multipole_to_tilde"}
+  # c2: ctr_rotation multipole_to_tilde; runtime L(f) block, see c0 note + map 3.1.
+  pk.ctr.c2:
+    {paper_mean: 30.0, paper_sigma: 30.0, paper_units: "(Mpc/h)^2",
+     paper_variable: "c2*A_AP*A_amp", factor: 1.0, offset: 0.0,
+     mean: 30.0, sigma: 30.0, rescale: "A_AP*A_amp",
+     factor_formula: null, mean_formula: null, ctr_rotation: "multipole_to_tilde"}
+  # c4: ctr_rotation multipole_to_tilde; c4=c_tilde4 diagonal-exact, but its
+  # off-diagonal coupling to c0/c2 enters the runtime L(f) block. See map 3.1.
+  pk.ctr.c4:
+    {paper_mean: 0.0, paper_sigma: 30.0, paper_units: "(Mpc/h)^2",
+     paper_variable: "c4*A_AP*A_amp", factor: 1.0, offset: 0.0,
+     mean: 0.0, sigma: 30.0, rescale: "A_AP*A_amp",
+     factor_formula: null, mean_formula: null, ctr_rotation: "multipole_to_tilde"}
+  pk.ctr.cfog:
+    {paper_mean: 400.0, paper_sigma: 400.0, paper_units: "(Mpc/h)^4",
+     paper_variable: "ctilde*A_AP*A_amp", factor: 1.0, offset: 0.0,
+     mean: 400.0, sigma: 400.0, rescale: "A_AP*A_amp",
+     factor_formula: null, mean_formula: null}
+  pk.stoch.a0:
+    {paper_mean: 0.0, paper_sigma: 1.0, paper_units: "unit",
+     paper_variable: "a0", factor: 1.0, offset: 0.0,
+     mean: 0.0, sigma: 1.0, rescale: "none",
+     factor_formula: "knl_over_0p45_sq", mean_formula: null}
+  pk.stoch.a2:
+    {paper_mean: 0.0, paper_sigma: 1.0, paper_units: "unit",
+     paper_variable: "a2", factor: 1.0, offset: 0.0,
+     mean: 0.0, sigma: 1.0, rescale: "none",
+     factor_formula: "knl_over_0p45_sq", mean_formula: null}
+  bk.ctr.c1:
+    {paper_mean: 0.0, paper_sigma: 5.0, paper_units: "(Mpc/h)^2",
+     paper_variable: "c1*A_AP*A_amp", factor: 0.2025, offset: 0.0,
+     mean: 0.0, sigma: 1.0125, rescale: "A_AP*A_amp",
+     factor_formula: null, mean_formula: null}
+  bk.stoch.B_shot:
+    {paper_mean: 0.0, paper_sigma: 1.0, paper_units: "unit",
+     paper_variable: "B_shot*A_AP*A_amp", factor: 1.0, offset: 1.0,
+     mean: 1.0, sigma: 1.0, rescale: "A_AP*A_amp",
+     factor_formula: null, mean_formula: null}
+  bk.stoch.A_shot:
+    {paper_mean: 0.0, paper_sigma: 1.0, paper_units: "unit",
+     paper_variable: "A_shot", factor: 1.0, offset: 1.0,
+     mean: 1.0, sigma: 1.0, rescale: "none",
+     factor_formula: null, mean_formula: null}
+sampled:
+  b1: {kind: flat}
+  b2:
+    {kind: gaussian, paper_mean: 0.0, paper_sigma: 5.0,
+     paper_variable: "b2*sigma8(z)^2", rescale: "sigma8_sq"}
+  bG2:
+    {kind: gaussian, paper_mean: 0.0, paper_sigma: 5.0,
+     paper_variable: "bG2*sigma8(z)^2", rescale: "sigma8_sq"}

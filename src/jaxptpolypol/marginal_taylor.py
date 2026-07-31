@@ -343,11 +343,26 @@ def make_marginal_log_posterior_taylor(tt, *, bin_data, bin_cov_invs,
         # The per-bin prior slices must tile the prior vectors exactly (same guard
         # as the per-bin builder): a mis-sized prior width would otherwise give a
         # silently wrong posterior. Shapes are static at trace time -- free.
-        for name, vec in (("prior_mean_fn", mu_p), ("prior_sigma_fn", sigma_p)):
-            if vec.shape != (n_lin_total,):
+        # ``prior_sigma_fn`` may return the diagonal widths ``(n_lin,)`` or a
+        # stacked per-bin prior *covariance* ``(n_bins, n_per, n_per)``
+        # (full-Sigma_p mode); ``prior_mean_fn`` stays ``(n_lin,)``.
+        if mu_p.shape != (n_lin_total,):
+            raise ValueError(
+                f"prior_mean_fn returned shape {mu_p.shape}, but tt implies "
+                f"{(n_lin_total,)} linear parameters ({bin_counts} per bin)")
+        sigma_is_cov = sigma_p.ndim == 3
+        if sigma_is_cov:
+            if len(set(bin_counts)) != 1 or sigma_p.shape != (
+                    n_bins, bin_counts[0], bin_counts[0]):
                 raise ValueError(
-                    f"{name} returned shape {vec.shape}, but tt implies "
-                    f"{(n_lin_total,)} linear parameters ({bin_counts} per bin)")
+                    f"prior_sigma_fn returned shape {sigma_p.shape}; a stacked "
+                    f"per-bin prior covariance must have shape "
+                    f"{(n_bins, bin_counts[0], bin_counts[0])} (uniform "
+                    f"{bin_counts} params per bin)")
+        elif sigma_p.shape != (n_lin_total,):
+            raise ValueError(
+                f"prior_sigma_fn returned shape {sigma_p.shape}, but tt implies "
+                f"{(n_lin_total,)} linear parameters ({bin_counts} per bin)")
         out = log_prior_nl_fn(theta_nl)
         for b in range(n_bins):
             m0 = tt.bin_m00[b] + tt.bin_J[b] @ delta
@@ -356,8 +371,9 @@ def make_marginal_log_posterior_taylor(tt, *, bin_data, bin_cov_invs,
                     "ijk,j,k->i", tt.bin_H[b], delta, delta)
             M = tt.bin_M0[b] + jnp.einsum("ijk,k->ij", tt.bin_dM[b], delta)
             sl = prior_slices[b]
+            sig_b = sigma_p[b] if sigma_is_cov else sigma_p[sl]
             out = out + gaussian_marginal_loglike(
-                bin_data[b], m0, M, bin_cov_invs[b], mu_p[sl], sigma_p[sl],
+                bin_data[b], m0, M, bin_cov_invs[b], mu_p[sl], sig_b,
                 include_logdet=include_logdet)
         if has_extra:
             resid = extra_data - extra_theory_fn(full_params_fn(theta_nl))
