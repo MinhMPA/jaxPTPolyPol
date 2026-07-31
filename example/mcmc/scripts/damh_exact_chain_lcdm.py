@@ -375,7 +375,7 @@ while n_done < TOTAL:
 stage1_rate = n_stage1 / TOTAL
 stage2_rate = n_stage2 / n_stage1 if n_stage1 > 0 else 0.0
 move_rate = n_stage2 / TOTAL
-print(f"\n===== DA-MH COMPLETE =====", flush=True)
+print("\n===== DA-MH COMPLETE =====", flush=True)
 print(f"kept {TOTAL} draws -> {CHAIN_PATH}", flush=True)
 print(f"stage-1 rate {stage1_rate:.4f}  stage-2 rate {stage2_rate:.4f}  "
       f"move rate {move_rate:.4f}  exact evals {n_exact}", flush=True)

@@ -68,6 +68,7 @@ from jax.scipy.linalg import inv
 from ps_1loop_jax import background as bg
 
 from jaxptpolypol import (
+    LIN_SURVEY_KEYS,
     bin_lin_slices,
     build_taylor_templates,
     save_taylor_templates,
@@ -102,6 +103,17 @@ from jaxptpolypol.theory import (
 )
 
 TEMPLATES_ONLY = "--templates-only" in sys.argv[1:]
+# --c1-sampled: build the Tier-3 sampled-c1 templates. c1 leaves the
+# marginalized block (10 lin/bin) and joins theta_NL (n_nl 26 -> 33 at 7 bins);
+# the theory is exactly quadratic in c1, so the order-2 m0 surrogate carries the
+# c1^2 the marginalized (linearized) path drops. Distinct output filenames +
+# c1_treatment meta stamp; everything else (theory/grid/whitening machinery) is
+# identical to the marginalized build. See CONTEXT.md's c1 section.
+C1_SAMPLED = "--c1-sampled" in sys.argv[1:]
+C1_TREATMENT = "sampled" if C1_SAMPLED else "marginalized"
+_C1_KEY = ('bk', 'ctr', 'c1')
+LIN_SURVEY_KEYS_BUILD = (tuple(k for k in LIN_SURVEY_KEYS if k != _C1_KEY)
+                         if C1_SAMPLED else LIN_SURVEY_KEYS)
 
 # ---------------------------------------------------------------------------
 # RSS watchdog: sample `ps -o rss=` in a thread, hard-abort above the stage
@@ -206,36 +218,45 @@ META = {
 }
 
 # --- Template vs whitening meta stamps -------------------------------------
-# The Taylor tensors (m0, M and their theta_NL derivatives) are functions of the
-# THEORY and GRID only, so the TEMPLATES npz meta carries the theory-config
-# identifiers that determine template validity: a sha256 hash binding the full
-# set, plus the short per-bin tuples verbatim (as strings) for human inspection.
-# Templates are PRIOR-INDEPENDENT -- prior identifiers are deliberately NOT
-# stamped here (changing a prior sigma does not invalidate a template). They go
-# on the WHITENING npz meta below, which DOES depend on the legacy prior spec.
-# (load_taylor_templates treats these new keys as backward-compatible: a cache
-# predating them warns rather than errors -- see marginal_taylor._BACKWARD_...)
-_THEORY_CONFIG = (V_bins, n_bar, knl_bins, z_bins,
-                  (K_PK_MIN, K_PK_MAX, N_K, K_BK_MIN, K_BK_MAX), K_NL_RSD)
-THEORY_CONFIG_HASH = hashlib.sha256(repr(_THEORY_CONFIG).encode()).hexdigest()
-TEMPLATE_META = {
-    **META,
-    "theory_config_hash": THEORY_CONFIG_HASH,
-    "z_bins": str(z_bins), "knl_bins": str(knl_bins),
-    "n_bar": str(n_bar), "V_bins": str(V_bins),
-}
-# Whitening depends on the legacy EFT/stochastic prior spec + the BBN/ns cosmo
-# priors, so its meta records them (the templates' meta does not).
-WHITENING_META = {
-    **META,
-    "prior_spec": "eft_eq12_2405_02252",
-    "cosmo_priors": COSMO_PRIORS,
-}
+# Both stamps carry the c1 treatment ("marginalized" | "sampled") so a loaded
+# cache is self-describing and a sampled cache cannot be silently used as a
+# marginalized one (c1_treatment is in marginal_taylor._BACKWARD_COMPAT_META_KEYS,
+# so a base cache predating the key warns rather than errors).
+#
+# MARGINALIZED mode keeps the richer template/whitening stamps (theory_config_hash
+# / prior_spec) -- unchanged from the base build. SAMPLED mode stamps a single
+# FLAT meta_for-style dict ({**META, c1_treatment: "sampled"}) on BOTH npz, so the
+# Tier-3 validation can load the pair with one expect_meta via
+# stream_common.load_templates_and_whitening.
+if C1_SAMPLED:
+    TEMPLATE_META = {**META, "c1_treatment": C1_TREATMENT}
+    WHITENING_META = {**META, "c1_treatment": C1_TREATMENT}
+else:
+    # The Taylor tensors are functions of the THEORY and GRID only, so the
+    # TEMPLATES npz meta carries the theory-config identifiers that determine
+    # template validity: a sha256 hash binding the full set, plus the short
+    # per-bin tuples verbatim (as strings). Templates are PRIOR-INDEPENDENT --
+    # prior identifiers live on the WHITENING npz meta below.
+    _THEORY_CONFIG = (V_bins, n_bar, knl_bins, z_bins,
+                      (K_PK_MIN, K_PK_MAX, N_K, K_BK_MIN, K_BK_MAX), K_NL_RSD)
+    THEORY_CONFIG_HASH = hashlib.sha256(repr(_THEORY_CONFIG).encode()).hexdigest()
+    TEMPLATE_META = {
+        **META, "c1_treatment": C1_TREATMENT,
+        "theory_config_hash": THEORY_CONFIG_HASH,
+        "z_bins": str(z_bins), "knl_bins": str(knl_bins),
+        "n_bar": str(n_bar), "V_bins": str(V_bins),
+    }
+    WHITENING_META = {
+        **META, "c1_treatment": C1_TREATMENT,
+        "prior_spec": "eft_eq12_2405_02252",
+        "cosmo_priors": COSMO_PRIORS,
+    }
 
 CACHE = pathlib.Path("cache")
-WHITENING_PATH = CACHE / "taylor_whitening_lcdm.npz"
-TEMPLATES_PATH = CACHE / "taylor_templates_lcdm.npz"
-SUMMARY_PATH = CACHE / "taylor_build_summary.json"
+_SUFFIX = "_c1s" if C1_SAMPLED else ""
+WHITENING_PATH = CACHE / f"taylor_whitening_lcdm{_SUFFIX}.npz"
+TEMPLATES_PATH = CACHE / f"taylor_templates_lcdm{_SUFFIX}.npz"
+SUMMARY_PATH = CACHE / f"taylor_build_summary{_SUFFIX}.json"
 
 if not pathlib.Path(BAO_DATA_DIR).is_dir():
     sys.exit(f"BAO data dir not found at {BAO_DATA_DIR!r} -- this script must "
@@ -243,6 +264,9 @@ if not pathlib.Path(BAO_DATA_DIR).is_dir():
 if not pathlib.Path(PFS_EMULATOR).is_file():
     sys.exit(f"PFS emulator not found at {PFS_EMULATOR!r}.")
 CACHE.mkdir(exist_ok=True)
+print(f"===== c1_treatment = {C1_TREATMENT} "
+      f"(lin keys/bin = {len(LIN_SURVEY_KEYS_BUILD)}); outputs -> "
+      f"{TEMPLATES_PATH.name}, {WHITENING_PATH.name} =====", flush=True)
 if TEMPLATES_ONLY and not WHITENING_PATH.exists():
     print(f"WARNING: --templates-only but {WHITENING_PATH} does not exist; "
           "the validation script will need it -- run the full build later.",
@@ -329,7 +353,8 @@ fixed_cosmo = [5, 6, 7, 8]
 split = split_marginal_indices(
     n_cosmo_params=n_cosmo_params, survey_keys=joint_survey_keys,
     n_bins=n_zbins, fixed_cosmo=fixed_cosmo,
-    fixed_survey_keys={('shared', 'k_nl', None), ('shared', 'ndens', None)})
+    fixed_survey_keys={('shared', 'k_nl', None), ('shared', 'ndens', None)},
+    lin_survey_keys=LIN_SURVEY_KEYS_BUILD)
 n_nl = split.n_nl
 varied_idx = sorted(list(split.nl_idx) + list(split.lin_idx))
 cosmo_varied_global = [i for i in range(n_cosmo_params) if i not in fixed_cosmo]
@@ -536,6 +561,8 @@ print(f"-> {TEMPLATES_PATH} "
 
 summary = {
     "templates_only": TEMPLATES_ONLY,
+    "c1_treatment": C1_TREATMENT,
+    "lin_keys_per_bin": len(LIN_SURVEY_KEYS_BUILD),
     "wall_s": {
         "setup": round(t_stage1, 1),
         "fisher_whitening": round(t_stage2, 1),

@@ -79,6 +79,28 @@ META = {
     "order2_m0": True,
 }
 
+#: c1 treatments: 'marginalized' (the base LCDM split, c1 in theta_lin) and
+#: 'sampled' (the Tier-3 split, c1 moved into theta_NL). See CONTEXT.md's c1
+#: section and build_taylor_templates_lcdm.py --c1-sampled.
+C1_TREATMENTS = ("marginalized", "sampled")
+
+
+def meta_for(treatment):
+    """Config-stamp META for a c1 treatment, ``{**META, 'c1_treatment': treatment}``.
+
+    The Tier-3 c1-sampled build (``build_taylor_templates_lcdm.py --c1-sampled``)
+    stamps ``meta_for('sampled')`` on BOTH its templates and whitening npz (a
+    single flat dict, so :func:`load_templates_and_whitening`'s one-``expect_meta``
+    contract holds for both files). The base build's marginalized npz predate the
+    key and stamp the plain :data:`META`; they still load because ``c1_treatment``
+    is in ``marginal_taylor._BACKWARD_COMPAT_META_KEYS`` (templates) and because
+    the marginalized side is loaded with the plain :data:`META` expectation.
+    """
+    if treatment not in C1_TREATMENTS:
+        raise ValueError(
+            f"unknown c1 treatment {treatment!r}; expected one of {C1_TREATMENTS}")
+    return {**META, "c1_treatment": treatment}
+
 
 # ---------------------------------------------------------------------------
 # Template/whitening loading (strict meta guards).

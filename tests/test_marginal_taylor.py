@@ -386,6 +386,35 @@ def test_load_missing_new_keys_warns_not_raises(tmp_path):
             n_bins=2, theory_config_hash="abc"))
 
 
+def test_load_missing_c1_treatment_warns_not_raises(tmp_path):
+    """The c1_treatment key (added for the Tier-3 sampled/marginalized split) is
+    backward-compatible: a cache predating it (e.g. the on-disk marginalized
+    templates) loads with a UserWarning when expect_meta carries c1_treatment,
+    but a VALUE mismatch on it still raises."""
+    from jaxptpolypol.marginal_taylor import (
+        build_taylor_templates, save_taylor_templates, load_taylor_templates)
+
+    theory, fpf, packed = _toy_full_setup()
+    theta0 = jnp.array([0.3, -0.2])
+    tt = build_taylor_templates(
+        bin_theory_fns=[theory], bin_lin_idx=[(2, 3)], full_params_fn=fpf,
+        theta0=theta0)
+
+    path = tmp_path / "tt.npz"
+    # Legacy stored meta: no c1_treatment yet.
+    save_taylor_templates(tt, path, meta=dict(n_bins=1, n_k=8))
+    with pytest.warns(UserWarning, match="c1_treatment"):
+        loaded = load_taylor_templates(
+            path, expect_meta=dict(n_bins=1, n_k=8, c1_treatment="marginalized"))
+    assert np.array_equal(np.asarray(loaded.theta0), np.asarray(tt.theta0))
+
+    # A VALUE mismatch on c1_treatment (present in BOTH metas) still raises.
+    save_taylor_templates(tt, path, meta=dict(n_bins=1, c1_treatment="sampled"))
+    with pytest.raises(ValueError, match="c1_treatment"):
+        load_taylor_templates(
+            path, expect_meta=dict(n_bins=1, c1_treatment="marginalized"))
+
+
 def test_save_rejects_non_flat_meta(tmp_path):
     """A nested meta value is not a config identifier -> TypeError at save."""
     from jaxptpolypol.marginal_taylor import (

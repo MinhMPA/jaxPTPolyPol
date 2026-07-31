@@ -421,6 +421,7 @@ _MISSING = "<absent>"
 # npz meta, never here, and are deliberately not in this set.
 _BACKWARD_COMPAT_META_KEYS = frozenset({
     "theory_config_hash", "z_bins", "knl_bins", "n_bar", "V_bins",
+    "c1_treatment",
 })
 
 

@@ -608,3 +608,143 @@ def test_ctr_rotation_bogus_token_value_raises(tmp_path):
             raw["marginalized"][k]["ctr_rotation"] = "bogus_rotation"
     with pytest.raises(SpecValidationError, match="ctr_rotation"):
         load_desi_prior_spec(_mutated_spec_path(tmp_path, mutate))
+
+
+# =============================================================================
+# Tier-3 c1-sampled: reduced lin_keys threading + sampled_marginal_priors
+# (make_desi_prior_fns extension; TDD). The c1-sampled split marginalizes only
+# 10 keys/bin (c1 removed) and samples c1, whose prior arrives via
+# sampled_marginal_priors carrying the SAME A_AP*A_amp rescale the marginalized
+# c1 row would have carried.
+# =============================================================================
+
+_C1_KEY = ("bk", "ctr", "c1")
+LIN_KEYS_NO_C1 = tuple(k for k in LIN_SURVEY_KEYS if k != _C1_KEY)
+
+
+def _split_no_c1():
+    return split_marginal_indices(
+        n_cosmo_params=N_COSMO, survey_keys=SURVEY_KEYS_TOY, n_bins=N_BINS,
+        lin_survey_keys=LIN_KEYS_NO_C1)
+
+
+def _c1_nl_positions(split):
+    """Per-bin theta_NL indices of the sampled c1, robust to survey-key order.
+
+    (In this toy, SURVEY_KEYS_TOY puts the LIN block first, so c1 sits BEFORE
+    b1 in each bin's nl sub-block -- unlike production, where b1/b2/bG2 come
+    first and c1 lands at nl_b1_pos+3. Computing from the split covers both.)"""
+    n_survey = len(SURVEY_KEYS_TOY)
+    c1_off = SURVEY_KEYS_TOY.index(_C1_KEY)
+    nl_pos = {full: pos for pos, full in enumerate(split.nl_idx)}
+    return [nl_pos[N_COSMO + b * n_survey + c1_off] for b in range(N_BINS)]
+
+
+def test_reduced_lin_keys_cov_blocks_drop_c1(toy_spec_path):
+    """With lin_keys = LIN_SURVEY_KEYS minus c1 (10 keys), the cov-mode
+    prior_sigma_fn returns (n_bins, 10, 10) blocks with NO c1 row/column, and
+    the ctr trio still lands at slots 2,3,4 (c1 was slot 8, after the trio)."""
+    spec = load_desi_prior_spec(toy_spec_path)
+    split = _split_no_c1()
+    assert split.n_lin == N_BINS * 10          # 10 marginalized per bin
+    assert _C1_KEY not in [k for _, k in split.lin_keys]
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    mean_fn, sigma_fn, _ = make_desi_prior_fns(
+        spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+        a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID,
+        lin_keys=LIN_KEYS_NO_C1)
+    theta0 = jnp.zeros(split.n_nl)
+    mu, sig = mean_fn(theta0), sigma_fn(theta0)
+    assert mu.shape == (N_BINS * 10,)
+    assert sig.shape == (N_BINS, 10, 10)       # cov-mode, c1 row absent
+    # ctr trio slot positions unchanged by dropping c1.
+    assert LIN_KEYS_NO_C1.index(("pk", "ctr", "c0")) == 2
+    # non-ctr diagonal read still matches the base formulas (a0 knl rescale).
+    j_a0 = LIN_KEYS_NO_C1.index(("pk", "stoch", "a0"))
+    for b, knl in enumerate(KNL_BINS):
+        assert sig[b][j_a0, j_a0] ** 0.5 == pytest.approx(1.0 * (knl / 0.45) ** 2)
+    # cov-mode ctr 3x3 block matches the L.diag.L^T oracle (c1 removal did not
+    # disturb the trio).
+    L = np.asarray(ctr_rotation_matrices(jnp.asarray(TOY_F_FID)))
+    paper_sigma = np.array([spec.marginalized[k].paper_sigma for k in _CTR_KEYS])
+    for b in range(N_BINS):
+        exp = L[b] @ np.diag(paper_sigma ** 2) @ L[b].T   # R = 1 at fiducial
+        np.testing.assert_allclose(
+            np.asarray(sig[b])[2:5, 2:5], exp, rtol=1e-12, atol=1e-12)
+
+
+def test_reduced_lin_keys_diag_mode_shapes(toyless_setup_no_c1):
+    """Diag-mode (token-less trio) reduced lin_keys -> (n_bins*10,) flat vectors."""
+    spec, split, (mean_fn, sigma_fn, _) = toyless_setup_no_c1
+    theta0 = jnp.zeros(split.n_nl)
+    mu, sig = mean_fn(theta0), sigma_fn(theta0)
+    assert mu.shape == sig.shape == (N_BINS * 10,)
+    assert _C1_KEY not in [k for _, k in split.lin_keys]
+
+
+@pytest.fixture
+def toyless_setup_no_c1(tmp_path):
+    """Diag-mode + reduced lin_keys (c1 dropped from both spec-rotation and lin)."""
+    raw = yaml.safe_load(TOY_YAML)
+    for k in ("pk.ctr.c0", "pk.ctr.c2", "pk.ctr.c4"):
+        raw["marginalized"][k].pop("ctr_rotation", None)
+    p = tmp_path / "toyless_no_c1.yaml"
+    p.write_text(yaml.safe_dump(raw))
+    spec = load_desi_prior_spec(p)
+    split = _split_no_c1()
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    fns = make_desi_prior_fns(
+        spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+        a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref,
+        lin_keys=LIN_KEYS_NO_C1)
+    return spec, split, fns
+
+
+def test_sampled_marginal_prior_c1_R_division(toy_spec_path):
+    """The sampled c1 prior term evaluates N(0, (row.sigma / R_b)^2) with
+    R_b = a_ap * a_amp (the c1 marginalized row's A_AP*A_amp rescale). At
+    fiducial R=1 -> width 1.0125; off-fiducial the width divides by R."""
+    spec = load_desi_prior_spec(toy_spec_path)
+    split = _split_no_c1()
+    c1_pos = _c1_nl_positions(split)
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    _, _, log_prior_nl = make_desi_prior_fns(
+        spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+        a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID,
+        lin_keys=LIN_KEYS_NO_C1,
+        sampled_marginal_priors=[(_C1_KEY, c1_pos)])
+    sig_c1 = spec.marginalized[_C1_KEY].sigma          # 1.0125 (mapped)
+    assert sig_c1 == pytest.approx(1.0125)
+    theta0 = jnp.zeros(split.n_nl)
+    w = 0.5
+    # Fiducial (R = 1): delta == -0.5*(w/1.0125)^2 (the -log(width) offset cancels).
+    theta_c1 = theta0.at[c1_pos[0]].set(w)
+    d = float(log_prior_nl(theta_c1) - float(log_prior_nl(theta0)))
+    assert d == pytest.approx(-0.5 * (w / sig_c1) ** 2)
+    # Off-fiducial: theta[1]=0.5 -> a_ap=1.1, sigma8 unchanged -> a_amp=1, R=1.1.
+    theta_off = theta0.at[1].set(0.5)
+    theta_off_c1 = theta_off.at[c1_pos[0]].set(w)
+    d_off = float(log_prior_nl(theta_off_c1)) - float(log_prior_nl(theta_off))
+    R = 1.1
+    assert d_off == pytest.approx(-0.5 * (w / (sig_c1 / R)) ** 2)
+
+
+def test_sampled_marginal_prior_jit_and_grad_safe(toy_spec_path):
+    spec = load_desi_prior_spec(toy_spec_path)
+    split = _split_no_c1()
+    c1_pos = _c1_nl_positions(split)
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    _, _, log_prior_nl = make_desi_prior_fns(
+        spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+        a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID,
+        lin_keys=LIN_KEYS_NO_C1,
+        sampled_marginal_priors=[(_C1_KEY, c1_pos)])
+    theta = jnp.full(split.n_nl, 0.1)
+    assert float(jax.jit(log_prior_nl)(theta)) == pytest.approx(
+        float(log_prior_nl(theta)))
+    g = jax.grad(log_prior_nl)(theta)
+    assert jnp.all(jnp.isfinite(g))
+    # c1 positions have a LIVE gradient (mean 0, x=0.1 -> grad = -x/w^2 != 0).
+    for p in c1_pos:
+        assert abs(float(g[p])) > 1e-3
+

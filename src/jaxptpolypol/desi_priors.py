@@ -283,7 +283,8 @@ def _rescale_power(token):
 
 
 def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
-                        a_ap_bins_fn, sigma8_ref_bins, f_bins=DESI_F_FID):
+                        a_ap_bins_fn, sigma8_ref_bins, f_bins=DESI_F_FID,
+                        lin_keys=LIN_SURVEY_KEYS, sampled_marginal_priors=()):
     """Build (prior_mean_fn, prior_sigma_fn, log_prior_nl_fn) from a spec.
 
     All three receive the physical theta_NL vector. Layer-2 rescaling divides
@@ -293,32 +294,60 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
     Two modes, selected by the spec's counterterm trio:
 
     - **Diagonal mode** (c0/c2/c4 carry no ``ctr_rotation`` token): the base
-      behaviour. ``prior_mean_fn`` and ``prior_sigma_fn`` return ``(n_bins*11,)``
-      bin-major arrays laid out per ``LIN_SURVEY_KEYS``.
+      behaviour. ``prior_mean_fn`` and ``prior_sigma_fn`` return
+      ``(n_bins*len(lin_keys),)`` bin-major arrays laid out per ``lin_keys``.
 
     - **Cov mode** (c0/c2/c4 carry ``ctr_rotation == "multipole_to_tilde"``):
       the paper's diagonal per-multipole priors are exactly rotated into our
       mu-space tilde basis by the per-bin f-dependent map ``L(f)``
       (docs/design/desi-convention-map.md section 3.1). ``prior_sigma_fn`` then
-      returns a stacked per-bin prior **covariance** ``(n_bins, 11, 11)``:
-      ``diag(sigma_bj(theta)**2)`` with the ``(2:5, 2:5)`` counterterm block
-      overwritten by ``L_b . diag(sigma_paper_b**2) . L_b^T`` where
+      returns a stacked per-bin prior **covariance**
+      ``(n_bins, len(lin_keys), len(lin_keys))``: ``diag(sigma_bj(theta)**2)``
+      with the counterterm ``(c0..c0+3, c0..c0+3)`` block overwritten by
+      ``L_b . diag(sigma_paper_b**2) . L_b^T`` where
       ``sigma_paper_b = row.paper_sigma / R_b(theta)`` (their rescale is
       ``A_AP*A_amp`` => ``R_b = a_ap_b . a_amp_b``) and ``L_b = L(f_bins[b])``.
-      ``prior_mean_fn`` stays ``(n_bins*11,)`` but its counterterm entries per
-      bin become ``L_b . (paper_mean_c0, paper_mean_c2, paper_mean_c4) / R_b``.
+      ``prior_mean_fn`` stays ``(n_bins*len(lin_keys),)`` but its counterterm
+      entries per bin become ``L_b . (paper_mean_c0, c2, c4) / R_b``.
       ``f_bins`` (default :data:`DESI_F_FID`) must then have length ``n_bins``.
       The block is consumed by :func:`gaussian_marginal_loglike`'s ndim==2 branch
-      via the ``(n_bins, 11, 11)`` per-bin path of the perbin/Taylor builders.
+      via the per-bin path of the perbin/Taylor builders.
+
+    ``lin_keys`` / ``sampled_marginal_priors`` (Tier-3 c1-sampled support)
+    --------------------------------------------------------------------
+    ``lin_keys`` (default :data:`LIN_SURVEY_KEYS`, the 11 marginalized rows)
+    selects WHICH marginalized rows the prior_mean_fn / prior_sigma_fn cover. The
+    c1-sampled analysis passes the 10-key variant ``LIN_SURVEY_KEYS`` minus
+    ``('bk','ctr','c1')`` so the marginalized block loses its c1 row (the returned
+    blocks are ``(n_bins, 10, 10)``); the counterterm trio still sits at slots
+    ``c0..c0+2`` because c1 (slot 8) is AFTER it, so cov-mode is unaffected. The
+    ``lin_keys`` MUST be a subset of ``spec.marginalized`` (which still validates
+    all 11 rows), and cov-mode requires the c0/c2/c4 trio to remain in ``lin_keys``.
+
+    ``sampled_marginal_priors`` = sequence of ``(key, positions)``: for each
+    ``key`` (a ``spec.marginalized`` row REMOVED from ``lin_keys`` and now sampled
+    in theta_NL), ``log_prior_nl_fn`` gains a per-bin Gaussian ``N(mean, width_b^2)``
+    with the SAME width machinery the marginalized row would have carried --
+    ``mean = row.mean`` (numeric only; ``mean_formula`` keys are rejected),
+    ``width_b = row.sigma * f_knl_b / R_b`` with ``R_b`` from ``row.rescale`` and
+    ``f_knl_b = (knl_b/paper_knl)^2`` when ``row.factor_formula`` is the knl form.
+    ``positions`` is the length-``n_bins`` sequence of theta_NL indices where that
+    sampled parameter lives per bin (e.g. c1 at ``split.nl_b1_pos[b] + 3``). This
+    is exactly the prior the marginalized path integrates analytically, so a
+    sampled-c1 chain and a marginalized-c1 chain carry an equivalent c1 prior.
     """
     n_bins = len(split.nl_b1_pos)
-    n_lin_keys = len(LIN_SURVEY_KEYS)
+    lin_keys = tuple(lin_keys)
+    missing = [k for k in lin_keys if k not in spec.marginalized]
+    if missing:
+        raise ValueError(f"lin_keys not present in spec.marginalized: {missing}")
+    n_lin_keys = len(lin_keys)
     knl_arr = jnp.asarray(knl_bins, dtype=jnp.float64)
     if knl_arr.shape != (n_bins,):
         raise ValueError(f"knl_bins must have length {n_bins}")
     sigma8_ref = jnp.asarray(sigma8_ref_bins, dtype=jnp.float64)
     paper_knl = float(spec.metadata.get("paper_knl", 0.45))
-    rows = [spec.marginalized[k] for k in LIN_SURVEY_KEYS]
+    rows = [spec.marginalized[k] for k in lin_keys]
 
     base_mean = jnp.array([0.0 if r.mean is None else r.mean for r in rows])
     base_sigma = jnp.array([r.sigma for r in rows])
@@ -331,7 +360,7 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
     b1_pos = jnp.asarray(split.nl_b1_pos)
 
     def _per_bin_arrays(theta_nl):
-        """Return ``(R, mean_bin, sig_bin)``, each ``(n_bins, 11)``."""
+        """Return ``(R, mean_bin, sig_bin)``, each ``(n_bins, len(lin_keys))``."""
         theta_nl = jnp.asarray(theta_nl, dtype=jnp.float64)
         a_ap = a_ap_bins_fn(theta_nl)                       # (n_bins,)
         a_amp = sigma8_bins_fn(theta_nl) ** 2 / sigma8_ref ** 2
@@ -354,8 +383,13 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
             raise ValueError(
                 f"f_bins must have length {n_bins} for cov-mode "
                 f"(ctr_rotation) priors; got shape {f_arr.shape}")
+        missing_ctr = [k for k in _CTR_TRIO if k not in lin_keys]
+        if missing_ctr:
+            raise ValueError(
+                "cov-mode (ctr_rotation) requires the c0/c2/c4 trio in lin_keys; "
+                f"missing {missing_ctr}")
         L_bins = ctr_rotation_matrices(f_arr)               # (n_bins, 3, 3)
-        c0 = LIN_SURVEY_KEYS.index(("pk", "ctr", "c0"))     # == 2
+        c0 = lin_keys.index(("pk", "ctr", "c0"))            # == 2 (c1 is after)
         ctr = slice(c0, c0 + 3)
         ctr_rows = [spec.marginalized[k] for k in _CTR_TRIO]
         paper_sigma_ctr = jnp.array([r.paper_sigma for r in ctr_rows])   # (3,)
@@ -389,6 +423,28 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
                         if spec.sampled[nm].kind == "gaussian"]
     offsets = {"b2": 1, "bG2": 2}
 
+    # Sampled-marginal (e.g. c1) priors: a marginalized row that is now SAMPLED
+    # keeps the same width machinery it would have carried as a marginalized
+    # entry -- width_b = row.sigma * f_knl_b / R_b, R_b from row.rescale.
+    sampled_extra = []
+    for key, positions in sampled_marginal_priors:
+        row = spec.marginalized[key]
+        if row.mean_formula is not None:
+            raise ValueError(
+                f"sampled_marginal_priors key {key} has mean_formula "
+                f"{row.mean_formula!r}; only numeric-mean rows are supported")
+        pos_arr = jnp.asarray(positions)
+        if pos_arr.shape != (n_bins,):
+            raise ValueError(
+                f"sampled_marginal_priors positions for {key} must have length "
+                f"{n_bins} (one theta_NL index per bin); got shape {pos_arr.shape}")
+        ap_p, amp_p = _rescale_power(row.rescale)
+        knl_factor = ((knl_arr / paper_knl) ** 2
+                      if row.factor_formula == "knl_over_0p45_sq"
+                      else jnp.ones(n_bins, dtype=jnp.float64))
+        sampled_extra.append((pos_arr, float(0.0 if row.mean is None else row.mean),
+                              float(row.sigma), int(ap_p), int(amp_p), knl_factor))
+
     def log_prior_nl_fn(theta_nl):
         theta_nl = jnp.asarray(theta_nl, dtype=jnp.float64)
         s8 = sigma8_bins_fn(theta_nl)                       # (n_bins,)
@@ -400,6 +456,15 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
             x = theta_nl[pos] - (row.paper_mean or 0.0)
             total = total + jnp.sum(
                 -0.5 * (x / width) ** 2 - jnp.log(width) - 0.5 * _LOG2PI)
+        if sampled_extra:
+            a_ap = a_ap_bins_fn(theta_nl)                   # (n_bins,)
+            a_amp = s8 ** 2 / sigma8_ref ** 2               # (n_bins,)
+            for pos_arr, mean, base_sig, ap_p, amp_p, knl_factor in sampled_extra:
+                R = a_ap ** ap_p * a_amp ** amp_p           # (n_bins,)
+                width = base_sig * knl_factor / R           # (n_bins,)
+                x = theta_nl[pos_arr] - mean                # (n_bins,)
+                total = total + jnp.sum(
+                    -0.5 * (x / width) ** 2 - jnp.log(width) - 0.5 * _LOG2PI)
         return total
 
     return prior_mean_fn, prior_sigma_fn, log_prior_nl_fn
