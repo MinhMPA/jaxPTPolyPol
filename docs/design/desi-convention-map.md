@@ -353,27 +353,15 @@ changed):
   (unless mean_formula is set). Values are LAYER-1 (pre-layer-2); layer-2 applied at
   runtime by make_desi_prior_fns via `rescale`. Per-bin a0/a2 factor via factor_formula.
 
-  *** PROVISIONAL rows: pk.ctr.c0, pk.ctr.c2, pk.ctr.c4 ***
-  Battleground 1 (see §3.1): the paper's c0/c2/c4 priors live in CLASS-PT's PER-MULTIPOLE
-  basis (Eqs 2.21-2.23); our code coefficients are the MU-SPACE tilde basis (Eq 2.15).
-  The true prior on our (c0,c2,c4) is CORRELATED and f-SHIFTED (per-bin), via the
-  triangular rotation c_tilde = L(f)*c_paper:
-      our_c0 = paper_c0 - (f/3)paper_c2 + (3f^2/35)paper_c4
-      our_c2 = paper_c2 - (6f/7)paper_c4
-      our_c4 = paper_c4
-  Marginal-at-fiducial-f (dropping correlations), per §3.1 table:
-      our_c0: mean -(f/3)*30 (approx -8..-10), width ~31.1-31.6
-      our_c2: mean 30,                          width ~36.6-38.9  (corr(c2,c4) ~ -0.57..-0.64)
-      our_c4: mean 0,                           width 30 (exact)
-  This per-bin f-dependent correlated 3x3 block CANNOT be represented in the scalar-factor
-  schema (no f-token; one uniform row per key; diagonal widths only). Per the resolution
-  rule we DO NOT force it. The rows below encode design-alternative (A): the O(f)
-  approximation (paper diagonal placed directly on our tilde coefficients, factor 1,
-  offset 0). This is chosen over baking a single fiducial-f marginal because the row is
-  applied identically to all 7 bins and no single f is correct for all. CONTROLLER
-  DECISION REQUIRED: adopt (A) as-is, or implement (B) full triangular rotation (add a
-  ctr-rotation token to make_desi_prior_fns; the marginal-likelihood API already accepts
-  a full Sigma_p(theta_NL)), or (C) rotate the templates. See §3.1.
+  *** c0/c2/c4 — ADOPTED (2026-07-31): exact cov-mode via ctr_rotation ***
+  The three rows carry `ctr_rotation: "multipole_to_tilde"`. The runtime builds the
+  correlated per-bin block L(f)·diag(σ_paper²)·Lᵀ; the O(f)-diagonal provisional encoding
+  and the design alternatives (A/B/C) in §3.1 were resolved by the two-branch experiment
+  (sigmap merged; equivalence 4.2e-12). paper_mean/paper_sigma below are the paper's
+  per-multipole diagonal verbatim (factor 1, offset 0); the exact per-bin f-dependent
+  correlated prior on our mu-space tilde coefficients is assembled at runtime by
+  make_desi_prior_fns (cov-mode). See §3.1 for the derivation/history (kept as the record
+  of how the decision was reached).
 -->
 
 ```yaml
@@ -384,10 +372,12 @@ metadata:
   paper_knl: 0.45
   production_k_nl_rsd: 0.45
   deviations:
-    - "c0/c2/c4 are PROVISIONAL O(f) diagonal rows: paper priors are in the CLASS-PT
-       per-multipole basis (Eq 2.21-2.23), our coefficients are the mu-space tilde basis
-       (Eq 2.15); the true prior is a per-bin f-dependent correlated rotation L(f) not
-       representable in this schema. See desi-convention-map.md section 3.1."
+    - "c0/c2/c4 carry ctr_rotation: multipole_to_tilde. Paper priors live in the
+       CLASS-PT per-multipole basis (Eq 2.21-2.23); our code coefficients are the
+       mu-space tilde basis (Eq 2.15). The exact per-bin f-dependent correlated prior
+       L(f).diag(sigma_paper^2).L(f)^T is assembled at runtime by make_desi_prior_fns
+       (cov-mode); paper_mean/paper_sigma below are the paper diagonal verbatim
+       (factor 1, offset 0). See desi-convention-map.md section 3.1."
     - "P_shot/B_shot/A_shot use offset +1 (our mean-1 Poisson amplitude vs paper mean-0
        deviation)."
     - "a0/a2 factor is per-bin (knl_b/0.45)^2 via factor_formula knl_over_0p45_sq."
@@ -405,27 +395,30 @@ marginalized:
      paper_variable: "P_shot", factor: 1.0, offset: 1.0,
      mean: 1.0, sigma: 1.0, rescale: "none",
      factor_formula: null, mean_formula: null}
-  # PROVISIONAL (battleground 1, section 3.1): true prior correlated + f-shifted.
-  # This row = O(f) approximation: paper diagonal on our tilde c0 (factor 1, offset 0).
+  # --- Counterterm trio c0/c2/c4: ctr_rotation multipole_to_tilde (map section 3.1) ---
+  # ADOPTED (2026-07-31): exact cov-mode via ctr_rotation — the runtime builds the
+  # correlated per-bin block L(f)·diag(σ_paper²)·Lᵀ; the O(f)-diagonal provisional
+  # encoding and the design alternatives in §3.1 were resolved by the two-branch
+  # experiment (sigmap merged; equivalence 4.2e-12). paper_mean/paper_sigma are the
+  # paper's per-multipole-basis diagonal, verbatim (factor 1, offset 0).
   pk.ctr.c0:
     {paper_mean: 0.0, paper_sigma: 30.0, paper_units: "(Mpc/h)^2",
      paper_variable: "c0*A_AP*A_amp", factor: 1.0, offset: 0.0,
      mean: 0.0, sigma: 30.0, rescale: "A_AP*A_amp",
-     factor_formula: null, mean_formula: null}
-  # PROVISIONAL (section 3.1): true our_c2 width ~36.6-38.9, corr(c2,c4) ~ -0.57..-0.64.
+     factor_formula: null, mean_formula: null, ctr_rotation: "multipole_to_tilde"}
+  # c2: ctr_rotation multipole_to_tilde; runtime L(f) block, see c0 note + map 3.1.
   pk.ctr.c2:
     {paper_mean: 30.0, paper_sigma: 30.0, paper_units: "(Mpc/h)^2",
      paper_variable: "c2*A_AP*A_amp", factor: 1.0, offset: 0.0,
      mean: 30.0, sigma: 30.0, rescale: "A_AP*A_amp",
-     factor_formula: null, mean_formula: null}
-  # Marginal EXACT (c4 = c_tilde4, no basis mixing of c4 itself); its
-  # correlation with our c0/c2 (induced by their c4-mixing) is dropped in
-  # this diagonal encoding, same as the other two PROVISIONAL rows.
+     factor_formula: null, mean_formula: null, ctr_rotation: "multipole_to_tilde"}
+  # c4: ctr_rotation multipole_to_tilde; c4=c_tilde4 diagonal-exact, but its
+  # off-diagonal coupling to c0/c2 enters the runtime L(f) block. See map 3.1.
   pk.ctr.c4:
     {paper_mean: 0.0, paper_sigma: 30.0, paper_units: "(Mpc/h)^2",
      paper_variable: "c4*A_AP*A_amp", factor: 1.0, offset: 0.0,
      mean: 0.0, sigma: 30.0, rescale: "A_AP*A_amp",
-     factor_formula: null, mean_formula: null}
+     factor_formula: null, mean_formula: null, ctr_rotation: "multipole_to_tilde"}
   pk.ctr.cfog:
     {paper_mean: 400.0, paper_sigma: 400.0, paper_units: "(Mpc/h)^4",
      paper_variable: "ctilde*A_AP*A_amp", factor: 1.0, offset: 0.0,

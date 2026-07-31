@@ -144,6 +144,15 @@ def load_desi_prior_spec(name_or_path="desi_dr1_reanalysis_2511_20757"):
         raise SpecValidationError(
             "ctr_rotation must be set on all of pk.ctr.c0/c2/c4 or none; "
             f"got {dict(zip(('c0', 'c2', 'c4'), trio_flags))}")
+    if all(v is not None for v in trio_flags):
+        # Cov-mode (make_desi_prior_fns) reuses the c0-slot rescale R_ctr for the
+        # whole 3x3 ctr block, so the trio must share one rescale token.
+        trio_rescales = {".".join(k): marginalized[k].rescale for k in _CTR_TRIO}
+        if len(set(trio_rescales.values())) != 1:
+            raise SpecValidationError(
+                "ctr_rotation trio pk.ctr.c0/c2/c4 must share one rescale token "
+                "(cov-mode reuses a single R_ctr for the whole ctr block); got "
+                f"{trio_rescales}")
 
     sampled = {}
     for name, entry in raw["sampled"].items():

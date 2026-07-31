@@ -582,3 +582,29 @@ def test_fisher_ctr_blocks_return(toy_spec_path):
     out2 = build_prior_sigmas_from_desi_spec(
         spec, knl_bins=KNL_BINS, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID)
     assert len(out2) == 2
+
+
+# =============================================================================
+# Final-review guards: ctr_rotation trio rescale-consistency + bogus token value
+# =============================================================================
+
+
+def test_ctr_rotation_trio_rescale_mismatch_raises(tmp_path):
+    """When the c0/c2/c4 trio carries ctr_rotation, all three rows must share one
+    rescale token: cov-mode make_desi_prior_fns reuses the c0-slot R_ctr for the
+    whole 3x3 ctr block, so a divergent token would be silently wrong."""
+    def mutate(raw):
+        # c2 keeps its ctr_rotation (all-or-none passes) but flips its rescale.
+        raw["marginalized"]["pk.ctr.c2"]["rescale"] = "A_AP"
+    with pytest.raises(SpecValidationError, match="rescale"):
+        load_desi_prior_spec(_mutated_spec_path(tmp_path, mutate))
+
+
+def test_ctr_rotation_bogus_token_value_raises(tmp_path):
+    """An invalid ctr_rotation token VALUE on all three trio rows (so the
+    all-or-none check passes) is rejected by the per-row value validation."""
+    def mutate(raw):
+        for k in ("pk.ctr.c0", "pk.ctr.c2", "pk.ctr.c4"):
+            raw["marginalized"][k]["ctr_rotation"] = "bogus_rotation"
+    with pytest.raises(SpecValidationError, match="ctr_rotation"):
+        load_desi_prior_spec(_mutated_spec_path(tmp_path, mutate))

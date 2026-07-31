@@ -222,6 +222,14 @@ def make_marginal_log_posterior(theory_fn, data, cov_inv, lin_idx,
     *physical* theta_NL vector and return (n_lin,) arrays -- constant for
     Stream A (make_constant_prior_fns), theta_NL-dependent for the
     arXiv:2511.20757 A_AP*A_amp-rescaled priors (Stream B).
+
+    ``sigma_p`` from ``prior_sigma_fn`` may be either ``(n_lin,)`` diagonal
+    widths or a single full ``(n_lin, n_lin)`` prior covariance ``Sigma_p``;
+    both are passed straight through to :func:`gaussian_marginal_loglike`
+    (which dispatches on ``ndim``). The stacked per-bin block form
+    ``(n_bins, n_lin_per_bin, n_lin_per_bin)`` emitted by cov-mode
+    :func:`~jaxptpolypol.desi_priors.make_desi_prior_fns` is NOT handled by this
+    dense builder -- only the perbin/taylor builders consume it.
     """
     data = jnp.asarray(data, dtype=jnp.float64)
     cov_inv = jnp.asarray(cov_inv, dtype=jnp.float64)
