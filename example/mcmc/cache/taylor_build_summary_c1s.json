@@ -1,0 +1,46 @@
+{
+ "templates_only": false,
+ "c1_treatment": "sampled",
+ "lin_keys_per_bin": 10,
+ "wall_s": {
+  "setup": 3.9,
+  "fisher_whitening": 204.5,
+  "template_build": 3663.8,
+  "total": 3872.3
+ },
+ "peak_rss_gb": {
+  "setup: models + fiducials": 0.33,
+  "data vector + Fisher + whitening": 96.27,
+  "taylor-template build": 36.01
+ },
+ "overall_peak_rss_gb": 96.27,
+ "H_sym_err": [
+  1.0030994669145992e-16,
+  6.485162418917408e-17,
+  8.724566089231176e-17,
+  1.0546682378442243e-16,
+  7.210499820997161e-17,
+  7.308550327187585e-17,
+  5.811422983038296e-17
+ ],
+ "chunk_J": 4,
+ "chunk_H": 2,
+ "n_nl": 33,
+ "n_lin": 70,
+ "block_len": 375,
+ "n_tri": 264,
+ "meta": {
+  "n_bins": 7,
+  "n_k": 37,
+  "n_tri": 264,
+  "n_gl": 16,
+  "num_mu": 65,
+  "num_phi": 65,
+  "k_min": 0.02,
+  "k_max": 0.2,
+  "k_bk_max": 0.08,
+  "k_nl_rsd": 0.45,
+  "order2_m0": true,
+  "c1_treatment": "sampled"
+ }
+}

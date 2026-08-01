@@ -501,3 +501,43 @@ A_AP·A_amp prior widths (the documented σ8/logA-low volume pull of EFT
 full-shape priors), not a wiring or representation error. Evidence:
 `example/mcmc/cache/{task_e_equivalence,branch_equiv_rotation,branch_equiv_sigmap,desi_prior_validation_rotation,desi_prior_validation_sigmap}.json`
 plus the noLD corroboration JSON on the rotation branch.
+
+## Tier-3: sampled-c1 vs marginalized-c1 validation (2026-08-01) — PASS
+
+The last open validation from CONTEXT.md's c1 section. Route A marginalizes c1
+analytically by linearizing the theory in it, which drops the `Z1_fog·Z1_fog`
+c1² cross-term (relative size ≈6×10⁻⁴). This test asks whether that omission is
+visible in the cosmology posterior.
+
+**Why the surrogate makes this cheap and exact:** with c1 moved into θ_NL the
+theory is *exactly quadratic* in c1, and the Taylor surrogate's second-order m0
+expansion reproduces polynomial-degree-≤2 dependence to the float64 floor — so
+the sampled-c1 surrogate carries the full c1² physics that the marginalized path
+linearizes away. Template rebuild with the c1-sampled split: 3872 s, peak
+96.3 GB, H symmetry residual ~1e-16 → `taylor_{templates,whitening}_lcdm_c1s.npz`
+(θ_NL 26→33: +1 c1 per bin at positions 8,12,…,32; θ_lin 77→70).
+
+Two 200 000-draw RWMH chains (burn 20 000; seeds 20260731/20260801; 1.8–1.9 ms/step,
+905 s total, peak 2.4 GB) under **identical** DESI priors — the sampled side
+carrying c1 ~ 𝒩(0, (1.0125/A_AP·A_amp)²) in the sampled block instead of the
+marginalized row:
+
+| param | Δmean (σ_F) | tolerance | width ratio (samp/marg) |
+|-------|-------------|-----------|------------------------|
+| ombh2 | +0.008 | 0.096 | 0.994 |
+| omch2 | +0.013 | 0.099 | 0.987 |
+| logA  | −0.049 | 0.137 | 0.977 |
+| ns    | −0.017 | 0.108 | 0.987 |
+| h     | +0.019 | 0.090 | 0.990 |
+
+max |corr diff| = 0.041 (< 0.05). **All three gates PASS.**
+
+**c1 marginals (sampled side):** mean ≈ 0 (−0.014 … +0.052), σ = 0.97–1.00
+against a prior width of 1.0125 — c1 is prior-dominated, the data constrains it
+essentially not at all. This is both the expected EFT behaviour (2502.14758 found
+the same when sampling c1) and the reason the linearization is invisible: a
+parameter the data cannot see cannot transmit its quadratic term to cosmology.
+
+**Conclusion: Route A (analytic c1 marginalization) is validated** — the
+marginalized and sampled treatments give the same cosmology posterior to within
+MC precision. Evidence: `example/mcmc/cache/tier3_c1_validation.json`.
