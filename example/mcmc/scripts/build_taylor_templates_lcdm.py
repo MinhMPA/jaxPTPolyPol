@@ -219,14 +219,19 @@ META = {
 
 # --- Template vs whitening meta stamps -------------------------------------
 # Both stamps carry the c1 treatment ("marginalized" | "sampled") so a loaded
-# cache is self-describing and a sampled cache cannot be silently used as a
-# marginalized one (c1_treatment is in marginal_taylor._BACKWARD_COMPAT_META_KEYS,
-# so a base cache predating the key warns rather than errors).
+# cache is SELF-DESCRIBING. Note the guard semantics
+# (marginal_taylor.compare_meta): a consumer only has c1_treatment CHECKED if it
+# names the key in expect_meta -- stream_common.meta_for(treatment) does; the
+# plain META does not (it warns instead). A base cache predating the key still
+# warns rather than errors, since c1_treatment is in
+# marginal_taylor._BACKWARD_COMPAT_META_KEYS.
 #
 # MARGINALIZED mode keeps the richer template/whitening stamps (theory_config_hash
-# / prior_spec) -- unchanged from the base build. SAMPLED mode stamps a single
-# FLAT meta_for-style dict ({**META, c1_treatment: "sampled"}) on BOTH npz, so the
-# Tier-3 validation can load the pair with one expect_meta via
+# / prior_spec) -- unchanged from the base build. Consumers passing the plain
+# 11-key META load these fine (stored-only identifiers are informational, not
+# staleness). SAMPLED mode stamps a single FLAT meta_for-style dict
+# ({**META, c1_treatment: "sampled"}) on BOTH npz, so the Tier-3 validation can
+# load the pair with one expect_meta via
 # stream_common.load_templates_and_whitening.
 if C1_SAMPLED:
     TEMPLATE_META = {**META, "c1_treatment": C1_TREATMENT}

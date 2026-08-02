@@ -1,8 +1,9 @@
 """Single source of truth for the production Stream config/assembly.
 
-Used by the three Stream validation/chain drivers -- ``taylor_surrogate_
-validation.py``, ``damh_exact_chain_lcdm.py`` and ``desi_prior_validation.py`` --
-which previously carried byte-for-byte copies of the same production
+Used by the four Stream validation/chain drivers -- ``taylor_surrogate_
+validation.py``, ``damh_exact_chain_lcdm.py``, ``desi_prior_validation.py`` and
+``tier3_c1_validation.py`` -- which previously carried byte-for-byte copies of
+the same production
 configuration and theory/BAO assembly (each a verbatim mirror of
 ``mcmc_joint_PFS_BAO_BBN_ns_LCDM.ipynb`` and of ``build_taylor_templates_lcdm.py``).
 
@@ -39,6 +40,7 @@ from jaxptpolypol import (
     split_marginal_indices,
 )
 from jaxptpolypol.bao import load_desi_dr2, make_bao_theory_fn
+from jaxptpolypol.marginal_taylor import check_meta
 from jaxptpolypol.params import CosmoParams, FullShapeSurveyParams
 from jaxptpolypol.theory import build_bispectrum_triangles_from_k_grid
 
@@ -91,10 +93,15 @@ def meta_for(treatment):
     The Tier-3 c1-sampled build (``build_taylor_templates_lcdm.py --c1-sampled``)
     stamps ``meta_for('sampled')`` on BOTH its templates and whitening npz (a
     single flat dict, so :func:`load_templates_and_whitening`'s one-``expect_meta``
-    contract holds for both files). The base build's marginalized npz predate the
-    key and stamp the plain :data:`META`; they still load because ``c1_treatment``
-    is in ``marginal_taylor._BACKWARD_COMPAT_META_KEYS`` (templates) and because
-    the marginalized side is loaded with the plain :data:`META` expectation.
+    contract holds for both files).
+
+    Pass ``meta_for(treatment)`` rather than the plain :data:`META` whenever the
+    treatment must actually be VERIFIED: under the guard's semantics
+    (:func:`jaxptpolypol.marginal_taylor.compare_meta`) an identifier the caller
+    does not name is not checked. Both stamps that exist on disk load either way
+    -- an old cache lacking ``c1_treatment`` warns (backward compat) and a newer
+    cache carrying it matches -- so this is a strictness choice, not a
+    compatibility one.
     """
     if treatment not in C1_TREATMENTS:
         raise ValueError(
@@ -108,20 +115,31 @@ def meta_for(treatment):
 
 def load_templates_and_whitening(templates_path, whitening_path,
                                  expect_meta=META):
-    """Load Taylor templates + the whitening npz with the strict meta guards.
+    """Load Taylor templates + the whitening npz with the meta guards.
 
     Returns ``(tt, wz)`` where ``tt`` is the :class:`TaylorTemplates` (loaded
     with ``expect_meta``, the stale-config guard) and ``wz`` is the open
     ``np.load`` handle on the whitening file. Exits (``sys.exit``) if the
-    whitening stamp does not match ``expect_meta`` -- identical behaviour and
-    message to the pre-extraction inline block.
+    whitening stamp disagrees with ``expect_meta``.
+
+    BOTH stamps are compared with the one semantics documented in
+    :func:`jaxptpolypol.marginal_taylor.compare_meta`: every key of
+    ``expect_meta`` must be present and equal, while keys the stored stamp
+    carries but ``expect_meta`` does not name are informational (warn) rather
+    than stale. That is required here, not cosmetic -- in marginalized mode
+    ``build_taylor_templates_lcdm.py`` stamps ``prior_spec``/``cosmo_priors`` (+
+    ``c1_treatment``) on the whitening npz and five theory-config identifiers on
+    the templates npz, none of which the plain :data:`META` mentions. The
+    previous bare ``stored_meta != expect_meta`` made a freshly rebuilt cache
+    unloadable.
     """
     tt = load_taylor_templates(templates_path, expect_meta=expect_meta)
     wz = np.load(whitening_path)
     stored_meta = json.loads(str(wz["meta"].item()))
-    if stored_meta != expect_meta:
-        sys.exit(f"Whitening npz meta mismatch:\nstored   {stored_meta}\n"
-                 f"expected {expect_meta}")
+    try:
+        check_meta(stored_meta, expect_meta, what="whitening npz")
+    except ValueError as err:
+        sys.exit(str(err))
     return tt, wz
 
 

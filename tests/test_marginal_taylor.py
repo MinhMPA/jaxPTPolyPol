@@ -415,6 +415,58 @@ def test_load_missing_c1_treatment_warns_not_raises(tmp_path):
             path, expect_meta=dict(n_bins=1, c1_treatment="marginalized"))
 
 
+def test_load_extra_stored_keys_warn_not_raise(tmp_path):
+    """SEMANTICS PIN (the direction production actually takes): a stamp the
+    caller did NOT ask about is not evidence of staleness.
+
+    ``build_taylor_templates_lcdm.py`` in its default (marginalized) mode stamps
+    six identifiers (``c1_treatment``, ``theory_config_hash``, ``z_bins``,
+    ``knl_bins``, ``n_bar``, ``V_bins``) that every consumer's plain 11-key
+    ``META`` omits. Those stored-only keys must WARN and load -- the symmetric
+    counterpart of the expect-only backward-compat exemption -- otherwise the
+    next cache rebuild bricks every loader with a misleading "stale templates"
+    error. Keys the caller DOES specify are still checked strictly, and the
+    error message must not list the unasked-for keys.
+    """
+    from jaxptpolypol.marginal_taylor import (
+        build_taylor_templates, save_taylor_templates, load_taylor_templates)
+
+    theory, fpf, packed = _toy_full_setup()
+    theta0 = jnp.array([0.3, -0.2])
+    tt = build_taylor_templates(
+        bin_theory_fns=[theory], bin_lin_idx=[(2, 3)], full_params_fn=fpf,
+        theta0=theta0)
+
+    path = tmp_path / "tt.npz"
+    # Shape of the builder's marginalized TEMPLATE_META: the plain stamp plus
+    # the six theory-config identifiers, plus one key OUTSIDE the compat set
+    # (stored-only tolerance is not restricted to that set).
+    save_taylor_templates(tt, path, meta=dict(
+        n_bins=1, n_k=8, c1_treatment="marginalized",
+        theory_config_hash="abc", z_bins="(0.7,)", knl_bins="(0.52,)",
+        n_bar="(3.06e-04,)", V_bins="(5.9e+08,)", build_note="not-in-compat-set"))
+
+    with pytest.warns(UserWarning, match="theory_config_hash"):
+        loaded = load_taylor_templates(path, expect_meta=dict(n_bins=1, n_k=8))
+    assert np.array_equal(np.asarray(loaded.theta0), np.asarray(tt.theta0))
+    # The stored meta is returned verbatim (nothing is dropped by the guard).
+    assert loaded.build_diagnostics["meta"]["theory_config_hash"] == "abc"
+
+    # A key the caller DOES specify still mismatch-raises on a differing value,
+    # and the message names only that key -- not the unasked-for stamps.
+    with pytest.raises(ValueError) as exc:
+        load_taylor_templates(path, expect_meta=dict(n_bins=2, n_k=8))
+    msg = str(exc.value)
+    assert "n_bins" in msg
+    assert "theory_config_hash" not in msg
+    assert "build_note" not in msg
+
+    # Same for a specified compat key whose stored value differs.
+    with pytest.raises(ValueError, match="c1_treatment"):
+        load_taylor_templates(
+            path, expect_meta=dict(n_bins=1, c1_treatment="sampled"))
+
+
 def test_save_rejects_non_flat_meta(tmp_path):
     """A nested meta value is not a config identifier -> TypeError at save."""
     from jaxptpolypol.marginal_taylor import (

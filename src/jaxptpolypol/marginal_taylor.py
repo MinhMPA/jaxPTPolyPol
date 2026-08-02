@@ -84,6 +84,8 @@ __all__ = [
     "make_marginal_log_posterior_taylor",
     "save_taylor_templates",
     "load_taylor_templates",
+    "compare_meta",
+    "check_meta",
     "importance_reweight",
     "reweighted_moments",
 ]
@@ -414,15 +416,90 @@ _MISSING = "<absent>"
 # present in the caller's ``expect_meta`` but ABSENT from the stored meta is a
 # backward-compatibility WARNING, not a stale-template ERROR. Only true absence
 # is tolerated: a VALUE mismatch on one of these keys (present in both, differing)
-# still raises, and any non-listed key that is missing/differing still raises
-# (so the strict guard is intact for every identifier that predates this set).
+# still raises, and any non-listed key that ``expect_meta`` asks for and the
+# stored meta lacks still raises (so the strict guard is intact for every
+# identifier that predates this set).
 # NOTE: these are theory/grid identifiers only -- templates are prior-independent,
 # so prior identifiers (``prior_spec``, ``cosmo_priors``) live on the whitening
-# npz meta, never here, and are deliberately not in this set.
+# npz meta, never here, and are deliberately not in this set. The stored-only
+# direction (see :func:`compare_meta`) does NOT consult this set: it is
+# informational for ANY key, which is what lets the whitening stamp's prior
+# identifiers through the same comparison.
 _BACKWARD_COMPAT_META_KEYS = frozenset({
     "theory_config_hash", "z_bins", "knl_bins", "n_bar", "V_bins",
     "c1_treatment",
 })
+
+
+def compare_meta(stored_meta, expect_meta):
+    """Compare a stored config stamp against ``expect_meta``. THE semantics.
+
+    The guard exists to catch *staleness* -- tensors built for a different
+    configuration than the caller believes. It therefore checks exactly the keys
+    the caller declared an expectation for, in three cases:
+
+    1. **present in both** -- values must be equal, else a MISMATCH (hard error).
+    2. **in ``expect_meta`` only** (stored lacks it) -- a MISMATCH, unless the key
+       is in :data:`_BACKWARD_COMPAT_META_KEYS`, in which case it is a
+       backward-compat note: a cache written before that identifier existed is
+       still usable.
+    3. **in ``stored_meta`` only** (the caller did not ask about it) -- never a
+       mismatch, only an informational note. A stamp the caller did not ask about
+       is not evidence of staleness; the producer is free to record MORE
+       identifiers than a given consumer verifies. (Without this, a rebuilt cache
+       -- which stamps six extra template keys and three extra whitening keys --
+       would fail every consumer that passes the plain config stamp, i.e. the
+       guard would forbid the very rebuild it tells you to perform.) The
+       trade-off: an identifier is only *checked* if the caller names it, so a
+       caller that cares about e.g. ``c1_treatment`` must put it in
+       ``expect_meta`` (``stream_common.meta_for(treatment)`` does).
+
+    Returns ``(mismatches, missing_new, extra_stored)``: a list of preformatted
+    ``"  key: stored=..., expected=..."`` lines, and two sorted key lists for the
+    two informational cases.
+    """
+    mismatches, missing_new, extra_stored = [], [], []
+    for key in sorted(set(stored_meta) | set(expect_meta)):
+        sv = stored_meta.get(key, _MISSING)
+        ev = expect_meta.get(key, _MISSING)
+        if key not in expect_meta:                      # case 3
+            extra_stored.append(key)
+        elif key not in stored_meta:                    # case 2
+            if key in _BACKWARD_COMPAT_META_KEYS:
+                missing_new.append(key)
+            else:
+                mismatches.append(f"  {key}: stored={sv!r}, expected={ev!r}")
+        elif sv != ev:                                  # case 1
+            mismatches.append(f"  {key}: stored={sv!r}, expected={ev!r}")
+    return mismatches, missing_new, extra_stored
+
+
+def check_meta(stored_meta, expect_meta, *, what="Taylor templates",
+               stacklevel=3):
+    """Apply :func:`compare_meta` and act on it: raise on mismatch, else warn.
+
+    ``what`` names the artifact in both the error and the warnings (the whitening
+    npz reuses this via ``example/mcmc/scripts/stream_common.py``).
+    """
+    mismatches, missing_new, extra_stored = compare_meta(stored_meta, expect_meta)
+    if mismatches:
+        raise ValueError(
+            f"Stale {what}: stored config meta does not match expect_meta on "
+            "the following key(s):\n" + "\n".join(mismatches))
+    if missing_new:
+        warnings.warn(
+            f"{what} meta is missing newer theory-config identifier key(s) "
+            f"{sorted(missing_new)}; this cache predates them. Loading anyway "
+            "(backward compatibility) -- rebuild via "
+            "build_taylor_templates_lcdm.py to stamp them.",
+            UserWarning, stacklevel=stacklevel)
+    if extra_stored:
+        warnings.warn(
+            f"{what} meta carries config identifier(s) "
+            f"{ {k: stored_meta[k] for k in sorted(extra_stored)} } that "
+            "expect_meta does not specify; they were NOT checked "
+            "(informational). Add them to expect_meta to have them verified.",
+            UserWarning, stacklevel=stacklevel)
 
 
 def save_taylor_templates(tt, path, *, meta: dict):
@@ -486,19 +563,22 @@ def load_taylor_templates(path, *, expect_meta: dict | None = None):
     path : str or path-like
         A ``.npz`` file written by :func:`save_taylor_templates`.
     expect_meta : dict, optional
-        If given, the stale-template guard: the stored ``meta`` must equal
-        ``expect_meta`` key-for-key. A key present in only one of the two dicts,
-        or present in both with differing values, is a mismatch. Any mismatch
-        raises ``ValueError`` listing EVERY offending key with its stored and
-        expected values, so a regenerated notebook config cannot silently sample
-        with tensors built for a different configuration.
+        If given, the stale-template guard: **every key of ``expect_meta`` must
+        be present in the stored meta with an equal value**, else ``ValueError``
+        listing EVERY offending key with its stored and expected values -- so a
+        regenerated notebook config cannot silently sample with tensors built for
+        a different configuration. Two cases are informational
+        (``UserWarning``, loads anyway) rather than errors; see
+        :func:`compare_meta` for the full rationale:
 
-        Backward compatibility: a key in :data:`_BACKWARD_COMPAT_META_KEYS`
-        (theory-config identifiers added after some caches were written) that is
-        present in ``expect_meta`` but ABSENT from a stored meta predating it
-        emits a ``UserWarning`` and loads, rather than raising -- so an old cache
-        is still usable. Value mismatches on those keys, and any missing/differing
-        key outside that set, still raise.
+        - a :data:`_BACKWARD_COMPAT_META_KEYS` identifier that ``expect_meta``
+          asks for and a PRE-DATING cache lacks (old cache, still usable);
+        - **any** key the stored meta carries that ``expect_meta`` does NOT
+          mention (a stamp the caller did not ask about is not evidence of
+          staleness -- this is what a freshly rebuilt, richer-stamped cache looks
+          like to a consumer passing the plain config stamp). Unspecified keys
+          are therefore UNCHECKED: name a key in ``expect_meta`` to have it
+          verified.
 
     Returns
     -------
@@ -507,42 +587,15 @@ def load_taylor_templates(path, *, expect_meta: dict | None = None):
     Warns
     -----
     UserWarning
-        If ``expect_meta`` carries newer identifiers (see
-        :data:`_BACKWARD_COMPAT_META_KEYS`) that a pre-dating cache lacks.
+        If a pre-dating cache lacks a newer identifier ``expect_meta`` asks for
+        (see :data:`_BACKWARD_COMPAT_META_KEYS`), or if the stored meta carries
+        identifiers ``expect_meta`` does not specify.
     """
     with np.load(path, allow_pickle=False) as npz:
         stored_meta = json.loads(str(npz["meta"].item()))
 
         if expect_meta is not None:
-            mismatches = []
-            missing_new = []
-            for key in sorted(set(stored_meta) | set(expect_meta)):
-                sv = stored_meta.get(key, _MISSING)
-                ev = expect_meta.get(key, _MISSING)
-                # An expected NEW-set key absent from a pre-dating cache is a
-                # backward-compatibility warning, not a mismatch. (Value diffs on
-                # such a key, or its presence-in-stored-only, still fall through
-                # to the strict mismatch path below.)
-                if (key in _BACKWARD_COMPAT_META_KEYS
-                        and key in expect_meta and key not in stored_meta):
-                    missing_new.append(key)
-                    continue
-                if (key not in stored_meta or key not in expect_meta
-                        or sv != ev):
-                    mismatches.append(
-                        f"  {key}: stored={sv!r}, expected={ev!r}")
-            if mismatches:
-                raise ValueError(
-                    "Stale Taylor templates: stored config meta does not match "
-                    "expect_meta on the following key(s):\n"
-                    + "\n".join(mismatches))
-            if missing_new:
-                warnings.warn(
-                    "Taylor-template meta is missing newer theory-config "
-                    f"identifier key(s) {sorted(missing_new)}; this cache "
-                    "predates them. Loading anyway (backward compatibility) -- "
-                    "rebuild via build_taylor_templates_lcdm.py to stamp them.",
-                    UserWarning, stacklevel=2)
+            check_meta(stored_meta, expect_meta, what="Taylor templates")
 
         n_bins = int(npz["n_bins"])
         order2_m0 = bool(npz["order2_m0"])

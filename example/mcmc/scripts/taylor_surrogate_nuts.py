@@ -72,6 +72,7 @@ from jaxptpolypol import (
     split_marginal_indices,
 )
 from jaxptpolypol.bao import load_desi_dr2, make_bao_theory_fn
+from jaxptpolypol.marginal_taylor import check_meta
 from jaxptpolypol.params import (
     CosmoParams,
     FullShapeSurveyParams,
@@ -163,9 +164,13 @@ print("===== assemble surrogate posterior =====", flush=True)
 tt = load_taylor_templates(TEMPLATES_PATH, expect_meta=META)
 wz = np.load(WHITENING_PATH)
 stored_meta = json.loads(str(wz["meta"].item()))
-if stored_meta != META:
-    sys.exit(f"Whitening npz meta mismatch:\nstored   {stored_meta}\n"
-             f"expected {META}")
+# Same semantics as the templates guard (marginal_taylor.compare_meta): keys
+# META names must match; identifiers the rebuilt cache stamps but META does not
+# mention (prior_spec / cosmo_priors / c1_treatment) warn, not fail.
+try:
+    check_meta(stored_meta, META, what="whitening npz")
+except ValueError as _err:
+    sys.exit(str(_err))
 
 packed_params = jnp.asarray(wz["packed_params"])
 pb_fid = jnp.asarray(wz["pb_fid"])

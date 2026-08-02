@@ -326,15 +326,19 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
 
     ``sampled_marginal_priors`` = sequence of ``(key, positions)``: for each
     ``key`` (a ``spec.marginalized`` row REMOVED from ``lin_keys`` and now sampled
-    in theta_NL), ``log_prior_nl_fn`` gains a per-bin Gaussian ``N(mean, width_b^2)``
-    with the SAME width machinery the marginalized row would have carried --
-    ``mean = row.mean`` (numeric only; ``mean_formula`` keys are rejected),
-    ``width_b = row.sigma * f_knl_b / R_b`` with ``R_b`` from ``row.rescale`` and
+    in theta_NL), ``log_prior_nl_fn`` gains a per-bin Gaussian
+    ``N(mean_b, width_b^2)`` with the SAME layer-2 machinery the marginalized row
+    would have carried -- ``mean_b = row.mean / R_b`` (numeric only;
+    ``mean_formula`` keys are rejected) and
+    ``width_b = row.sigma * f_knl_b / R_b``, with ``R_b`` from ``row.rescale`` and
     ``f_knl_b = (knl_b/paper_knl)^2`` when ``row.factor_formula`` is the knl form.
     ``positions`` is the length-``n_bins`` sequence of theta_NL indices where that
-    sampled parameter lives per bin (e.g. c1 at ``split.nl_b1_pos[b] + 3``). This
-    is exactly the prior the marginalized path integrates analytically, so a
-    sampled-c1 chain and a marginalized-c1 chain carry an equivalent c1 prior.
+    sampled parameter lives per bin (e.g. c1 at ``split.nl_b1_pos[b] + 3`` -- but
+    only for the c1-sampled split; compute them from ``split.nl_idx`` if in
+    doubt, and note they are bounds-checked against ``split.n_nl``). Both the
+    mean and the width match ``_per_bin_arrays``, so this is exactly the prior
+    the marginalized path integrates analytically and a sampled-c1 chain and a
+    marginalized-c1 chain carry an equivalent c1 prior.
     """
     n_bins = len(split.nl_b1_pos)
     lin_keys = tuple(lin_keys)
@@ -342,6 +346,17 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
     if missing:
         raise ValueError(f"lin_keys not present in spec.marginalized: {missing}")
     n_lin_keys = len(lin_keys)
+    # The prior rows are laid out purely per lin_keys while the templates are
+    # laid out per split.lin_idx, so an equal-length but different (or merely
+    # reordered) key list would silently mis-assign every row. split.lin_keys is
+    # bin-major, so its first n_lin_keys entries are bin 0's key order.
+    split_lin_keys = tuple(k for _b, k in split.lin_keys[:n_lin_keys])
+    if (split.n_lin != n_bins * n_lin_keys or split_lin_keys != lin_keys):
+        raise ValueError(
+            "lin_keys disagrees with the split's marginalized block: split has "
+            f"n_lin={split.n_lin} ({split_lin_keys}) per bin, lin_keys has "
+            f"{n_lin_keys} ({lin_keys}). Pass the SAME key tuple to "
+            "split_marginal_indices(lin_survey_keys=...) and here.")
     knl_arr = jnp.asarray(knl_bins, dtype=jnp.float64)
     if knl_arr.shape != (n_bins,):
         raise ValueError(f"knl_bins must have length {n_bins}")
@@ -391,6 +406,14 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
         L_bins = ctr_rotation_matrices(f_arr)               # (n_bins, 3, 3)
         c0 = lin_keys.index(("pk", "ctr", "c0"))            # == 2 (c1 is after)
         ctr = slice(c0, c0 + 3)
+        # The rotated L.diag.L^T block is written at slots c0..c0+2, so the trio
+        # must be CONTIGUOUS and in (c0, c2, c4) order -- membership alone would
+        # let a reordered lin_keys rotate the block onto the wrong parameters.
+        if tuple(lin_keys[ctr]) != _CTR_TRIO:
+            raise ValueError(
+                "cov-mode (ctr_rotation) requires the c0/c2/c4 trio to be "
+                f"contiguous and in order in lin_keys; got {lin_keys[ctr]} at "
+                f"slots {c0}..{c0 + 2}")
         ctr_rows = [spec.marginalized[k] for k in _CTR_TRIO]
         paper_sigma_ctr = jnp.array([r.paper_sigma for r in ctr_rows])   # (3,)
         paper_mean_ctr = jnp.array(
@@ -433,11 +456,23 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
             raise ValueError(
                 f"sampled_marginal_priors key {key} has mean_formula "
                 f"{row.mean_formula!r}; only numeric-mean rows are supported")
-        pos_arr = jnp.asarray(positions)
-        if pos_arr.shape != (n_bins,):
+        if key in lin_keys:
+            raise ValueError(
+                f"sampled_marginal_priors key {key} is still in lin_keys, so it "
+                "is marginalized and has no theta_NL slot; drop it from lin_keys "
+                "(and from the split's lin_survey_keys) first")
+        pos_list = [int(p) for p in positions]
+        if len(pos_list) != n_bins:
             raise ValueError(
                 f"sampled_marginal_priors positions for {key} must have length "
-                f"{n_bins} (one theta_NL index per bin); got shape {pos_arr.shape}")
+                f"{n_bins} (one theta_NL index per bin); got {len(pos_list)}")
+        # jnp gathers CLAMP out-of-range indices, so an off-by-one would apply
+        # this prior to a different parameter with no diagnostic.
+        if min(pos_list) < 0 or max(pos_list) >= split.n_nl:
+            raise ValueError(
+                f"sampled_marginal_priors positions for {key} out of range for "
+                f"theta_NL (n_nl={split.n_nl}): {pos_list}")
+        pos_arr = jnp.asarray(pos_list)
         ap_p, amp_p = _rescale_power(row.rescale)
         knl_factor = ((knl_arr / paper_knl) ** 2
                       if row.factor_formula == "knl_over_0p45_sq"
@@ -462,7 +497,10 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
             for pos_arr, mean, base_sig, ap_p, amp_p, knl_factor in sampled_extra:
                 R = a_ap ** ap_p * a_amp ** amp_p           # (n_bins,)
                 width = base_sig * knl_factor / R           # (n_bins,)
-                x = theta_nl[pos_arr] - mean                # (n_bins,)
+                # Layer-2 divides BOTH the width and the mean by R (same as the
+                # marginalized path's _per_bin_arrays), so the two treatments
+                # describe the same prior on the raw coefficient.
+                x = theta_nl[pos_arr] - mean / R            # (n_bins,)
                 total = total + jnp.sum(
                     -0.5 * (x / width) ** 2 - jnp.log(width) - 0.5 * _LOG2PI)
         return total

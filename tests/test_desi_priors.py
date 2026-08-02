@@ -628,16 +628,21 @@ def _split_no_c1():
         lin_survey_keys=LIN_KEYS_NO_C1)
 
 
-def _c1_nl_positions(split):
-    """Per-bin theta_NL indices of the sampled c1, robust to survey-key order.
+def _nl_positions(split, key):
+    """Per-bin theta_NL indices of a sampled survey key, from the split itself.
 
     (In this toy, SURVEY_KEYS_TOY puts the LIN block first, so c1 sits BEFORE
     b1 in each bin's nl sub-block -- unlike production, where b1/b2/bG2 come
     first and c1 lands at nl_b1_pos+3. Computing from the split covers both.)"""
     n_survey = len(SURVEY_KEYS_TOY)
-    c1_off = SURVEY_KEYS_TOY.index(_C1_KEY)
+    off = SURVEY_KEYS_TOY.index(key)
     nl_pos = {full: pos for pos, full in enumerate(split.nl_idx)}
-    return [nl_pos[N_COSMO + b * n_survey + c1_off] for b in range(N_BINS)]
+    return [nl_pos[N_COSMO + b * n_survey + off] for b in range(N_BINS)]
+
+
+def _c1_nl_positions(split):
+    """Per-bin theta_NL indices of the sampled c1."""
+    return _nl_positions(split, _C1_KEY)
 
 
 def test_reduced_lin_keys_cov_blocks_drop_c1(toy_spec_path):
@@ -727,6 +732,173 @@ def test_sampled_marginal_prior_c1_R_division(toy_spec_path):
     d_off = float(log_prior_nl(theta_off_c1)) - float(log_prior_nl(theta_off))
     R = 1.1
     assert d_off == pytest.approx(-0.5 * (w / (sig_c1 / R)) ** 2)
+
+
+def test_sampled_marginal_prior_absolute_log_normalization(toy_spec_path):
+    """ABSOLUTE value of log_prior_nl against the closed form -- the only test
+    that pins the ``- log(width) - 0.5*log(2pi)`` normalization.
+
+    Every other assertion on this function takes a DIFFERENCE at fixed non-c1
+    coordinates, where that term cancels identically. But ``width_b =
+    sigma * f_knl_b / R_b(theta_NL)`` is theta-dependent, so ``-log(width_b)``
+    contributes ``+ sum_b log R_b(theta_NL)``: a LIVE gradient in the cosmology
+    directions, and precisely the term that must mirror the marginalized path's
+    analytic ``-0.5 logdet Sigma_p``. Drop it and the sampled-c1 posterior tilts
+    in cosmology relative to the marginalized one -- silently corrupting the
+    Tier-3 comparison. Evaluated off-fiducial in BOTH rescaling directions
+    (theta[0] -> sigma8/A_amp, theta[1] -> a_ap) so R != 1 for every block.
+    """
+    spec = load_desi_prior_spec(toy_spec_path)
+    split = _split_no_c1()
+    c1_pos = _c1_nl_positions(split)
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    _, _, log_prior_nl = make_desi_prior_fns(
+        spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+        a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID,
+        lin_keys=LIN_KEYS_NO_C1,
+        sampled_marginal_priors=[(_C1_KEY, c1_pos)])
+
+    theta = jnp.zeros(split.n_nl).at[0].set(0.3).at[1].set(-0.4)
+    c1_vals = (0.35, -0.2)
+    for p, v in zip(c1_pos, c1_vals):
+        theta = theta.at[p].set(v)
+    b2_pos = [int(p) + 1 for p in split.nl_b1_pos]
+    bG2_pos = [int(p) + 2 for p in split.nl_b1_pos]
+    b2_vals, bG2_vals = (0.6, -0.9), (0.15, 0.4)
+    for p, v in zip(b2_pos, b2_vals):
+        theta = theta.at[p].set(v)
+    for p, v in zip(bG2_pos, bG2_vals):
+        theta = theta.at[p].set(v)
+
+    # Closed form, built independently of the implementation.
+    log2pi = np.log(2.0 * np.pi)
+    s8 = np.asarray(sigma8_ref) * (1.0 + 0.1 * 0.3)          # (n_bins,)
+    a_ap = 1.0 + 0.2 * (-0.4)
+    a_amp = s8 ** 2 / np.asarray(sigma8_ref) ** 2
+    expected = 0.0
+    for vals in (b2_vals, bG2_vals):                          # sigma8_sq rescale
+        w = 5.0 / s8 ** 2
+        expected += float(np.sum(-0.5 * (np.asarray(vals) / w) ** 2
+                                 - np.log(w) - 0.5 * log2pi))
+    R = a_ap * a_amp                                          # c1: A_AP*A_amp
+    w_c1 = 1.0125 / R
+    expected += float(np.sum(-0.5 * (np.asarray(c1_vals) / w_c1) ** 2
+                             - np.log(w_c1) - 0.5 * log2pi))
+
+    assert float(log_prior_nl(theta)) == pytest.approx(expected, rel=1e-12)
+
+    # Non-vacuity: the normalization is a LIVE cosmology gradient. Moving only
+    # the a_ap direction (theta[1]) with all c1 slots at ZERO -- where the
+    # quadratic term vanishes identically -- still changes log_prior_nl by
+    # exactly n_bins*log(R), the log-det the marginalized path also carries.
+    theta_z = jnp.zeros(split.n_nl)
+    d = float(log_prior_nl(theta_z.at[1].set(0.5))) - float(log_prior_nl(theta_z))
+    assert d == pytest.approx(N_BINS * np.log(1.1))
+    assert abs(d) > 0.1                                       # not a no-op
+
+
+def test_sampled_marginal_prior_nonzero_mean_uses_mean_over_R(toy_spec_path):
+    """A nonzero-mean sampled row is centred at ``mean / R_b``, matching the
+    marginalized path (``_per_bin_arrays`` returns ``mean / R``). Using the raw
+    mean would describe a prior on no consistent variable at all."""
+    spec = load_desi_prior_spec(toy_spec_path)
+    bshot = ("bk", "stoch", "B_shot")
+    assert spec.marginalized[bshot].mean == 1.0          # nonzero, rescale A_AP
+    lin_keys = tuple(k for k in LIN_SURVEY_KEYS if k != bshot)
+    split = split_marginal_indices(
+        n_cosmo_params=N_COSMO, survey_keys=SURVEY_KEYS_TOY, n_bins=N_BINS,
+        lin_survey_keys=lin_keys)
+    pos = _nl_positions(split, bshot)
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    _, _, log_prior_nl = make_desi_prior_fns(
+        spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+        a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID,
+        lin_keys=lin_keys, sampled_marginal_priors=[(bshot, pos)])
+
+    # theta[1] = 0.5 -> a_ap = 1.1 = R (B_shot rescale is A_AP).
+    R = 1.1
+    theta = jnp.zeros(split.n_nl).at[1].set(0.5)
+    at_peak = theta
+    for p in pos:
+        at_peak = at_peak.at[p].set(1.0 / R)
+    g = jax.grad(log_prior_nl)(at_peak)
+    for p in pos:
+        assert float(g[p]) == pytest.approx(0.0, abs=1e-12)
+    # The RAW mean is NOT the peak (would be, if the /R were missing).
+    at_raw = theta
+    for p in pos:
+        at_raw = at_raw.at[p].set(1.0)
+    g_raw = jax.grad(log_prior_nl)(at_raw)
+    for p in pos:
+        assert abs(float(g_raw[p])) > 0.1
+
+
+def test_lin_keys_inconsistent_with_split_raises(toy_spec_path):
+    """An equal-length but DIFFERENT lin_keys list would silently mis-assign
+    every prior row against the templates laid out per ``split.lin_idx``."""
+    spec = load_desi_prior_spec(toy_spec_path)
+    split = _split_no_c1()                       # split built with c1 dropped
+    wrong = tuple(k for k in LIN_SURVEY_KEYS
+                  if k != ("pk", "stoch", "a0"))  # same length 10, a0 dropped
+    assert len(wrong) == len(LIN_KEYS_NO_C1)
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    with pytest.raises(ValueError, match="split"):
+        make_desi_prior_fns(
+            spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+            a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID,
+            lin_keys=wrong)
+
+
+def test_ctr_trio_non_contiguous_raises(toy_spec_path):
+    """Cov-mode writes the rotated 3x3 block at ``lin_keys[c0:c0+3]``; a
+    reordering that separates the trio must be rejected, not silently rotated
+    onto the wrong slots."""
+    spec = load_desi_prior_spec(toy_spec_path)
+    cfog = ("pk", "ctr", "cfog")
+    permuted = list(k for k in LIN_SURVEY_KEYS if k != cfog)
+    permuted.insert(permuted.index(("pk", "ctr", "c2")), cfog)  # c0, cfog, c2...
+    permuted = tuple(permuted)
+    split = split_marginal_indices(
+        n_cosmo_params=N_COSMO, survey_keys=SURVEY_KEYS_TOY, n_bins=N_BINS,
+        lin_survey_keys=permuted)
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    with pytest.raises(ValueError, match="contiguous"):
+        make_desi_prior_fns(
+            spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+            a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID,
+            lin_keys=permuted)
+
+
+def test_sampled_marginal_prior_positions_validated(toy_spec_path):
+    """JAX gathers CLAMP out-of-range indices, so an unvalidated position would
+    put the prior on the wrong parameter silently; and a key still present in
+    lin_keys has no theta_NL slot at all."""
+    spec = load_desi_prior_spec(toy_spec_path)
+    split = _split_no_c1()
+    c1_pos = _c1_nl_positions(split)
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    common = dict(split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+                  a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref,
+                  f_bins=TOY_F_FID, lin_keys=LIN_KEYS_NO_C1)
+
+    bad = list(c1_pos)
+    bad[-1] = split.n_nl                       # one past the end -> clamps
+    with pytest.raises(ValueError, match="out of range"):
+        make_desi_prior_fns(spec, sampled_marginal_priors=[(_C1_KEY, bad)],
+                            **common)
+    neg = list(c1_pos)
+    neg[0] = -1
+    with pytest.raises(ValueError, match="out of range"):
+        make_desi_prior_fns(spec, sampled_marginal_priors=[(_C1_KEY, neg)],
+                            **common)
+    # A key that is STILL marginalized cannot also be sampled.
+    common_full = dict(common, lin_keys=LIN_SURVEY_KEYS,
+                       split=split_marginal_indices(
+                           n_cosmo_params=N_COSMO, survey_keys=SURVEY_KEYS_TOY,
+                           n_bins=N_BINS))
+    with pytest.raises(ValueError, match="lin_keys"):
+        make_desi_prior_fns(spec, sampled_marginal_priors=[(_C1_KEY, c1_pos)],
+                            **common_full)
 
 
 def test_sampled_marginal_prior_jit_and_grad_safe(toy_spec_path):
