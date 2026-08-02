@@ -39,7 +39,6 @@ stage (e.g. after a template-stage abort), re-run in a fresh process with
 
 from functools import partial
 import gc
-import hashlib
 import json
 import os
 import pathlib
@@ -66,6 +65,13 @@ import jax.numpy as jnp
 from jax.scipy.linalg import inv
 
 from ps_1loop_jax import background as bg
+
+from stream_common import (
+    BACKGROUND_MODE, DEFAULT_BAO_DATA_DIR, FIDUCIAL, K_BK_MAX, K_BK_MIN,
+    K_NL_RSD, K_PK_MAX, K_PK_MIN, META, MNU_FIXED, N_GL, N_K, NUM_MU, NUM_PHI,
+    PFS_EMULATOR, V_bins, knl_bins, meta_for, n_bar, n_zbins,
+    template_meta_for, z_bins,
+)
 
 from jaxptpolypol import (
     LIN_SURVEY_KEYS,
@@ -171,37 +177,22 @@ def set_stage(name, limit_gb):
 
 
 # ---------------------------------------------------------------------------
-# Configuration -- copied VERBATIM from mcmc_joint_PFS_BAO_BBN_ns_LCDM.ipynb,
-# cell "Configuration (mirrors the Fisher notebook)".
+# Configuration. The production constants (fiducial cosmology, redshift/volume/
+# knl/nbar bins, k-grid, quadrature, emulator path, META) originate in
+# mcmc_joint_PFS_BAO_BBN_ns_LCDM.ipynb, cell "Configuration (mirrors the Fisher
+# notebook)"; they are IMPORTED from stream_common (the single source of truth)
+# rather than re-declared here. They used to be a byte-identical copy, which
+# made the theory_config_hash stamped below a hash of a config that could
+# silently differ from the one every consumer expects -- i.e. a guard comparing
+# two different worlds. Only the build-only knobs stay local.
 # ---------------------------------------------------------------------------
 
-FIDUCIAL = {
-    'ombh2': 0.02242, 'omch2': 0.11933, 'logA': 3.047,
-    'ns': 0.9665, 'h': 0.6766, 'tau': 0.0561,
-}
-MNU_FIXED = 0.06  # eV, not varied in LCDM
-
-z_bins   = (0.7,  0.9,  1.1,  1.3,  1.5,  1.8,  2.2)
-V_bins   = tuple(v * 1000.**3 for v in (0.59, 0.79, 0.96, 1.09, 1.19, 2.58, 2.71))
-knl_bins = (0.52, 0.65, 0.82, 1.02, 1.29, 1.82, 2.88)
-n_bar    = (3.06e-4, 9.61e-4, 9.75e-4, 6.54e-4, 3.40e-4, 2.02e-4, 3.51e-4)
-n_zbins  = len(z_bins)
-
-K_PK_MIN, K_PK_MAX, N_K = 0.02, 0.20, 37
-K_BK_MIN, K_BK_MAX = 0.02, 0.08
-K_NL_RSD = 0.45
-NUM_MU = NUM_PHI = 65
-N_GL = 16
 BB_POWER_MODEL = 'kaiser'
-BACKGROUND_MODE = 'direct'
-
-PFS_EMULATOR = '/Users/nguyenmn/cosmopower-jax-for-pfs/cosmology/jense2024/jense_2023_camb_lcdm/networks/jense_2023_camb_lcdm_Pk_lin.npz'
-BAO_DATA_DIR = "../../ext_data/bao_data/desi_bao_dr2"   # chdir-sensitive: run from example/mcmc
+BAO_DATA_DIR = DEFAULT_BAO_DATA_DIR   # chdir-sensitive: run from example/mcmc
 
 COSMO_PRIORS = {'ombh2': 0.00055, 'ns': 0.042}  # BBN + ns10 (arXiv:2411.12022)
 
-# Taylor-build knobs + the config stamp for the stale-template guard.
-# META values MUST be native str/int/float/bool.
+# Taylor-build knobs (the config stamp itself, META, is imported above).
 # MEASURED (2026-07-29): the first H (jacfwd-of-jacfwd) chunk spiked to
 # 83.8 GB at chunk_H=2 and 80.8 GB at chunk_H=1 -- the planned 18-25 GB
 # prediction did not hold, and lowering chunk_H does NOT reduce the peak,
@@ -210,49 +201,26 @@ COSMO_PRIORS = {'ombh2': 0.00055, 'ns': 0.042}  # BBN + ns10 (arXiv:2411.12022)
 # ~2x faster H build, same memory); the stage watchdog is set to 105 GB
 # below instead of the planned 70 GB. J chunks (4-wide) stayed under 34 GB.
 CHUNK_J, CHUNK_H = 4, 2
-META = {
-    "n_bins": 7, "n_k": 37, "n_tri": 264, "n_gl": 16,
-    "num_mu": 65, "num_phi": 65,
-    "k_min": 0.02, "k_max": 0.20, "k_bk_max": 0.08, "k_nl_rsd": 0.45,
-    "order2_m0": True,
-}
 
 # --- Template vs whitening meta stamps -------------------------------------
 # Both stamps carry the c1 treatment ("marginalized" | "sampled") so a loaded
-# cache is SELF-DESCRIBING. Note the guard semantics
-# (marginal_taylor.compare_meta): a consumer only has c1_treatment CHECKED if it
-# names the key in expect_meta -- stream_common.meta_for(treatment) does; the
-# plain META does not (it warns instead). A base cache predating the key still
-# warns rather than errors, since c1_treatment is in
-# marginal_taylor._BACKWARD_COMPAT_META_KEYS.
+# cache is SELF-DESCRIBING, and the TEMPLATES stamp additionally carries the
+# theory-config identifiers that determine template validity: a sha256 binding
+# the full theory/grid config plus the short per-bin tuples verbatim (as
+# strings). Both come from stream_common, which is also what
+# load_templates_and_whitening EXPECTS by default -- producer and consumer read
+# the same constants, so the hash guard compares one world with itself and a
+# genuine config change hard-fails every stale cache.
 #
-# MARGINALIZED mode keeps the richer template/whitening stamps (theory_config_hash
-# / prior_spec) -- unchanged from the base build. Consumers passing the plain
-# 11-key META load these fine (stored-only identifiers are informational, not
-# staleness). SAMPLED mode stamps a single FLAT meta_for-style dict
-# ({**META, c1_treatment: "sampled"}) on BOTH npz, so the Tier-3 validation can
-# load the pair with one expect_meta via
-# stream_common.load_templates_and_whitening.
+# Templates are PRIOR-INDEPENDENT, so prior identifiers never go on the template
+# stamp; they live on the WHITENING stamp (marginalized mode), where they are
+# informational to consumers (marginal_taylor.compare_meta case 3).
+TEMPLATE_META = template_meta_for(C1_TREATMENT)
 if C1_SAMPLED:
-    TEMPLATE_META = {**META, "c1_treatment": C1_TREATMENT}
-    WHITENING_META = {**META, "c1_treatment": C1_TREATMENT}
+    WHITENING_META = meta_for(C1_TREATMENT)
 else:
-    # The Taylor tensors are functions of the THEORY and GRID only, so the
-    # TEMPLATES npz meta carries the theory-config identifiers that determine
-    # template validity: a sha256 hash binding the full set, plus the short
-    # per-bin tuples verbatim (as strings). Templates are PRIOR-INDEPENDENT --
-    # prior identifiers live on the WHITENING npz meta below.
-    _THEORY_CONFIG = (V_bins, n_bar, knl_bins, z_bins,
-                      (K_PK_MIN, K_PK_MAX, N_K, K_BK_MIN, K_BK_MAX), K_NL_RSD)
-    THEORY_CONFIG_HASH = hashlib.sha256(repr(_THEORY_CONFIG).encode()).hexdigest()
-    TEMPLATE_META = {
-        **META, "c1_treatment": C1_TREATMENT,
-        "theory_config_hash": THEORY_CONFIG_HASH,
-        "z_bins": str(z_bins), "knl_bins": str(knl_bins),
-        "n_bar": str(n_bar), "V_bins": str(V_bins),
-    }
     WHITENING_META = {
-        **META, "c1_treatment": C1_TREATMENT,
+        **meta_for(C1_TREATMENT),
         "prior_spec": "eft_eq12_2405_02252",
         "cosmo_priors": COSMO_PRIORS,
     }

@@ -25,7 +25,8 @@ stacked ``(n_bins, 11, 11)`` ``prior_sigma_fn`` that
 ``make_marginal_log_posterior_taylor`` consumes natively (Task 5sigma). We do
 NOT rotate the templates here.
 
-Outputs (written into master's cache via the worktree symlink)
+Outputs (written into master's cache via the worktree symlink; a smoke run
+appends ``_smoke`` to both names so it cannot clobber a committed gate result)
 --------------------------------------------------------------
   cache/desi_prior_validation_sigmap.json  -- gate verdict + all numbers
   cache/branch_equiv_sigmap.json           -- 64 whitened-point log-posterior
@@ -178,9 +179,14 @@ if (not (CACHE / "taylor_whitening_lcdm.npz").exists()
 
 WHITENING_PATH = CACHE / "taylor_whitening_lcdm.npz"
 TEMPLATES_PATH = CACHE / "taylor_templates_lcdm.npz"
-RESULT_PATH = (CACHE / "desi_prior_validation_sigmap_frozenR.json" if FROZEN_R
-               else CACHE / "desi_prior_validation_sigmap.json")
-EQUIV_PATH = CACHE / "branch_equiv_sigmap.json"   # not written in FROZEN_R mode
+# A SMOKE run writes to its OWN filenames. Both production outputs are TRACKED
+# gate artifacts, and a 2000-step smoke chain (whose numbers are meaningless as
+# a gate) must never be able to overwrite a committed gate result.
+_SFX = "_smoke" if SMOKE else ""
+RESULT_PATH = (CACHE / f"desi_prior_validation_sigmap_frozenR{_SFX}.json"
+               if FROZEN_R else
+               CACHE / f"desi_prior_validation_sigmap{_SFX}.json")
+EQUIV_PATH = CACHE / f"branch_equiv_sigmap{_SFX}.json"  # not written if FROZEN_R
 
 for p in (WHITENING_PATH, TEMPLATES_PATH):
     if not p.exists():

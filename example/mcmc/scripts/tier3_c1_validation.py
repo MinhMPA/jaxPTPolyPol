@@ -68,7 +68,7 @@ import jax.numpy as jnp
 from stream_common import (
     DEFAULT_BAO_DATA_DIR, META, MNU_FIXED, PFS_EMULATOR, SHARED_KEYS,
     build_bao, build_fiducial_surveys, build_kgrid_and_blocks, build_split,
-    knl_bins, load_templates_and_whitening, meta_for, n_zbins, z_bins,
+    knl_bins, load_templates_and_whitening, n_zbins, z_bins,
 )
 
 from jaxptpolypol import LIN_SURVEY_KEYS, make_marginal_log_posterior_taylor
@@ -151,7 +151,9 @@ MARG_TEMPLATES = CACHE / "taylor_templates_lcdm.npz"
 MARG_WHITENING = CACHE / "taylor_whitening_lcdm.npz"
 SAMP_TEMPLATES = CACHE / "taylor_templates_lcdm_c1s.npz"
 SAMP_WHITENING = CACHE / "taylor_whitening_lcdm_c1s.npz"
-RESULT_PATH = CACHE / "tier3_c1_validation.json"
+# A SMOKE run writes to its own filename: the production result is a TRACKED
+# gate artifact, and a 2000-step smoke chain must never be able to overwrite it.
+RESULT_PATH = CACHE / (f"tier3_c1_validation{'_smoke' if SMOKE else ''}.json")
 
 for p in (MARG_TEMPLATES, MARG_WHITENING):
     if not p.exists():
@@ -200,14 +202,19 @@ FIXED_BARYON = {'A_b': cosmo_dict['A_b'], 'eta_b': cosmo_dict['eta_b'],
 spec = load_desi_prior_spec()
 
 
-def _build_side(name, templates_path, whitening_path, expect_meta, split,
+def _build_side(name, templates_path, whitening_path, split,
                 sampled_marginal_priors, lin_keys):
     """Assemble one side's surrogate log-posterior + chain inputs.
+
+    ``name`` IS the c1 treatment ('marginalized' | 'sampled'), so both sides get
+    their treatment AND the theory-config hash verified against the stamps on
+    the npz they load -- a stale cache or a swapped marg/sampled pair is a hard
+    failure, not a warning (stream_common.load_templates_and_whitening).
 
     Returns a dict with the jitted log-posterior, whitening (center/cov),
     fid_nl, cosmo_nl_pos and the sampled-c1 nl positions (empty for marg)."""
     tt, wz = load_templates_and_whitening(
-        templates_path, whitening_path, expect_meta=expect_meta)
+        templates_path, whitening_path, treatment=name)
     packed_params = jnp.asarray(wz["packed_params"])
     pb_fid = jnp.asarray(wz["pb_fid"])
     bin_cov_invs = [jnp.asarray(c) for c in wz["bin_cov_invs"]]
@@ -298,7 +305,7 @@ def _build_side(name, templates_path, whitening_path, expect_meta, split,
 # Marginalized side: existing cache, default 11 lin keys (c1 marginalized).
 marg_split = build_split(n_cosmo_params, joint_survey_keys)   # standard split
 marg = _build_side(
-    "marginalized", MARG_TEMPLATES, MARG_WHITENING, META, marg_split,
+    "marginalized", MARG_TEMPLATES, MARG_WHITENING, marg_split,
     sampled_marginal_priors=None, lin_keys=LIN_SURVEY_KEYS)
 
 # Sampled side: _c1s cache, reduced 10 lin keys (c1 sampled + its DESI prior).
@@ -308,7 +315,7 @@ samp_split = split_marginal_indices(
     fixed_survey_keys={('shared', 'k_nl', None), ('shared', 'ndens', None)},
     lin_survey_keys=LIN_KEYS_NO_C1)
 samp = _build_side(
-    "sampled", SAMP_TEMPLATES, SAMP_WHITENING, meta_for("sampled"), samp_split,
+    "sampled", SAMP_TEMPLATES, SAMP_WHITENING, samp_split,
     sampled_marginal_priors=True, lin_keys=LIN_KEYS_NO_C1)
 
 # The two sides must share the cosmology fiducial + Fisher widths.

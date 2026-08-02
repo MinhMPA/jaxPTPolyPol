@@ -65,14 +65,14 @@ from blackjax.diagnostics import (
 
 from ps_1loop_jax import background as bg
 
+from stream_common import load_templates_and_whitening
+
 from jaxptpolypol import (
-    load_taylor_templates,
     make_constant_prior_fns,
     make_marginal_log_posterior_taylor,
     split_marginal_indices,
 )
 from jaxptpolypol.bao import load_desi_dr2, make_bao_theory_fn
-from jaxptpolypol.marginal_taylor import check_meta
 from jaxptpolypol.params import (
     CosmoParams,
     FullShapeSurveyParams,
@@ -161,16 +161,11 @@ if not pathlib.Path(BAO_DATA_DIR).is_dir():
 
 print("===== assemble surrogate posterior =====", flush=True)
 
-tt = load_taylor_templates(TEMPLATES_PATH, expect_meta=META)
-wz = np.load(WHITENING_PATH)
-stored_meta = json.loads(str(wz["meta"].item()))
-# Same semantics as the templates guard (marginal_taylor.compare_meta): keys
-# META names must match; identifiers the rebuilt cache stamps but META does not
-# mention (prior_spec / cosmo_priors / c1_treatment) warn, not fail.
-try:
-    check_meta(stored_meta, META, what="whitening npz")
-except ValueError as _err:
-    sys.exit(str(_err))
+# The shared guarded loader: the templates stamp is held to the FULL production
+# expectation (theory_config_hash + c1_treatment + grid), the whitening stamp to
+# the grid + c1_treatment, so a stale or c1-sampled cache hard-fails here rather
+# than silently feeding this chain (stream_common.load_templates_and_whitening).
+tt, wz = load_templates_and_whitening(TEMPLATES_PATH, WHITENING_PATH)
 
 packed_params = jnp.asarray(wz["packed_params"])
 pb_fid = jnp.asarray(wz["pb_fid"])

@@ -9,8 +9,10 @@ configuration and theory/BAO assembly (each a verbatim mirror of
 
 This module collects ONLY the clearly-duplicated, byte-identical pieces:
 
-- the production config constants (fiducial cosmology, redshift bins, k-grid,
-  quadrature, emulator path, the ``META`` config stamp, ``SHARED_KEYS``);
+- the production config constants (fiducial cosmology, redshift/volume bins,
+  k-grid, quadrature, emulator path, the ``META`` config stamp, ``SHARED_KEYS``)
+  and the derived ``THEORY_CONFIG_HASH`` -- ``build_taylor_templates_lcdm.py``
+  imports these too, so the stamped and the expected config cannot diverge;
 - template/whitening loading (:func:`load_templates_and_whitening`);
 - theory/BAO assembly (:func:`build_fiducial_surveys`, :func:`build_split`,
   :func:`build_kgrid_and_blocks`, :func:`build_bao`).
@@ -26,6 +28,7 @@ in the individual scripts.
 already enabled float64 gets the production dtype; import order is irrelevant.
 """
 
+import hashlib
 import json
 import sys
 
@@ -47,8 +50,9 @@ from jaxptpolypol.theory import build_bispectrum_triangles_from_k_grid
 # ---------------------------------------------------------------------------
 # Production config constants -- copied VERBATIM from
 # mcmc_joint_PFS_BAO_BBN_ns_LCDM.ipynb (cell "Configuration (mirrors the Fisher
-# notebook)"), in lockstep with build_taylor_templates_lcdm.py. The META guard +
-# the packed/split/BAO tripwires in each script enforce that lockstep.
+# notebook)"). build_taylor_templates_lcdm.py IMPORTS them from here rather than
+# keeping its own copies, so producer and consumer cannot drift; the META guard +
+# the packed/split/BAO tripwires in each script enforce the rest of the lockstep.
 # ---------------------------------------------------------------------------
 
 FIDUCIAL = {
@@ -58,6 +62,7 @@ FIDUCIAL = {
 MNU_FIXED = 0.06  # eV, not varied in LCDM
 
 z_bins   = (0.7,  0.9,  1.1,  1.3,  1.5,  1.8,  2.2)
+V_bins   = tuple(v * 1000.**3 for v in (0.59, 0.79, 0.96, 1.09, 1.19, 2.58, 2.71))
 knl_bins = (0.52, 0.65, 0.82, 1.02, 1.29, 1.82, 2.88)
 n_bar    = (3.06e-4, 9.61e-4, 9.75e-4, 6.54e-4, 3.40e-4, 2.02e-4, 3.51e-4)
 n_zbins  = len(z_bins)
@@ -81,6 +86,18 @@ META = {
     "order2_m0": True,
 }
 
+#: The theory/grid configuration the Taylor tensors are a function of, and its
+#: sha256. This tuple layout and its ``repr`` serialization are THE canonical
+#: ones: ``build_taylor_templates_lcdm.py`` imports :data:`THEORY_CONFIG_HASH`
+#: from here to STAMP its templates npz and the loaders below use it to EXPECT,
+#: so the two hashes are byte-identical by construction and a change to any of
+#: ``V_bins``/``n_bar``/``knl_bins``/``z_bins``/the k-grid/``K_NL_RSD`` above
+#: invalidates every cached template built before it. Templates are
+#: prior-independent, so no prior identifier belongs in here.
+_THEORY_CONFIG = (V_bins, n_bar, knl_bins, z_bins,
+                  (K_PK_MIN, K_PK_MAX, N_K, K_BK_MIN, K_BK_MAX), K_NL_RSD)
+THEORY_CONFIG_HASH = hashlib.sha256(repr(_THEORY_CONFIG).encode()).hexdigest()
+
 #: c1 treatments: 'marginalized' (the base LCDM split, c1 in theta_lin) and
 #: 'sampled' (the Tier-3 split, c1 moved into theta_NL). See CONTEXT.md's c1
 #: section and build_taylor_templates_lcdm.py --c1-sampled.
@@ -90,18 +107,20 @@ C1_TREATMENTS = ("marginalized", "sampled")
 def meta_for(treatment):
     """Config-stamp META for a c1 treatment, ``{**META, 'c1_treatment': treatment}``.
 
-    The Tier-3 c1-sampled build (``build_taylor_templates_lcdm.py --c1-sampled``)
-    stamps ``meta_for('sampled')`` on BOTH its templates and whitening npz (a
-    single flat dict, so :func:`load_templates_and_whitening`'s one-``expect_meta``
-    contract holds for both files).
+    ``build_taylor_templates_lcdm.py`` stamps this on the WHITENING npz (plus
+    the prior identifiers in marginalized mode); the templates npz gets the
+    richer :func:`template_meta_for` stamp.
 
-    Pass ``meta_for(treatment)`` rather than the plain :data:`META` whenever the
-    treatment must actually be VERIFIED: under the guard's semantics
-    (:func:`jaxptpolypol.marginal_taylor.compare_meta`) an identifier the caller
-    does not name is not checked. Both stamps that exist on disk load either way
-    -- an old cache lacking ``c1_treatment`` warns (backward compat) and a newer
-    cache carrying it matches -- so this is a strictness choice, not a
-    compatibility one.
+    This is likewise the WHITENING-side expectation; the templates side also
+    expects the theory identifiers (:func:`template_meta_for`).
+    :func:`load_templates_and_whitening` builds both from its ``treatment``
+    argument, so ``c1_treatment`` is now VERIFIED by default -- under the guard's
+    semantics (:func:`jaxptpolypol.marginal_taylor.compare_meta`) an identifier
+    the caller does not name is not checked, and a marginalized/sampled mix-up
+    is precisely what must not slip through. Both stamps that exist on disk load
+    either way -- an old cache lacking ``c1_treatment`` warns (backward compat)
+    and a newer cache carrying it matches -- so naming it costs no
+    compatibility.
     """
     if treatment not in C1_TREATMENTS:
         raise ValueError(
@@ -109,31 +128,76 @@ def meta_for(treatment):
     return {**META, "c1_treatment": treatment}
 
 
+def template_meta_for(treatment):
+    """Full expected TEMPLATES-npz stamp: :func:`meta_for` + the theory config.
+
+    This is exactly what ``build_taylor_templates_lcdm.py`` stamps on the
+    templates npz (that script imports this function), so a template cache built
+    from the current constants matches it key-for-key with no warnings, and a
+    cache built from ANY other theory config fails on ``theory_config_hash``.
+
+    Whitening stamps deliberately do NOT carry the theory identifiers (they
+    carry the PRIOR ones instead), so the whitening side keeps expecting the
+    plain :func:`meta_for` stamp -- see :func:`load_templates_and_whitening`.
+    """
+    return {**meta_for(treatment),
+            "theory_config_hash": THEORY_CONFIG_HASH,
+            "z_bins": str(z_bins), "knl_bins": str(knl_bins),
+            "n_bar": str(n_bar), "V_bins": str(V_bins)}
+
+
 # ---------------------------------------------------------------------------
 # Template/whitening loading (strict meta guards).
 # ---------------------------------------------------------------------------
 
-def load_templates_and_whitening(templates_path, whitening_path,
-                                 expect_meta=META):
-    """Load Taylor templates + the whitening npz with the meta guards.
+def load_templates_and_whitening(templates_path, whitening_path, *,
+                                 treatment="marginalized",
+                                 expect_meta=None, expect_template_meta=None):
+    """Load Taylor templates + the whitening npz with the LIVE config guards.
 
-    Returns ``(tt, wz)`` where ``tt`` is the :class:`TaylorTemplates` (loaded
-    with ``expect_meta``, the stale-config guard) and ``wz`` is the open
-    ``np.load`` handle on the whitening file. Exits (``sys.exit``) if the
-    whitening stamp disagrees with ``expect_meta``.
+    Returns ``(tt, wz)``: the :class:`TaylorTemplates` and the open ``np.load``
+    handle on the whitening file. A stale templates npz raises ``ValueError``; a
+    stale whitening npz exits (``sys.exit``).
 
-    BOTH stamps are compared with the one semantics documented in
-    :func:`jaxptpolypol.marginal_taylor.compare_meta`: every key of
-    ``expect_meta`` must be present and equal, while keys the stored stamp
-    carries but ``expect_meta`` does not name are informational (warn) rather
-    than stale. That is required here, not cosmetic -- in marginalized mode
-    ``build_taylor_templates_lcdm.py`` stamps ``prior_spec``/``cosmo_priors`` (+
-    ``c1_treatment``) on the whitening npz and five theory-config identifiers on
-    the templates npz, none of which the plain :data:`META` mentions. The
-    previous bare ``stored_meta != expect_meta`` made a freshly rebuilt cache
-    unloadable.
+    Expectations
+    ------------
+    By DEFAULT the two files are held to different (correct) standards, both
+    derived from ``treatment`` (``'marginalized'`` | ``'sampled'``):
+
+    * templates -> :func:`template_meta_for` -- the 11 grid keys, ``c1_treatment``
+      AND the theory identifiers (``theory_config_hash``, ``z_bins``,
+      ``knl_bins``, ``n_bar``, ``V_bins``);
+    * whitening -> :func:`meta_for` -- the 11 grid keys and ``c1_treatment``;
+      theory identifiers are never stamped there, prior ones are (and those are
+      informational, since no consumer expects them).
+
+    Naming ``theory_config_hash`` and ``c1_treatment`` by default is the whole
+    point: they are the two identifiers that distinguish "templates for THIS
+    theory config / THIS split" from silently wrong ones, and an expectation
+    that does not name a key does not check it.
+
+    Chosen rule: ENFORCE-IF-PRESENT
+    -------------------------------
+    Per :func:`jaxptpolypol.marginal_taylor.compare_meta`, the newer identifiers
+    are all in ``_BACKWARD_COMPAT_META_KEYS``, so the three cases are:
+
+    1. stored value differs from expected -> **hard failure** (genuine config
+       drift, or a marginalized/sampled cache mix-up);
+    2. stored stamp LACKS the key -> warning, loads anyway (the on-disk caches
+       predate these keys; rebuilding stamps them);
+    3. stored stamp carries a key the expectation does not name (e.g. the
+       whitening npz's ``prior_spec``/``cosmo_priors``) -> warning, not
+       staleness. A rebuilt cache with extra keys must still load.
+
+    So the guard cannot fire on an old cache and cannot be silent on a real
+    drift. Pass ``expect_meta`` / ``expect_template_meta`` to override either
+    side explicitly.
     """
-    tt = load_taylor_templates(templates_path, expect_meta=expect_meta)
+    if expect_template_meta is None:
+        expect_template_meta = template_meta_for(treatment)
+    if expect_meta is None:
+        expect_meta = meta_for(treatment)
+    tt = load_taylor_templates(templates_path, expect_meta=expect_template_meta)
     wz = np.load(whitening_path)
     stored_meta = json.loads(str(wz["meta"].item()))
     try:
