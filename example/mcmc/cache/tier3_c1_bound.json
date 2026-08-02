@@ -1,0 +1,74 @@
+{
+ "description": "deterministic upper bound on the c1^2 term dropped by Route A",
+ "templates": "taylor_templates_lcdm_c1s.npz",
+ "c1_positions": [
+  8,
+  12,
+  16,
+  20,
+  24,
+  28,
+  32
+ ],
+ "per_bin": [
+  {
+   "bin": 0,
+   "c1_pos": 8,
+   "max_abs_q": 1471.376691097381,
+   "chi2_at_c1_1": 1.4937889997379108e-10,
+   "max_abs_dM_c1": 0.0
+  },
+  {
+   "bin": 1,
+   "c1_pos": 12,
+   "max_abs_q": 909.5624227974716,
+   "chi2_at_c1_1": 1.9769434190024704e-10,
+   "max_abs_dM_c1": 0.0
+  },
+  {
+   "bin": 2,
+   "c1_pos": 16,
+   "max_abs_q": 744.7417961910571,
+   "chi2_at_c1_1": 2.553413953273293e-10,
+   "max_abs_dM_c1": 0.0
+  },
+  {
+   "bin": 3,
+   "c1_pos": 20,
+   "max_abs_q": 740.1649599820398,
+   "chi2_at_c1_1": 3.011339649692541e-10,
+   "max_abs_dM_c1": 0.0
+  },
+  {
+   "bin": 4,
+   "c1_pos": 24,
+   "max_abs_q": 707.3970555768532,
+   "chi2_at_c1_1": 2.533517226824191e-10,
+   "max_abs_dM_c1": 0.0
+  },
+  {
+   "bin": 5,
+   "c1_pos": 28,
+   "max_abs_q": 637.6902002316886,
+   "chi2_at_c1_1": 3.590672855499686e-10,
+   "max_abs_dM_c1": 0.0
+  },
+  {
+   "bin": 6,
+   "c1_pos": 32,
+   "max_abs_q": 540.1291790549701,
+   "chi2_at_c1_1": 6.429157806087245e-10,
+   "max_abs_dM_c1": 0.0
+  }
+ ],
+ "total_chi2_at_c1_1": 2.158883391011734e-09,
+ "omitted_signal_sigma": {
+  "1": 4.64637858015437e-05,
+  "3": 0.0004181740722138933,
+  "5": 0.0011615946450385926
+ },
+ "chain_gate_tolerance_sigma_F": 0.09,
+ "ratio_gate_over_signal_at_5sigma": 77.47969602340054,
+ "threshold_at_5sigma": 0.01,
+ "verdict": "PASS"
+}

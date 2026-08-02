@@ -506,7 +506,7 @@ plus the noLD corroboration JSON on the rotation branch.
 
 The last open validation from CONTEXT.md's c1 section. Route A marginalizes c1
 analytically by linearizing the theory in it, which drops the `Z1_fog·Z1_fog`
-c1² cross-term (relative size ≈6×10⁻⁴). This test asks whether that omission is
+c1² cross-term. This test asks whether that omission is
 visible in the cosmology posterior.
 
 **Why the surrogate makes this cheap and exact:** with c1 moved into θ_NL the
@@ -541,3 +541,38 @@ parameter the data cannot see cannot transmit its quadratic term to cosmology.
 **Conclusion: Route A (analytic c1 marginalization) is validated** — the
 marginalized and sampled treatments give the same cosmology posterior to within
 MC precision. Evidence: `example/mcmc/cache/tier3_c1_validation.json`.
+
+### Correction (2026-08-02, after adversarial review): what actually validates Route A
+
+The section above cites the two 200 000-draw chains as the evidence that
+dropping the c1² term is harmless. **That citation was wrong — the chains have
+no power to detect the effect.** Corrected account:
+
+**The effect, measured deterministically.** c1 has no bilinear coupling to the
+marginalized block (`dM[:, :, c1] ≡ 0` in all 7 bins, verified), so the *entire*
+difference between the marginalized and sampled models is the constant c1²
+coefficient of m0, `q_b = ½ ∂²m0_b/∂c1_b²`. Its whitened norm is
+`Σ_b q_bᵀ C_b⁻¹ q_b = 2.159e-09` at |c1| = 1, i.e. an omitted signal of
+**4.6×10⁻⁵ σ**, rising as c1⁴ to **1.2×10⁻³ σ at a 5σ prior draw**. A data-vector
+displacement of s σ cannot move any parameter by more than s σ_F, so this is a
+strict upper bound. Elementwise on the bispectrum block the c1² piece is
+≤1.7×10⁻⁵ of the theory (median ~1×10⁻⁶) — the previously quoted "≈6×10⁻⁴" was a
+stale per-leg estimate at the library default `k_nl_rsd = 0.3` rather than a
+data-vector measurement at the production 0.45, overstating it ~35×.
+
+**Why the chains could not have shown this.** The chain gate tolerates
+0.090–0.137 σ_F on means with an MC noise floor of 0.028–0.047 σ_F — roughly
+2000× the effect and 700× above the noise needed to see it. It would return PASS
+identically if the c1² term were deleted, or made 1000× larger. The chains remain
+useful as a *wiring/consistency* check of the c1-sampled split (they confirm the
+two independently-built pipelines agree), but they are not a measurement of the
+c1² effect and must not be cited as one.
+
+**Exactness caveat.** The order-2 surrogate reproduces c1² exactly *along the
+pure-c1 direction from θ0*; c1²×δθ cross terms are third order in θ_NL and are
+truncated — symmetrically on both sides of the comparison, so the comparison
+remains fair.
+
+Artifact: `scripts/tier3_c1_bound.py` → `cache/tier3_c1_bound.json`
+(runs in seconds, asserts the 5σ-draw signal stays below 1e-2 σ, and fails loudly
+if a template rebuild ever breaks the `dM[:, :, c1] ≡ 0` premise).
