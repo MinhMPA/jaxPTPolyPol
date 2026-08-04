@@ -32,6 +32,8 @@ _FACTOR_FORMULAS = (None, "knl_over_0p45_sq")
 _MEAN_FORMULAS = (None, "coevolution_bGamma3")
 _CTR_ROTATIONS = (None, "multipole_to_tilde")
 _SAMPLED_RESCALE = ("none", "sigma8_sq")
+_B1_MEASURES = ("raw", "b1sigma8")
+_PHASES = ("forecast", "real_data", "nulcdm")
 _CTR_TRIO = (("pk", "ctr", "c0"), ("pk", "ctr", "c2"), ("pk", "ctr", "c4"))
 _RECONCILE_RTOL = 1e-12
 
@@ -63,6 +65,15 @@ class SampledRow:
     paper_sigma: float | None = None
     paper_variable: str | None = None
     rescale: str = "none"
+    #: b1 only -- which coordinate the flat prior is flat IN. "raw": flat in
+    #: raw b1 (project default; differs from the paper's measure by the
+    #: cosmology-dependent weight prod_b sigma8(z_b) -- see CONTEXT.md
+    #: deviation 3). "b1sigma8": flat in y = b1*sigma8(z) on
+    #: [paper_lower, paper_upper], the Table-I measure (adds the Jacobian
+    #: sum_b log sigma8 and the bounds to log_prior_nl_fn).
+    measure: str = "raw"
+    paper_lower: float | None = None
+    paper_upper: float | None = None
 
 
 @dataclass(frozen=True)
@@ -109,7 +120,8 @@ def _validate_row(key, row):
                 f"{key}: mean/paper_mean must be null with mean_formula")
 
 
-def load_desi_prior_spec(name_or_path="desi_dr1_reanalysis_2511_20757"):
+def load_desi_prior_spec(name_or_path="desi_dr1_reanalysis_2511_20757",
+                         phase="forecast"):
     """Load and validate a DESI prior spec (packaged name or explicit path)."""
     from .marginal_likelihood import LIN_SURVEY_KEYS
 
@@ -162,6 +174,21 @@ def load_desi_prior_spec(name_or_path="desi_dr1_reanalysis_2511_20757"):
         if row.rescale not in _SAMPLED_RESCALE:
             raise SpecValidationError(
                 f"sampled {name}: unknown rescale {row.rescale!r}")
+        if row.measure not in _B1_MEASURES:
+            raise SpecValidationError(
+                f"sampled {name}: unknown measure {row.measure!r} "
+                f"(allowed: {_B1_MEASURES})")
+        if name != "b1" and row.measure != "raw":
+            raise SpecValidationError(
+                f"sampled {name}: 'measure' applies to only the b1 row")
+        if row.measure == "b1sigma8":
+            if row.paper_lower is None or row.paper_upper is None:
+                raise SpecValidationError(
+                    "sampled b1: measure=b1sigma8 requires numeric "
+                    "paper_lower and paper_upper")
+            if not row.paper_lower < row.paper_upper:
+                raise SpecValidationError(
+                    "sampled b1: paper_lower must be < paper_upper")
         if row.kind == "gaussian" and (row.paper_sigma is None
                                        or row.paper_sigma <= 0.0):
             raise SpecValidationError(
@@ -170,6 +197,15 @@ def load_desi_prior_spec(name_or_path="desi_dr1_reanalysis_2511_20757"):
     for required in ("b1", "b2", "bG2"):
         if required not in sampled:
             raise SpecValidationError(f"sampled block missing {required!r}")
+
+    if phase not in _PHASES:
+        raise SpecValidationError(f"unknown phase {phase!r} (allowed: {_PHASES})")
+    if phase != "forecast" and sampled["b1"].measure == "raw":
+        raise SpecValidationError(
+            f"phase={phase!r} requires the Table-I b1 measure: set the spec's "
+            "b1 row to measure: b1sigma8 (raw-b1 flat differs from "
+            "arXiv:2511.20757 by the prod_b sigma8(z_b) prior weight, which "
+            "lands on Sum m_nu in nuLCDM -- see CONTEXT.md deviation 3)")
 
     return DesiPriorSpec(metadata=raw.get("metadata", {}),
                          marginalized=marginalized, sampled=sampled)

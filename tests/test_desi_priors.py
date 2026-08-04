@@ -920,3 +920,74 @@ def test_sampled_marginal_prior_jit_and_grad_safe(toy_spec_path):
     for p in c1_pos:
         assert abs(float(g[p])) > 1e-3
 
+
+# ---------------------------------------------------------------------------
+# b1 sigma8 measure (F1) + phase gate (F2): spec/loader layer
+# ---------------------------------------------------------------------------
+
+def test_b1_measure_defaults_raw(toy_spec_path):
+    spec = load_desi_prior_spec(toy_spec_path)
+    assert spec.sampled["b1"].measure == "raw"
+    assert spec.sampled["b1"].paper_lower is None
+
+
+def test_b1_measure_b1sigma8_loads_with_bounds(tmp_path):
+    def mutate(raw):
+        raw["sampled"]["b1"] = {"kind": "flat", "measure": "b1sigma8",
+                                "paper_lower": 0.0, "paper_upper": 3.0,
+                                "paper_variable": "b1*sigma8(z)"}
+    spec = load_desi_prior_spec(_mutated_spec_path(tmp_path, mutate))
+    assert spec.sampled["b1"].measure == "b1sigma8"
+    assert spec.sampled["b1"].paper_upper == 3.0
+
+
+def test_b1_measure_bad_token_raises(tmp_path):
+    def mutate(raw):
+        raw["sampled"]["b1"] = {"kind": "flat", "measure": "b1_sigma_8"}
+    with pytest.raises(SpecValidationError, match="measure"):
+        load_desi_prior_spec(_mutated_spec_path(tmp_path, mutate))
+
+
+def test_b1sigma8_requires_both_bounds(tmp_path):
+    def mutate(raw):
+        raw["sampled"]["b1"] = {"kind": "flat", "measure": "b1sigma8",
+                                "paper_lower": 0.0}
+    with pytest.raises(SpecValidationError, match="paper_upper"):
+        load_desi_prior_spec(_mutated_spec_path(tmp_path, mutate))
+
+
+def test_measure_on_non_b1_row_raises(tmp_path):
+    def mutate(raw):
+        raw["sampled"]["b2"]["measure"] = "b1sigma8"
+    with pytest.raises(SpecValidationError, match="only the b1 row"):
+        load_desi_prior_spec(_mutated_spec_path(tmp_path, mutate))
+
+
+def test_phase_gate_blocks_raw_measure(toy_spec_path):
+    """F2: real-data / nuLCDM phases refuse the raw measure (CONTEXT.md)."""
+    for phase in ("real_data", "nulcdm"):
+        with pytest.raises(SpecValidationError, match="measure"):
+            load_desi_prior_spec(toy_spec_path, phase=phase)
+    load_desi_prior_spec(toy_spec_path, phase="forecast")   # default path OK
+
+
+def test_phase_gate_passes_with_b1sigma8(tmp_path):
+    def mutate(raw):
+        raw["sampled"]["b1"] = {"kind": "flat", "measure": "b1sigma8",
+                                "paper_lower": 0.0, "paper_upper": 3.0}
+    p = _mutated_spec_path(tmp_path, mutate)
+    load_desi_prior_spec(p, phase="real_data")               # no raise
+
+
+def test_unknown_phase_raises(toy_spec_path):
+    with pytest.raises(SpecValidationError, match="phase"):
+        load_desi_prior_spec(toy_spec_path, phase="production")
+
+
+def test_real_spec_b1_row_and_deviation_note():
+    spec = load_desi_prior_spec()
+    b1 = spec.sampled["b1"]
+    assert b1.measure == "raw" and b1.paper_lower == 0.0 and b1.paper_upper == 3.0
+    devs = " ".join(str(d) for d in spec.metadata.get("deviations", []))
+    assert "b1" in devs and "measure" in devs and "sigma8" in devs.lower()
+

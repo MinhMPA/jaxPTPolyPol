@@ -17,6 +17,13 @@ metadata:
     - "c1 factor 0.45^2=0.2025 (production k_nl_rsd=0.45); additive bare-Z1 operator
        verified from ref [160] arXiv:2110.10161 Eq (3.11)."
     - "b2/bG2 sampled raw; paper priors on b*sigma8^2, raw width 5/sigma8(z)^2."
+    - >
+      b1 measure: the paper samples b1*sigma8(z) ~ U[0,3]; this spec's default
+      measure: raw samples raw b1 flat/unbounded, which differs by the prior
+      weight prod_b sigma8(z_b) (a cosmology tilt: +0.17 sigma_F on logA,
+      +0.10 on ns for the 7-bin PFS forecast; widths unaffected). Set
+      measure: b1sigma8 for the Table-I measure; loader refuses measure: raw
+      for phase real_data/nulcdm. Evidence: cache/b1sigma8_measure.json.
 marginalized:
   shared.bias.bGamma3:
     {paper_mean: null, paper_sigma: 1.0, paper_units: "unit",
@@ -82,7 +89,8 @@ marginalized:
      mean: 1.0, sigma: 1.0, rescale: "none",
      factor_formula: null, mean_formula: null}
 sampled:
-  b1: {kind: flat}
+  b1: {kind: flat, measure: raw, paper_lower: 0.0, paper_upper: 3.0,
+       paper_variable: "b1*sigma8(z)"}
   b2:
     {kind: gaussian, paper_mean: 0.0, paper_sigma: 5.0,
      paper_variable: "b2*sigma8(z)^2", rescale: "sigma8_sq"}
