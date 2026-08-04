@@ -725,7 +725,7 @@ save_results()
 # wall (the >=0 indicator is 0 with zero curvature at the fiducial), so sig_F,
 # tilt_pred and lp0 are SHARED between the two runs -- which makes (i) the core-5
 # "leak" reduce to the mean-pull difference, and (ii) the mnu SD ratio the direct
-# measured truncation factor. A shared-F tripwire guards against config drift.
+# collapse artifact (NOT a truncation measurement; see INVALID_CONFIGURATION). A shared-F tripwire guards against config drift.
 # ---------------------------------------------------------------------------
 if IS_NU and UNBOUNDED:
     BOUNDED_PATH = CACHE / "nulcdm_gate_fiducial_means.json"
@@ -794,7 +794,7 @@ if IS_NU and UNBOUNDED:
               f"{u_mnu_neg_frac:12.4f}")
         print(f"  {'sig_F(mnu) shared':<26s} {b_sigF_mnu:12.5f} "
               f"{b_sigF_mnu:12.5f}")
-        print(f"\n  SD ratio bounded/unbounded (measured truncation factor) = "
+        print(f"\n  SD ratio bounded/unbounded (collapse artifact (NOT a truncation measurement; see INVALID_CONFIGURATION)) = "
               f"{sd_ratio:.4f}")
         print(f"    1-D truncated-normal prediction (wall at {a:+.3f} sigF)  = "
               f"{tn_sd_ratio:.4f}")
