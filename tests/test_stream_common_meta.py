@@ -356,3 +356,76 @@ def test_meta_rejects_unknown_cosmology():
         stream_common.meta_for("marginalized", cosmology="wcdm")
     with pytest.raises(ValueError, match="cosmology"):
         stream_common.template_meta_for("marginalized", cosmology="wcdm")
+
+
+# ---------------------------------------------------------------------------
+# nuLCDM build mode (Task 2): a nuLCDM cache is guard-distinct from LCDM, the
+# two modes' output filenames differ, and the build script reads the nuLCDM
+# config from stream_common (not a local copy).
+# ---------------------------------------------------------------------------
+
+
+def test_nulcdm_cache_is_guard_distinct_from_lcdm(tmp_path):
+    """A nuLCDM template/whitening pair (stamped with the nuLCDM theory-config
+    hash + ``cosmology: nulcdm``) is HARD-REJECTED when loaded with the default
+    LCDM expectation, and loads cleanly under the matching nuLCDM expectation.
+    This is the property that keeps a nuLCDM build (Task 3) from ever being
+    consumed as LCDM."""
+    t_meta = stream_common.template_meta_for("marginalized", cosmology="nulcdm")
+    w_meta = stream_common.meta_for("marginalized", cosmology="nulcdm")
+    tpath, wpath = _write_pair(tmp_path, t_meta, w_meta)
+    # Default (LCDM) expectation -> theory_config_hash mismatch -> hard failure.
+    with pytest.raises(ValueError, match="theory_config_hash"):
+        stream_common.load_templates_and_whitening(tpath, wpath)
+    # Matching nuLCDM expectation -> loads (hash + cosmology key agree).
+    tt, wz = stream_common.load_templates_and_whitening(
+        tpath, wpath, expect_template_meta=t_meta, expect_meta=w_meta)
+    assert tt.order2_m0 is False
+    assert json.loads(str(wz["meta"].item()))["cosmology"] == "nulcdm"
+
+
+def test_output_filename_convention_lcdm_legacy_nulcdm_distinct():
+    """The build script's output-name convention: LCDM keeps the legacy names
+    byte-for-byte (untagged summary; ``_lcdm`` templates/whitening) and nuLCDM
+    gets distinct names, so a nuLCDM build never overwrites an LCDM cache.
+    Mirrors the f-strings in build_taylor_templates_lcdm.py."""
+    def names(cosmology, c1_sampled):
+        suffix = "_c1s" if c1_sampled else ""
+        summary_tag = "" if cosmology == "lcdm" else f"_{cosmology}"
+        return (f"taylor_templates_{cosmology}{suffix}.npz",
+                f"taylor_whitening_{cosmology}{suffix}.npz",
+                f"taylor_build_summary{summary_tag}{suffix}.json")
+    lcdm = names("lcdm", False)
+    nulcdm = names("nulcdm", False)
+    assert lcdm == ("taylor_templates_lcdm.npz", "taylor_whitening_lcdm.npz",
+                    "taylor_build_summary.json")
+    assert nulcdm == ("taylor_templates_nulcdm.npz",
+                      "taylor_whitening_nulcdm.npz",
+                      "taylor_build_summary_nulcdm.json")
+    assert set(lcdm).isdisjoint(nulcdm)
+
+
+def test_build_script_uses_cosmology_in_output_names_and_refuses_nulcdm_c1s():
+    """SOURCE binding: the build script tags templates/whitening with the
+    selected COSMOLOGY, and explicitly refuses the untested nuLCDM + c1-sampled
+    composition (rather than silently emitting a wrong cache)."""
+    src = (_SCRIPTS / "build_taylor_templates_lcdm.py").read_text()
+    assert "taylor_templates_{COSMOLOGY}" in src
+    assert "taylor_whitening_{COSMOLOGY}" in src
+    assert 'C1_SAMPLED and COSMOLOGY == "nulcdm"' in src
+
+
+def test_build_script_imports_nulcdm_config_from_stream_common():
+    """The nuLCDM emulator path + fiducial come from stream_common (the single
+    source of truth), so the build script cannot drift from the hashed config."""
+    tree = _build_script_tree()
+    imported = {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module == "stream_common"
+        for alias in node.names
+    }
+    for name in ("NULCDM_EMULATOR", "NULCDM_FIDUCIAL", "FIXED_COSMO"):
+        assert name in imported, (
+            f"build_taylor_templates_lcdm.py must import {name} from "
+            "stream_common for the nuLCDM build mode.")

@@ -67,10 +67,10 @@ from jax.scipy.linalg import inv
 from ps_1loop_jax import background as bg
 
 from stream_common import (
-    BACKGROUND_MODE, DEFAULT_BAO_DATA_DIR, FIDUCIAL, K_BK_MAX, K_BK_MIN,
-    K_NL_RSD, K_PK_MAX, K_PK_MIN, META, MNU_FIXED, N_GL, N_K, NUM_MU, NUM_PHI,
-    PFS_EMULATOR, V_bins, knl_bins, meta_for, n_bar, n_zbins,
-    template_meta_for, z_bins,
+    BACKGROUND_MODE, DEFAULT_BAO_DATA_DIR, FIDUCIAL, FIXED_COSMO, K_BK_MAX,
+    K_BK_MIN, K_NL_RSD, K_PK_MAX, K_PK_MIN, META, MNU_FIXED, N_GL, N_K,
+    NULCDM_EMULATOR, NULCDM_FIDUCIAL, NUM_MU, NUM_PHI, PFS_EMULATOR, V_bins,
+    knl_bins, meta_for, n_bar, n_zbins, template_meta_for, z_bins,
 )
 
 from jaxptpolypol import (
@@ -120,6 +120,42 @@ C1_TREATMENT = "sampled" if C1_SAMPLED else "marginalized"
 _C1_KEY = ('bk', 'ctr', 'c1')
 LIN_SURVEY_KEYS_BUILD = (tuple(k for k in LIN_SURVEY_KEYS if k != _C1_KEY)
                          if C1_SAMPLED else LIN_SURVEY_KEYS)
+
+
+def _arg_value(flag, default):
+    """Read the value after ``flag`` in argv, or ``default`` if absent."""
+    args = sys.argv[1:]
+    if flag in args:
+        i = args.index(flag)
+        if i + 1 >= len(args):
+            sys.exit(f"{flag} requires a value")
+        return args[i + 1]
+    return default
+
+
+# --cosmology {lcdm,nulcdm}: default lcdm keeps the existing behavior
+# byte-identical. nulcdm swaps in the mnu linear-Pk emulator and adds mnu to the
+# sampled cosmology basis (packed index 9, theta_NL position 5; n_nl 26 -> 27).
+# The theory/covariance/BAO closures auto-trace mnu once it is in cosmo.param_keys
+# ("mnu" in cosmo_keys -> has_mnu path), so no mnu_fixed pathway feeds the
+# varied-mnu basis. See stream_common's SHARED_KEYS_NU / NULCDM_FIDUCIAL block.
+COSMOLOGY = _arg_value("--cosmology", "lcdm")
+if COSMOLOGY not in ("lcdm", "nulcdm"):
+    sys.exit(f"--cosmology must be 'lcdm' or 'nulcdm', got {COSMOLOGY!r}.")
+# --dry-run: build every closure + the split, run the construction-time wiring
+# checks and ONE bin's forward theory eval, print the would-be META, then exit
+# WITHOUT the (heavy) Fisher/whitening or Taylor-template stages.
+DRY_RUN = "--dry-run" in sys.argv[1:]
+
+# The sampled-c1 nuLCDM split (n_nl 27 -> 34) is untested and outside the
+# replication plan (marginalized c1 only); refuse it rather than silently emit a
+# wrong cache.
+if C1_SAMPLED and COSMOLOGY == "nulcdm":
+    sys.exit("--c1-sampled is not supported with --cosmology nulcdm: the "
+             "sampled-c1 nuLCDM split is untested and outside the replication "
+             "plan (marginalized c1 only). Drop --c1-sampled.")
+
+EMULATOR_PATH = NULCDM_EMULATOR if COSMOLOGY == "nulcdm" else PFS_EMULATOR
 
 # ---------------------------------------------------------------------------
 # RSS watchdog: sample `ps -o rss=` in a thread, hard-abort above the stage
@@ -215,27 +251,31 @@ CHUNK_J, CHUNK_H = 4, 2
 # Templates are PRIOR-INDEPENDENT, so prior identifiers never go on the template
 # stamp; they live on the WHITENING stamp (marginalized mode), where they are
 # informational to consumers (marginal_taylor.compare_meta case 3).
-TEMPLATE_META = template_meta_for(C1_TREATMENT)
+TEMPLATE_META = template_meta_for(C1_TREATMENT, cosmology=COSMOLOGY)
 if C1_SAMPLED:
-    WHITENING_META = meta_for(C1_TREATMENT)
+    WHITENING_META = meta_for(C1_TREATMENT, cosmology=COSMOLOGY)
 else:
     WHITENING_META = {
-        **meta_for(C1_TREATMENT),
+        **meta_for(C1_TREATMENT, cosmology=COSMOLOGY),
         "prior_spec": "eft_eq12_2405_02252",
         "cosmo_priors": COSMO_PRIORS,
     }
 
 CACHE = pathlib.Path("cache")
 _SUFFIX = "_c1s" if C1_SAMPLED else ""
-WHITENING_PATH = CACHE / f"taylor_whitening_lcdm{_SUFFIX}.npz"
-TEMPLATES_PATH = CACHE / f"taylor_templates_lcdm{_SUFFIX}.npz"
-SUMMARY_PATH = CACHE / f"taylor_build_summary{_SUFFIX}.json"
+# COSMOLOGY tags templates/whitening (lcdm -> the legacy names byte-for-byte).
+# The summary keeps its untagged legacy name for lcdm; nulcdm gets a distinct
+# one so a nuLCDM build never overwrites an LCDM summary.
+WHITENING_PATH = CACHE / f"taylor_whitening_{COSMOLOGY}{_SUFFIX}.npz"
+TEMPLATES_PATH = CACHE / f"taylor_templates_{COSMOLOGY}{_SUFFIX}.npz"
+_SUMMARY_TAG = "" if COSMOLOGY == "lcdm" else f"_{COSMOLOGY}"
+SUMMARY_PATH = CACHE / f"taylor_build_summary{_SUMMARY_TAG}{_SUFFIX}.json"
 
 if not pathlib.Path(BAO_DATA_DIR).is_dir():
     sys.exit(f"BAO data dir not found at {BAO_DATA_DIR!r} -- this script must "
              "be run from example/mcmc (the notebook's relative path).")
-if not pathlib.Path(PFS_EMULATOR).is_file():
-    sys.exit(f"PFS emulator not found at {PFS_EMULATOR!r}.")
+if not pathlib.Path(EMULATOR_PATH).is_file():
+    sys.exit(f"{COSMOLOGY} emulator not found at {EMULATOR_PATH!r}.")
 CACHE.mkdir(exist_ok=True)
 print(f"===== c1_treatment = {C1_TREATMENT} "
       f"(lin keys/bin = {len(LIN_SURVEY_KEYS_BUILD)}); outputs -> "
@@ -253,7 +293,7 @@ if TEMPLATES_ONLY and not WHITENING_PATH.exists():
 set_stage("setup: models + fiducials", 90.0)
 t_stage1 = time.perf_counter()
 
-pklin_emulator = CosmoEmulator(probe='custom_log', emulator_path=PFS_EMULATOR)
+pklin_emulator = CosmoEmulator(probe='custom_log', emulator_path=EMULATOR_PATH)
 ps1loop_model = PS1LoopModel(do_irres=True)
 bispectrum_model = BispectrumTreeModel(do_AP=True, k_nl_rsd=K_NL_RSD)
 
@@ -262,6 +302,11 @@ cosmo_dict = {
     'logA':  FIDUCIAL['logA'],  'ns':    FIDUCIAL['ns'], 'h': FIDUCIAL['h'],
     'z': 0.7, 'A_b': 3.13, 'eta_b': 0.603, 'logT_AGN': 7.8,
 }
+if COSMOLOGY == "nulcdm":
+    # mnu LAST so FIXED_COSMO=(5,6,7,8) still indexes z/A_b/eta_b/logT_AGN and
+    # mnu is SAMPLED at packed cosmo index 9 (mirrors the nuLCDM Fisher notebook
+    # cell "Emulator and models (mnu variant)").
+    cosmo_dict['mnu'] = NULCDM_FIDUCIAL['mnu']
 cosmo = CosmoParams(cosmo_dict)
 
 
@@ -273,7 +318,7 @@ def bGamma3z(z): return (23. / 42.) * (b1z(z) - 1.)
 def Dplusz(z):
     return float(bg.growth_factor(
         cosmo_dict['ombh2'], cosmo_dict['omch2'], cosmo_dict['h'], z,
-        mnu=MNU_FIXED))
+        mnu=cosmo_dict.get('mnu', MNU_FIXED)))
 def c0z(z): return 25. * Dplusz(z)**2
 def c2z(z): return 25. * Dplusz(z)**2
 def c4z(z): return Dplusz(z)**2
@@ -321,8 +366,10 @@ print(f"P grid n_k={n_k}, dk={dk:.5f}; B triangles={n_tri}; "
       f"per-bin block=3*{n_k}+{n_tri}={block_len}", flush=True)
 
 # Sampled/marginalized split -- notebook cell "Varied block, comparison
-# Fisher, and whitening scales".
-fixed_cosmo = [5, 6, 7, 8]
+# Fisher, and whitening scales". FIXED_COSMO=(5,6,7,8) is cosmology-independent
+# (z/A_b/eta_b/logT_AGN); the varied-cosmo set is derived from n_cosmo_params, so
+# nulcdm's mnu (packed index 9) enters cosmo_varied_global automatically.
+fixed_cosmo = list(FIXED_COSMO)
 split = split_marginal_indices(
     n_cosmo_params=n_cosmo_params, survey_keys=joint_survey_keys,
     n_bins=n_zbins, fixed_cosmo=fixed_cosmo,
@@ -338,7 +385,60 @@ bin_lin_idx = [split.lin_idx[sl] for sl in bin_lin_slices(split, n_zbins)]
 print(f"n_NL = {n_nl} ({len(cosmo_varied_global)} cosmo + {3 * n_zbins} bias), "
       f"n_lin marginalized = {split.n_lin}", flush=True)
 
+# --- Build-time shape guards (cosmology-aware) --------------------------------
+# nl-survey params per bin: b1/b2/bG2 (+ c1 when it is SAMPLED). Everything below
+# is derived from the config so it holds for both cosmologies and both c1 modes.
+_n_nl_survey_per_bin = 3 + (1 if C1_SAMPLED else 0)
+_n_nl_expected = len(cosmo_varied_global) + _n_nl_survey_per_bin * n_zbins
+assert n_nl == _n_nl_expected, (
+    f"n_nl {n_nl} != expected {_n_nl_expected} "
+    f"({len(cosmo_varied_global)} cosmo + {_n_nl_survey_per_bin}x{n_zbins} nl-survey)")
+_c1_off = joint_survey_keys.index(_C1_KEY)
+_c1_global = [n_cosmo_params + b * n_survey_params + _c1_off for b in range(n_zbins)]
+if C1_SAMPLED:
+    assert set(_c1_global) <= set(split.nl_idx), "sampled c1 must live in theta_NL"
+else:
+    assert set(_c1_global) <= set(split.lin_idx), "marginalized c1 must live in theta_lin"
+if COSMOLOGY == "nulcdm":
+    assert n_nl == 27, f"nuLCDM n_nl must be 27, got {n_nl}"
+    assert split.n_lin == 77, f"nuLCDM n_lin must be 77, got {split.n_lin}"
+    _mnu_global = list(cosmo.param_keys).index('mnu')
+    assert _mnu_global == 9, f"mnu packed index {_mnu_global} != 9"
+    assert nl_pos[_mnu_global] == 5, f"mnu theta_NL position {nl_pos[_mnu_global]} != 5"
+    assert cosmo_nl_pos == [0, 1, 2, 3, 4, 5], cosmo_nl_pos
+
 t_stage1 = time.perf_counter() - t_stage1
+
+# --- Construction-time wiring proof (--dry-run) -------------------------------
+# Build one bin's forward theory fn and evaluate it ONCE at the fiducial (a single
+# eager pass, seconds -- NOT the Jacobian/Hessian build), assert finiteness, print
+# the would-be META, then exit before the heavy Fisher/whitening + template stages.
+if DRY_RUN:
+    set_stage("dry-run: one-bin theory eval + wiring proof", 90.0)
+    bin0_fn = jax.jit(make_joint_pk_bk_bin_fn(bin_index=0, **joint_theory_kwargs))
+    pb0 = np.asarray(bin0_fn(packed_params, k=k, triangles=triangles))
+    finite = bool(np.all(np.isfinite(pb0)))
+    print(f"[dry-run] cosmology={COSMOLOGY} c1_treatment={C1_TREATMENT}", flush=True)
+    print(f"[dry-run] n_cosmo_params={n_cosmo_params} "
+          f"cosmo.param_keys={tuple(cosmo.param_keys)}", flush=True)
+    print(f"[dry-run] n_nl={n_nl} n_lin={split.n_lin} "
+          f"cosmo_varied_global={cosmo_varied_global} "
+          f"cosmo_nl_pos={cosmo_nl_pos}", flush=True)
+    print(f"[dry-run] c1 global idx={_c1_global} -> "
+          f"{'theta_NL' if C1_SAMPLED else 'theta_lin'}", flush=True)
+    if COSMOLOGY == "nulcdm":
+        _mg = list(cosmo.param_keys).index('mnu')
+        print(f"[dry-run] mnu packed idx={_mg} -> theta_NL pos {nl_pos[_mg]} "
+              f"(fid_nl[{nl_pos[_mg]}]={float(fid_nl[nl_pos[_mg]]):.4f})", flush=True)
+    print(f"[dry-run] bin-0 theory eval: shape={pb0.shape} finite={finite} "
+          f"range=[{pb0.min():.4e}, {pb0.max():.4e}]", flush=True)
+    assert finite, "bin-0 theory eval produced non-finite entries"
+    print(f"[dry-run] would-be outputs: {TEMPLATES_PATH.name}, "
+          f"{WHITENING_PATH.name}, {SUMMARY_PATH.name}", flush=True)
+    print(f"[dry-run] TEMPLATE_META  = {json.dumps(TEMPLATE_META)}", flush=True)
+    print(f"[dry-run] WHITENING_META = {json.dumps(WHITENING_META)}", flush=True)
+    print("[dry-run] wiring proof OK; exiting WITHOUT building.", flush=True)
+    sys.exit(0)
 
 # ---------------------------------------------------------------------------
 # Stage 2: data vector + covariance + Fisher + whitening (skipped by
@@ -430,8 +530,11 @@ if not TEMPLATES_ONLY:
     # Tripwire: the reference chain/tilt artifacts (cache/tier2_*) were built
     # with this exact configuration. If the rebuilt Fisher sigmas disagree,
     # the config has drifted and every gate comparison would be invalid.
+    # LCDM-only: tier2_result.json holds the 5-entry LCDM cosmo sig_fisher; the
+    # nuLCDM cosmo block is 6-wide, so the comparison is not defined there (a
+    # nuLCDM reference does not exist yet).
     _t2 = CACHE / "tier2_result.json"
-    if _t2.exists():
+    if COSMOLOGY == "lcdm" and _t2.exists():
         ref = np.asarray(json.loads(_t2.read_text())["sig_fisher"])
         rel = float(np.max(np.abs(sig_fisher - ref) / ref))
         print(f"sig_fisher vs tier2 reference: max rel diff {rel:.2e}",
@@ -534,6 +637,7 @@ print(f"-> {TEMPLATES_PATH} "
 
 summary = {
     "templates_only": TEMPLATES_ONLY,
+    "cosmology": COSMOLOGY,
     "c1_treatment": C1_TREATMENT,
     "lin_keys_per_bin": len(LIN_SURVEY_KEYS_BUILD),
     "wall_s": {
