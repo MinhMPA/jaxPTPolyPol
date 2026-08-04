@@ -1089,6 +1089,13 @@ def test_log_weights_bounds(tmp_path):
     lw = b1sigma8_log_weights(samples, s8_fn,
                               b1_pos=split.nl_b1_pos, lower=0.0, upper=3.0)
     assert np.isfinite(float(lw[0])) and float(lw[1]) == -np.inf
+    # Discriminates the HELPER's bounds-on-y from a bounds-on-raw-b1 mutant:
+    # with the toy s8 (0.6 at bin 0, theta=0), b1 = 4.0 gives y = 2.4 in [0,3]
+    # while raw 4.0 > 3, so the log-weight must stay FINITE here.
+    disc = jnp.zeros((1, split.n_nl)).at[0, split.nl_b1_pos[0]].set(4.0)
+    lw_disc = b1sigma8_log_weights(disc, s8_fn,
+                                   b1_pos=split.nl_b1_pos, lower=0.0, upper=3.0)
+    assert np.isfinite(float(lw_disc[0]))
 
 
 def test_reweighting_gaussian_tilt_analytic_oracle():
