@@ -523,6 +523,11 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
     # Jacobian plus bounds inside log_prior_nl_fn below.
     b1_row = spec.sampled["b1"]
     b1_measure = b1_row.measure
+    if b1_measure not in _B1_MEASURES:
+        # Guard against hand-built SampledRow bypassing load_desi_prior_spec:
+        # an unknown token must not silently fall back to the raw measure.
+        raise ValueError(
+            f"b1 row has unknown measure {b1_measure!r} (allowed: {_B1_MEASURES})")
     if b1_measure == "b1sigma8":
         b1_lower = float(b1_row.paper_lower)
         b1_upper = float(b1_row.paper_upper)

@@ -591,7 +591,7 @@ production-posterior points (fiducial identity residual 1.78e-15,
 `jac_fid = Σ_b log σ8(fid) = −5.874902`). Script:
 `scripts/b1sigma8_measure_report.py`; numbers in `cache/b1sigma8_measure.json`.
 
-**Kish ESS/N = 0.9611** (172 998/180 000), **zero** draws hit the [0,3]
+**Kish ESS/N = 0.9611** (173 000/180 000), **zero** draws hit the [0,3]
 b1·σ8 bounds, max normalized weight 1.3e-05 — the two measures are this close.
 
 | param | mean (raw) | σ (raw) | mean (b1σ8) | σ (b1σ8) | σ ratio | shift (σ_F) | predicted F⁻¹g (σ_F) | \|Δ\| / 3·MC-SE |
