@@ -516,6 +516,16 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
         sampled_extra.append((pos_arr, float(0.0 if row.mean is None else row.mean),
                               float(row.sigma), int(ap_p), int(amp_p), knl_factor))
 
+    # b1 measure (static, read once from the spec): "raw" leaves the flat-in-b1
+    # prior untouched; "b1sigma8" is the Table-I measure -- flat in b1*sigma8(z)
+    # on [paper_lower, paper_upper] -- which adds a sigma8 change-of-variables
+    # Jacobian plus bounds inside log_prior_nl_fn below.
+    b1_row = spec.sampled["b1"]
+    b1_measure = b1_row.measure
+    if b1_measure == "b1sigma8":
+        b1_lower = float(b1_row.paper_lower)
+        b1_upper = float(b1_row.paper_upper)
+
     def log_prior_nl_fn(theta_nl):
         theta_nl = jnp.asarray(theta_nl, dtype=jnp.float64)
         s8 = sigma8_bins_fn(theta_nl)                       # (n_bins,)
@@ -527,6 +537,17 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
             x = theta_nl[pos] - (row.paper_mean or 0.0)
             total = total + jnp.sum(
                 -0.5 * (x / width) ** 2 - jnp.log(width) - 0.5 * _LOG2PI)
+        if b1_measure == "b1sigma8":
+            # Table-I measure: flat in y_b = b1_b * sigma8(z_b) on
+            # [b1_lower, b1_upper]. Relative to flat-in-raw-b1 this adds the
+            # change-of-variables Jacobian sum_b log sigma8 (a LIVE cosmology
+            # tilt: d/dlogA = n_bins/2) plus the bounds indicator. b2/bG2 need
+            # nothing here -- their Gaussian -log(width) already carries the
+            # sigma8^2 Jacobian.
+            total = total + jnp.sum(jnp.log(s8))
+            y = theta_nl[b1_pos] * s8
+            inside = jnp.all((y >= b1_lower) & (y <= b1_upper))
+            total = total + jnp.where(inside, 0.0, -jnp.inf)
         if sampled_extra:
             a_ap = a_ap_bins_fn(theta_nl)                   # (n_bins,)
             a_amp = s8 ** 2 / sigma8_ref ** 2               # (n_bins,)

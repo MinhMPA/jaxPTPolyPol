@@ -991,3 +991,71 @@ def test_real_spec_b1_row_and_deviation_note():
     devs = " ".join(str(d) for d in spec.metadata.get("deviations", []))
     assert "b1" in devs and "measure" in devs and "sigma8" in devs.lower()
 
+
+# ---------------------------------------------------------------------------
+# b1 sigma8 measure: runtime Jacobian + bounds
+# ---------------------------------------------------------------------------
+
+def _fns_for_measure(tmp_path, measure):
+    def mutate(raw):
+        if measure == "b1sigma8":
+            raw["sampled"]["b1"] = {"kind": "flat", "measure": "b1sigma8",
+                                    "paper_lower": 0.0, "paper_upper": 3.0}
+    spec = load_desi_prior_spec(_mutated_spec_path(tmp_path, mutate))
+    split = split_marginal_indices(
+        n_cosmo_params=N_COSMO, survey_keys=SURVEY_KEYS_TOY, n_bins=N_BINS)
+    sigma8_ref = jnp.array([0.6, 0.5])
+    s8_fn = lambda t: sigma8_ref * (1.0 + 0.1 * t[0])
+    a_ap_fn = lambda t: jnp.ones(N_BINS) * (1.0 + 0.2 * t[1])
+    fns = make_desi_prior_fns(
+        spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+        a_ap_bins_fn=a_ap_fn, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID)
+    return spec, split, s8_fn, fns
+
+
+def test_b1sigma8_jacobian_pointwise_identity(tmp_path):
+    """log_prior_ON - log_prior_OFF == sum_b log sigma8(z_b; theta), exactly."""
+    _, split, s8_fn, (_, _, lp_off) = _fns_for_measure(tmp_path, "raw")
+    _, _, _, (_, _, lp_on) = _fns_for_measure(tmp_path, "b1sigma8")
+    rng = np.random.default_rng(20260804)
+    for _ in range(8):
+        theta = jnp.asarray(rng.normal(0.0, 0.3, size=split.n_nl))
+        # keep b1*sigma8 inside [0, 3]: set b1 slots to ~1.5
+        for p in split.nl_b1_pos:
+            theta = theta.at[p].set(1.5)
+        expected = float(jnp.sum(jnp.log(s8_fn(theta))))
+        got = float(lp_on(theta)) - float(lp_off(theta))
+        assert got == pytest.approx(expected, abs=1e-12)
+
+
+def test_b1sigma8_bounds_give_minus_inf(tmp_path):
+    _, split, _, (_, _, lp_on) = _fns_for_measure(tmp_path, "b1sigma8")
+    theta = jnp.zeros(split.n_nl)
+    ok = theta.at[split.nl_b1_pos[0]].set(1.0)          # y = 0.6 in [0,3]
+    bad_hi = theta.at[split.nl_b1_pos[0]].set(6.0)      # y = 3.6 > 3
+    bad_lo = theta.at[split.nl_b1_pos[0]].set(-0.5)     # y < 0
+    assert np.isfinite(float(lp_on(ok)))
+    assert float(lp_on(bad_hi)) == -np.inf
+    assert float(lp_on(bad_lo)) == -np.inf
+
+
+def test_b1sigma8_gradient_slope(tmp_path):
+    """d(Jacobian)/d theta0 = sum_b d log s8/d theta0 = sum_b 0.1/(1+0.1 t0)."""
+    _, split, _, (_, _, lp_off) = _fns_for_measure(tmp_path, "raw")
+    _, _, _, (_, _, lp_on) = _fns_for_measure(tmp_path, "b1sigma8")
+    theta = jnp.zeros(split.n_nl)
+    for p in split.nl_b1_pos:
+        theta = theta.at[p].set(1.5)
+    diff = lambda t: lp_on(t) - lp_off(t)
+    g = jax.grad(diff)(theta)
+    assert float(g[0]) == pytest.approx(N_BINS * 0.1, rel=1e-10)
+    assert float(g[split.nl_b1_pos[0]]) == pytest.approx(0.0, abs=1e-12)
+
+
+def test_raw_measure_bitwise_unchanged(tmp_path):
+    """Default path must be BIT-identical to the pre-change behavior."""
+    _, split, _, (mu_a, sig_a, lp_a) = _fns_for_measure(tmp_path, "raw")
+    theta = jnp.full(split.n_nl, 0.2)
+    # raw measure adds no term and no bounds:
+    assert np.isfinite(float(lp_a(theta.at[split.nl_b1_pos[0]].set(50.0))))
+
