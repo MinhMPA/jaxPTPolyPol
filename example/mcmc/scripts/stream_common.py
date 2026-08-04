@@ -78,6 +78,7 @@ PFS_EMULATOR = '/Users/nguyenmn/cosmopower-jax-for-pfs/cosmology/jense2024/jense
 DEFAULT_BAO_DATA_DIR = "../../ext_data/bao_data/desi_bao_dr2"  # chdir-sensitive
 
 SHARED_KEYS = ('ombh2', 'omch2', 'logA', 'ns', 'h')   # sampled cosmo (nl block)
+FIXED_COSMO = (5, 6, 7, 8)  # packed-cosmo indices held fixed (z, A_b, eta_b, logT_AGN)
 
 META = {
     "n_bins": 7, "n_k": 37, "n_tri": 264, "n_gl": 16,
@@ -86,17 +87,65 @@ META = {
     "order2_m0": True,
 }
 
-#: The theory/grid configuration the Taylor tensors are a function of, and its
-#: sha256. This tuple layout and its ``repr`` serialization are THE canonical
-#: ones: ``build_taylor_templates_lcdm.py`` imports :data:`THEORY_CONFIG_HASH`
-#: from here to STAMP its templates npz and the loaders below use it to EXPECT,
-#: so the two hashes are byte-identical by construction and a change to any of
-#: ``V_bins``/``n_bar``/``knl_bins``/``z_bins``/the k-grid/``K_NL_RSD`` above
-#: invalidates every cached template built before it. Templates are
-#: prior-independent, so no prior identifier belongs in here.
-_THEORY_CONFIG = (V_bins, n_bar, knl_bins, z_bins,
-                  (K_PK_MIN, K_PK_MAX, N_K, K_BK_MIN, K_BK_MAX), K_NL_RSD)
-THEORY_CONFIG_HASH = hashlib.sha256(repr(_THEORY_CONFIG).encode()).hexdigest()
+#: The theory/grid/basis configuration the Taylor tensors are a function of, and
+#: its sha256. Stored as a NAMED dict (self-documenting) and hashed
+#: order-insensitively via ``repr(sorted(...items()))``, so the serialization is
+#: canonical regardless of insertion order. ``build_taylor_templates_lcdm.py``
+#: reaches :data:`THEORY_CONFIG_HASH` (through :func:`template_meta_for`) to STAMP
+#: its templates npz, and the loaders below use it to EXPECT, so the two hashes
+#: are byte-identical by construction and ANY change to a hashed entry invalidates
+#: every cache built before it.
+#:
+#: Coverage -- everything that determines TEMPLATE validity:
+#:   * survey/grid geometry -- ``V_bins``, ``n_bar``, ``knl_bins``, ``z_bins``, the
+#:     P/B k-grid ``(K_PK_MIN, K_PK_MAX, N_K, K_BK_MIN, K_BK_MAX)`` and
+#:     ``K_NL_RSD``;
+#:   * the COSMOLOGY BASIS -- ``(SHARED_KEYS, FIXED_COSMO, MNU_FIXED)``: which cosmo
+#:     params are sampled vs fixed, plus the fixed neutrino mass. This is the
+#:     primary LCDM-vs-nuLCDM discriminator -- a nuLCDM run adds ``'mnu'`` to the
+#:     sampled basis, so its hash necessarily differs and its templates can never
+#:     be loaded as LCDM (or vice versa) even at byte-identical survey config;
+#:   * the EMULATOR -- the FULL ``PFS_EMULATOR`` path (the LCDM linear-Pk network).
+#:     An mnu emulator lives at a different path and produces different templates;
+#:     the full path (not the basename) is hashed to preclude any basename
+#:     collision between sibling networks;
+#:   * the FIDUCIAL cosmology values -- ``sorted(FIDUCIAL.items())``: theta0 (the
+#:     Taylor expansion centre) and the mock data vector both depend on them;
+#:   * the model/discretization flags DEFINED IN this module that feed the theory
+#:     -- ``N_GL``, ``NUM_MU``, ``NUM_PHI``, ``BACKGROUND_MODE``.
+#:
+#: ``V_bins`` feeds only the covariance, not the templates, but it is KEPT here
+#: deliberately: the whitening npz's Gaussian covariance depends on it, and the
+#: whitening and templates stamps share this one hash, so hashing ``V_bins`` also
+#: guards the whitening. Dropping it (as an early review suggested) would weaken
+#: that guard.
+#:
+#: Deliberately NOT hashed -- the invariant model flags that live in
+#: ``build_taylor_templates_lcdm.py`` rather than here: ``do_irres=True``,
+#: ``do_AP=True``, ``ap=True`` (genuine template determinants, but hard-coded
+#: constants that nobody varies) and ``BB_POWER_MODEL='kaiser'`` (a COVARIANCE
+#: choice -- it feeds the whitening, not the templates). None of them discriminate
+#: LCDM from nuLCDM, and the scope here is the single-source-of-truth constants
+#: defined in THIS module; pulling a build-script literal in would force a
+#: non-surgical move or duplicate a magic value that could silently drift.
+#: Templates are prior-independent, so no prior identifier belongs here either.
+_THEORY_CONFIG = {
+    "V_bins": V_bins,
+    "n_bar": n_bar,
+    "knl_bins": knl_bins,
+    "z_bins": z_bins,
+    "k_grid": (K_PK_MIN, K_PK_MAX, N_K, K_BK_MIN, K_BK_MAX),
+    "k_nl_rsd": K_NL_RSD,
+    "cosmo_basis": (SHARED_KEYS, FIXED_COSMO, MNU_FIXED),
+    "emulator": PFS_EMULATOR,
+    "fiducial": tuple(sorted(FIDUCIAL.items())),
+    "n_gl": N_GL,
+    "num_mu": NUM_MU,
+    "num_phi": NUM_PHI,
+    "background_mode": BACKGROUND_MODE,
+}
+THEORY_CONFIG_HASH = hashlib.sha256(
+    repr(sorted(_THEORY_CONFIG.items())).encode()).hexdigest()
 
 #: c1 treatments: 'marginalized' (the base LCDM split, c1 in theta_lin) and
 #: 'sampled' (the Tier-3 split, c1 moved into theta_NL). See CONTEXT.md's c1
@@ -258,7 +307,7 @@ def build_split(n_cosmo_params, joint_survey_keys):
     k_nl + ndens fixed) -- notebook cell "Varied block ...", verbatim."""
     return split_marginal_indices(
         n_cosmo_params=n_cosmo_params, survey_keys=joint_survey_keys,
-        n_bins=n_zbins, fixed_cosmo=[5, 6, 7, 8],
+        n_bins=n_zbins, fixed_cosmo=list(FIXED_COSMO),
         fixed_survey_keys={('shared', 'k_nl', None), ('shared', 'ndens', None)})
 
 

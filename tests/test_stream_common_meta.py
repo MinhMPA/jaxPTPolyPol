@@ -203,19 +203,80 @@ def test_build_script_does_not_redeclare_shared_constants():
         "theory_config_hash it stamps can drift from the one consumers expect.")
 
 
+def _hash_config(cfg):
+    """The live hashing formula (``repr(sorted(...items()))`` sha256) applied to a
+    config-dict COPY, so a test can perturb an entry without touching the module's
+    own ``_THEORY_CONFIG``."""
+    return hashlib.sha256(repr(sorted(cfg.items())).encode()).hexdigest()
+
+
 def test_theory_config_hash_is_a_sha256_of_the_live_constants():
-    """The hash is derived, not hard-coded: perturbing a constant changes it."""
-    expect = hashlib.sha256(repr((
+    """The hash is derived, not hard-coded: it is the sha256 of the live
+    ``_THEORY_CONFIG`` dict (sorted-items repr), and perturbing a hashed entry
+    changes it."""
+    assert (_hash_config(dict(stream_common._THEORY_CONFIG))
+            == stream_common.THEORY_CONFIG_HASH)
+    # Perturb a k-grid entry in a COPY (never mutate the module's own dict).
+    perturbed = dict(stream_common._THEORY_CONFIG)
+    perturbed["k_grid"] = (stream_common.K_PK_MIN, 0.25, stream_common.N_K,
+                           stream_common.K_BK_MIN, stream_common.K_BK_MAX)
+    assert _hash_config(perturbed) != stream_common.THEORY_CONFIG_HASH
+
+
+# ---------------------------------------------------------------------------
+# Extended coverage: cosmo basis, emulator, fiducials (the nuLCDM-disambiguation
+# entries) and the old-hash transition. Additions for the theory-config-hash
+# extension (nuLCDM prereq).
+# ---------------------------------------------------------------------------
+
+
+def test_hash_covers_fiducial_and_emulator():
+    """The extended hash covers the FIDUCIAL cosmology values and the EMULATOR
+    path: perturbing either (in a copy of the live config) changes the hash."""
+    base = _hash_config(dict(stream_common._THEORY_CONFIG))
+    assert base == stream_common.THEORY_CONFIG_HASH        # reconstruction faithful
+    # (i) fiducial: bump h by 1e-3
+    cfg_fid = dict(stream_common._THEORY_CONFIG)
+    fid = dict(cfg_fid["fiducial"])
+    fid["h"] = fid["h"] + 1e-3
+    cfg_fid["fiducial"] = tuple(sorted(fid.items()))
+    assert _hash_config(cfg_fid) != base
+    # (ii) emulator: an mnu network at a different path
+    cfg_emu = dict(stream_common._THEORY_CONFIG)
+    cfg_emu["emulator"] = cfg_emu["emulator"].replace("lcdm", "mnu")
+    assert cfg_emu["emulator"] != stream_common._THEORY_CONFIG["emulator"]
+    assert _hash_config(cfg_emu) != base
+
+
+def test_hash_covers_cosmo_basis_mnu():
+    """LCDM vs nuLCDM: two configs differing ONLY in whether ``'mnu'`` is in the
+    sampled cosmo basis hash differently -- the whole point of the extension, so a
+    nuLCDM template cache can never be confused with the LCDM one."""
+    lcdm = dict(stream_common._THEORY_CONFIG)
+    shared, fixed, mnu = lcdm["cosmo_basis"]
+    assert "mnu" not in shared
+    nulcdm = dict(stream_common._THEORY_CONFIG)
+    nulcdm["cosmo_basis"] = (shared + ("mnu",), fixed, mnu)
+    assert _hash_config(lcdm) != _hash_config(nulcdm)
+
+
+def test_old_hash_cache_hard_fails_after_extension(tmp_path):
+    """TRANSITION (enforce-if-present): a template cache stamped with the
+    PRE-extension theory_config_hash (the old 6-tuple sha256) is rejected with a
+    hard ``ValueError`` under the new richer hash -- a genuinely stale cache must
+    not silently load. This bites ONLY a cache that actually carried the old hash;
+    the committed on-disk caches predate the key entirely and take the
+    warn-and-load path (see
+    ``test_legacy_stamp_predating_the_identifiers_still_loads``), which is why the
+    smoke tripwire is unaffected by the hash-value change."""
+    old_hash = hashlib.sha256(repr((
         stream_common.V_bins, stream_common.n_bar, stream_common.knl_bins,
         stream_common.z_bins,
         (stream_common.K_PK_MIN, stream_common.K_PK_MAX, stream_common.N_K,
          stream_common.K_BK_MIN, stream_common.K_BK_MAX),
         stream_common.K_NL_RSD)).encode()).hexdigest()
-    assert stream_common.THEORY_CONFIG_HASH == expect
-    perturbed = hashlib.sha256(repr((
-        stream_common.V_bins, stream_common.n_bar, stream_common.knl_bins,
-        stream_common.z_bins,
-        (stream_common.K_PK_MIN, 0.25, stream_common.N_K,
-         stream_common.K_BK_MIN, stream_common.K_BK_MAX),
-        stream_common.K_NL_RSD)).encode()).hexdigest()
-    assert perturbed != stream_common.THEORY_CONFIG_HASH
+    assert old_hash != stream_common.THEORY_CONFIG_HASH    # extension changed it
+    stamped = {**TEMPLATE_META_SHAPE, "theory_config_hash": old_hash}
+    tpath, wpath = _write_pair(tmp_path, stamped, WHITENING_META_SHAPE)
+    with pytest.raises(ValueError, match="theory_config_hash"):
+        stream_common.load_templates_and_whitening(tpath, wpath)
