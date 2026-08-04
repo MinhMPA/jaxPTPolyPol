@@ -653,3 +653,118 @@ level under the production priors. Means sit off-fiducial as expected from the
 documented mechanisms (non-fiducial prior means + logdet/volume tilts;
 logA +0.69 σ_F, consistent with the +0.76 seen in the RWMH surrogate chain —
 different sampler, same posterior). Tripwire log_post(x0) = −172.996046 exact.
+
+## nuLCDM gate (2026-08-04) — both marginal-mean modes + mnu Jacobian
+
+The `desi_prior_validation.py` gate under `--cosmology nulcdm` (Task 5): the
+production Taylor surrogate marginal posterior with **mnu added to the sampled
+cosmology basis** (n_NL 26→27, mnu at θ_NL position 5), the DESI DR1-reanalysis
+**b1σ8 spec under `phase="nulcdm"`** (`load_desi_prior_spec("...
+_b1s8", phase="nulcdm")`), the nuLCDM templates/whitening
+(`taylor_{templates,whitening}_nulcdm.npz`, theory-config hash `8f0f2e74…`,
+`cosmology: nulcdm` meta guards), and the **Σm_ν ≥ 0 physical bound** as a −∞
+indicator in the sampled-block prior. Gradient-free RWMH (200 000 steps, burn
+20 000; NUTS is forbidden — the b1σ8 U[0,3] and Σm_ν≥0 walls are −∞ indicators).
+Widths/correlations compare the chain against the surrogate's own
+Hessian-Fisher `F = −hess logpost(0)` on the **6-parameter cosmology block
+(incl. mnu)**; the mean check uses the AD-tilted center
+`μ_tilt = fid + F⁻¹∇logpost(fid)`. Run TWICE at production scale under the two
+marginal-mean modes (CONTEXT.md policy 2026-08-04). Artifacts:
+`cache/nulcdm_gate_{spec,fiducial}_means.json` (+ `…_chain_w.npy`).
+
+**spec-means mode** (paper-fidelity means; seed 20260807; acc 0.275; chain wall
+341 s, 459 s total; peak RSS 3.3 GB; surrogate lp0 = −178.879579):
+
+| param | width ratio (chain/F) | tilt pred (σ_F) | mean pull vs tilt (σ_F) | (mean−fid)/σ_F | ESS |
+|-------|----------------------|-----------------|-------------------------|----------------|-----|
+| ombh2 | 1.006 | −0.702 | +0.091 | −0.611 | 2298 |
+| omch2 | 1.007 | −0.991 | +0.280 | −0.711 | 1302 |
+| logA  | 0.892 | +1.457 | −0.324 | +1.133 | 1561 |
+| ns    | 1.102 | +0.784 | +0.253 | +1.037 | 1107 |
+| h     | 0.953 | −0.961 | −0.043 | −1.004 | 1331 |
+| **mnu** | **0.800** | **+0.085** | **+0.626** | **+0.711** | 1032 |
+
+max |corr diff| = 0.158 at (ns, mnu); **core-5 (excl. mnu) = 0.078**.
+**G1 REVIEW, G2 REVIEW, G3 REVIEW → verdict REVIEW.**
+
+**fiducial-means mode** (production policy config, means = per-bin fiducial
+θ_lin `packed_params[split.lin_idx]`; seed 20260808; acc 0.281; chain wall
+353 s, 464 s total; peak RSS 3.2 GB; surrogate lp0 = −173.635756):
+
+| param | width ratio (chain/F) | tilt pred (σ_F) | mean pull vs tilt (σ_F) | (mean−fid)/σ_F | ESS |
+|-------|----------------------|-----------------|-------------------------|----------------|-----|
+| ombh2 | 0.998 | −0.616 | +0.121 | −0.495 | 1762 |
+| omch2 | 0.952 | −1.166 | +0.321 | −0.845 | 1896 |
+| logA  | 0.890 | +1.505 | −0.438 | +1.067 | 1656 |
+| ns    | 1.128 | +0.856 | +0.158 | +1.014 | 1166 |
+| h     | 0.967 | −0.975 | +0.010 | −0.965 | 1792 |
+| **mnu** | **0.791** | **+0.190** | **+0.557** | **+0.746** | 1266 |
+
+max |corr diff| = 0.152 at (ns, mnu); **core-5 (excl. mnu) = 0.088**.
+**G1 REVIEW, G2 REVIEW, G3 REVIEW → verdict REVIEW.**
+
+**The mnu-direction measurement (the quantity the phase gate protects).**
+
+| quantity | spec | fiducial |
+|----------|------|----------|
+| (a) ∂(Σ_b log σ8)/∂mnu \|_fid | **−1.8135** | **−1.8135** |
+| (b) induced 1st-order tilt (F⁻¹g)_mnu (σ_F) | +0.085 | +0.190 |
+| (c) realized chain mnu mean pull vs tilt (σ_F) | +0.626 | +0.557 |
+| Σm_ν≥0 boundary-hit frac (< 0.01 eV) | 0.035 | 0.032 |
+| min Σm_ν (eV) / max identical-run (draws) | 0.000 / 40 | 0.000 / 41 |
+| σ_F(mnu), Hessian (eV) | 0.120 | 0.121 |
+
+(a) is a fiducial quantity (mode-independent) and is **NEGATIVE**: σ8 falls with
+Σm_ν, so the b1σ8 change-of-variables Jacobian Σ_b log σ8(z_b) genuinely tilts
+the measure toward lower Σm_ν (≈ −0.26 per z-bin × 7 bins). (b) the FULL
+induced tilt (F⁻¹g)_mnu is only slightly positive (+0.09/+0.19 σ_F): the direct
+negative Jacobian pull is offset by the data/BAO gradient and the cross-parameter
+F⁻¹ mixing. (c) the chain mnu mean sits **+0.56–0.63 σ_F ABOVE** the tilted
+center — the Σm_ν≥0 wall (0.5 σ_F below the fiducial in the Hessian metric,
+σ_F,mnu ≈ 0.12 eV) truncates the low-mnu tail and pushes the mnu mean up. The
+wall IS sampled (≈ 3–4 % of draws within 0.01 eV of it) but does **not stick**:
+the longest identical-draw run (40/41) matches the expected geometric maximum
+(≈ 38 at acceptance 0.28 over 180 k draws), and acceptance is healthy.
+
+**Why REVIEW is a documented outcome, not a wiring failure.** In both modes the
+full 6-parameter gate reads REVIEW, but the deviations are entirely
+mnu-specific: (i) **every** correlation whose chain-vs-Hessian difference exceeds
+0.1 involves mnu — (ns,mnu), (omch2,mnu), (h,mnu), (logA,mnu) — while the
+**LCDM-analog 5-parameter cosmology core (ombh2/omch2/logA/ns/h) has max corr
+diff 0.078 (spec) / 0.088 (fiducial), both < 0.1**, and its width ratios sit in
+[0.9,1.1] to within MC error; (ii) mnu's own width ratio ≈ 0.80 is the
+truncated-Gaussian narrowing of the Σm_ν≥0 wall (a lower truncation at 0.5 σ_F
+predicts a 1-D width ratio ≈ 0.70; the correlated marginal narrows to 0.80). The
+Hessian-Fisher is the LOCAL curvature at the fiducial=mode and is blind to the
+wall; the chain sees the truncation. A mis-wired prior would corrupt the un-walled
+core, which it does not. G3 REVIEW is the same mean-vs-mode volume effect
+documented for LCDM (θ_NL-dependent A_AP·A_amp prior widths + logdet volume),
+now compounded by the wall on mnu.
+
+**spec vs fiducial mean-mode comparison.** The two modes share WIDTHS, the
+correlated ctr block, and the θ-rescaling — only the marginalized-nuisance prior
+MEANS differ (spec = mapped/rescaled paper means + bΓ3 coevolution; fiducial =
+the constant per-bin fiducial θ_lin, zero θ_NL-gradient). The difference is
+visible in the **tilt center**, not the posterior itself: the residual
+(mean−fid)/σ_F pulls are nearly mode-independent (logA +1.13 vs +1.07, ns +1.04
+vs +1.01, mnu +0.71 vs +0.75), while the mean-pull-vs-tilt (G3) column shifts
+because μ_tilt moves (spec carries the extra non-fiducial prior-mean gradient;
+fiducial's tilt is the pure logdet-volume term, and its lp0 drops from −178.88
+to −173.64 as the prior-mean residuals at x0 vanish). Against the LCDM
+fiducial-round residual pulls (ombh2 −0.62, omch2 −0.77, logA +0.56, ns +0.43,
+h −0.80; those used the notebook's DESI-spec comparison Fisher, whereas this gate
+uses the surrogate Hessian-Fisher, so magnitudes are comparable-but-not-identical
+in construction), the nuLCDM fiducial-mode analogs match in SIGN throughout
+(ombh2 −0.50, omch2 −0.85, h −0.97 negative; logA +1.07, ns +1.01 positive) and
+are LARGER on the amplitude/shape directions (logA, ns) — the σ8–Σm_ν degeneracy
+opened by adding mnu to the basis amplifies the volume pull there — with the new
+mnu direction pulling **+0.75 σ_F** up off the wall. This is the honest nuLCDM
+analog: the physical Σm_ν≥0 prior is the dominant force on the mnu marginal
+(narrows it, pushes its mean up, distorts its cross-correlations), exactly the
+behaviour the b1σ8 phase gate + the mnu bound were built to represent.
+
+Reproduce (from `example/mcmc`, after `build_taylor_templates_lcdm.py
+--cosmology nulcdm`):
+`python scripts/desi_prior_validation.py --cosmology nulcdm --marginal-means
+{spec,fiducial}`. LCDM default unchanged: tripwire log_post(x0) = −172.996046
+in smoke.

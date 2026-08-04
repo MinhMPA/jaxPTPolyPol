@@ -336,19 +336,33 @@ def load_templates_and_whitening(templates_path, whitening_path, *,
 # Theory/BAO assembly.
 # ---------------------------------------------------------------------------
 
-def build_fiducial_surveys():
+def build_fiducial_surveys(cosmology="lcdm"):
     """Rebuild the fiducial cosmology + per-bin survey pytrees.
 
     Returns ``(cosmo_dict, cosmo, surveys, joint_survey_keys)`` -- verbatim from
     the notebook cell "Emulator, models, fiducial parameters" (bias/counterterm
     fiducials arXiv:1907.06666). The theory statics themselves (emulator, models)
     cannot be serialized and are rebuilt by each caller.
+
+    ``cosmology`` (default ``"lcdm"``) selects the run family. The LCDM default is
+    byte-identical to the pre-nuLCDM behaviour. ``"nulcdm"`` appends ``'mnu'`` LAST
+    to ``cosmo_dict`` (at :data:`NULCDM_FIDUCIAL`'s value), so the packed cosmo
+    order becomes (ombh2, omch2, logA, ns, h, z, A_b, eta_b, logT_AGN, mnu): mnu is
+    SAMPLED at packed index 9 and :data:`FIXED_COSMO` == (5, 6, 7, 8) is unchanged
+    (mirrors ``build_taylor_templates_lcdm.py`` and the nuLCDM notebook). The
+    fiducial mnu equals :data:`MNU_FIXED` (0.06), so the bias/counterterm
+    fiducials (which use ``mnu=MNU_FIXED``) are numerically identical.
     """
+    if cosmology not in _COSMOLOGIES:
+        raise ValueError(
+            f"unknown cosmology {cosmology!r}; expected one of {_COSMOLOGIES}")
     cosmo_dict = {
         'ombh2': FIDUCIAL['ombh2'], 'omch2': FIDUCIAL['omch2'],
         'logA':  FIDUCIAL['logA'],  'ns':    FIDUCIAL['ns'], 'h': FIDUCIAL['h'],
         'z': 0.7, 'A_b': 3.13, 'eta_b': 0.603, 'logT_AGN': 7.8,
     }
+    if cosmology == "nulcdm":
+        cosmo_dict['mnu'] = NULCDM_FIDUCIAL['mnu']   # keep LAST (packed idx 9)
     cosmo = CosmoParams(cosmo_dict)
 
     def b1z(z): return 0.9 + 0.4 * z

@@ -48,6 +48,22 @@ Run from example/mcmc after build_taylor_templates_lcdm.py::
     cd example/mcmc
     PYTHONPATH=<worktree>/src python scripts/desi_prior_validation.py
     # smoke run (2000/200): prepend DESI_GATE_SMOKE=1
+
+nuLCDM gate variant (Task 5). ``--cosmology nulcdm`` swaps in the mnu
+emulator/basis/fiducials, the b1sigma8 spec under ``phase="nulcdm"``, the nulcdm
+template/whitening caches (with the cosmology-aware meta guards), the Sum m_nu
+>= 0 indicator in the sampled-block prior, and records the mnu-direction
+measurement. ``--marginal-means {spec,fiducial}`` selects the marginalized-
+nuisance prior means (spec = paper-fidelity, the recorded-LCDM-gate mode;
+fiducial = the production policy config, centered on packed_params[lin_idx]).
+Per-mode outputs land in ``cache/nulcdm_gate_{spec,fiducial}_means.json``. The
+LCDM default (``--cosmology lcdm --marginal-means spec``) is byte-identical in
+behaviour (tripwire surrogate lp0 = -172.996046 in smoke)::
+
+    # nuLCDM, spec means, seed 20260807:
+    python scripts/desi_prior_validation.py --cosmology nulcdm --marginal-means spec
+    # nuLCDM, fiducial means, seed 20260808:
+    python scripts/desi_prior_validation.py --cosmology nulcdm --marginal-means fiducial
 """
 
 import json
@@ -73,9 +89,10 @@ jax.config.update("jax_persistent_cache_min_compile_time_secs", 10)
 import jax.numpy as jnp
 
 from stream_common import (
-    DEFAULT_BAO_DATA_DIR, META, MNU_FIXED, PFS_EMULATOR, SHARED_KEYS,
-    build_bao, build_fiducial_surveys, build_kgrid_and_blocks, build_split,
-    knl_bins, load_templates_and_whitening, n_zbins, z_bins,
+    DEFAULT_BAO_DATA_DIR, META, MNU_FIXED, NULCDM_EMULATOR, PFS_EMULATOR,
+    SHARED_KEYS, SHARED_KEYS_NU, build_bao, build_fiducial_surveys,
+    build_kgrid_and_blocks, build_split, knl_bins, load_templates_and_whitening,
+    meta_for, n_zbins, template_meta_for, z_bins,
 )
 
 from jaxptpolypol import make_marginal_log_posterior_taylor
@@ -136,7 +153,46 @@ threading.Thread(target=_watchdog, daemon=True).start()
 # enforce it). Only the DESI-specific pieces stay local.
 # ---------------------------------------------------------------------------
 
-N_COSMO_NL = len(SHARED_KEYS)                          # == 5, gate cosmo block
+# ---------------------------------------------------------------------------
+# --cosmology {lcdm,nulcdm} + --marginal-means {spec,fiducial} (nuLCDM gate,
+# Task 5). Default lcdm/spec is byte-identical in BEHAVIOUR to the pre-nuLCDM
+# gate (LCDM tripwire: surrogate lp0 = -172.996046 in smoke mode). nulcdm swaps
+# in the mnu emulator/basis/fiducials, the b1sigma8 spec under phase="nulcdm",
+# the nulcdm template/whitening caches, adds the Sum m_nu >= 0 indicator to the
+# sampled-block prior, and records the mnu-direction measurement (all mirroring
+# mcmc_joint_PFS_BAO_BBN_ns_nuLCDM.ipynb).
+# ---------------------------------------------------------------------------
+
+
+def _arg_value(flag, default):
+    """Read the value after ``flag`` in argv, or ``default`` if absent."""
+    args = sys.argv[1:]
+    if flag in args:
+        i = args.index(flag)
+        if i + 1 >= len(args):
+            sys.exit(f"{flag} requires a value")
+        return args[i + 1]
+    return default
+
+
+COSMOLOGY = _arg_value("--cosmology", "lcdm")
+if COSMOLOGY not in ("lcdm", "nulcdm"):
+    sys.exit(f"--cosmology must be 'lcdm' or 'nulcdm', got {COSMOLOGY!r}.")
+MARGINAL_MEANS = _arg_value("--marginal-means", "spec")
+if MARGINAL_MEANS not in ("spec", "fiducial"):
+    sys.exit(f"--marginal-means must be 'spec' or 'fiducial', got "
+             f"{MARGINAL_MEANS!r}.")
+
+IS_NU = COSMOLOGY == "nulcdm"
+COSMO_KEYS = SHARED_KEYS_NU if IS_NU else SHARED_KEYS
+EMULATOR_PATH = NULCDM_EMULATOR if IS_NU else PFS_EMULATOR
+# nuLCDM loads the b1sigma8 spec variant under phase="nulcdm" (the phase gate
+# requires measure=b1sigma8); lcdm keeps the base spec at phase="forecast" (the
+# load_desi_prior_spec() defaults) so the lcdm path is byte-identical.
+DESI_SPEC_NAME = ("desi_dr1_reanalysis_2511_20757_b1s8" if IS_NU
+                  else "desi_dr1_reanalysis_2511_20757")
+DESI_SPEC_PHASE = "nulcdm" if IS_NU else "forecast"
+N_COSMO_NL = len(COSMO_KEYS)            # 5 (lcdm) / 6 (nulcdm), gate cosmo block
 
 BAO_DATA_DIR = DEFAULT_BAO_DATA_DIR                    # chdir-sensitive
 # In a worktree ext_data is only partially checked out (like cache); the DR2
@@ -147,8 +203,14 @@ if not pathlib.Path(BAO_DATA_DIR).is_dir():
     if _master_bao.is_dir():
         BAO_DATA_DIR = str(_master_bao)
 
-# Gate parameters (task 7sigma dispatch).
-RNG_SEED_CHAIN = 20260731
+# Gate parameters (task 7sigma dispatch). nuLCDM uses distinct per-mode seeds
+# (spec 20260807, fiducial 20260808 -- Task 5 dispatch); --seed overrides. The
+# equivalence dump is an LCDM cross-branch artifact only (skipped for nulcdm).
+if IS_NU:
+    _DEFAULT_SEED = 20260807 if MARGINAL_MEANS == "spec" else 20260808
+else:
+    _DEFAULT_SEED = 20260731
+RNG_SEED_CHAIN = int(_arg_value("--seed", str(_DEFAULT_SEED)))
 EQUIV_SEED = 20260731
 EQUIV_N = 64
 EQUIV_SCALE = 0.5
@@ -173,20 +235,26 @@ BURN = 200 if SMOKE else 20_000
 
 HERE = pathlib.Path(__file__).resolve().parents[1]      # example/mcmc
 CACHE = HERE / "cache"
-if (not (CACHE / "taylor_whitening_lcdm.npz").exists()
-        and (CACHE / "cache" / "taylor_whitening_lcdm.npz").exists()):
+_WH_NAME = f"taylor_whitening_{COSMOLOGY}.npz"
+if (not (CACHE / _WH_NAME).exists()
+        and (CACHE / "cache" / _WH_NAME).exists()):
     CACHE = CACHE / "cache"                              # nested symlink -> master
 
-WHITENING_PATH = CACHE / "taylor_whitening_lcdm.npz"
-TEMPLATES_PATH = CACHE / "taylor_templates_lcdm.npz"
+WHITENING_PATH = CACHE / _WH_NAME
+TEMPLATES_PATH = CACHE / f"taylor_templates_{COSMOLOGY}.npz"
 # A SMOKE run writes to its OWN filenames. Both production outputs are TRACKED
 # gate artifacts, and a 2000-step smoke chain (whose numbers are meaningless as
 # a gate) must never be able to overwrite a committed gate result.
 _SFX = "_smoke" if SMOKE else ""
-RESULT_PATH = (CACHE / f"desi_prior_validation_sigmap_frozenR{_SFX}.json"
-               if FROZEN_R else
-               CACHE / f"desi_prior_validation_sigmap{_SFX}.json")
-EQUIV_PATH = CACHE / f"branch_equiv_sigmap{_SFX}.json"  # not written if FROZEN_R
+if IS_NU:
+    # Per-mode nuLCDM gate outputs (Task 5); each marginal-mean mode gets its own
+    # file so the two production runs never overwrite each other.
+    RESULT_PATH = CACHE / f"nulcdm_gate_{MARGINAL_MEANS}_means{_SFX}.json"
+else:
+    RESULT_PATH = (CACHE / f"desi_prior_validation_sigmap_frozenR{_SFX}.json"
+                   if FROZEN_R else
+                   CACHE / f"desi_prior_validation_sigmap{_SFX}.json")
+EQUIV_PATH = CACHE / f"branch_equiv_sigmap{_SFX}.json"  # lcdm only (see dump below)
 
 for p in (WHITENING_PATH, TEMPLATES_PATH):
     if not p.exists():
@@ -196,8 +264,10 @@ if not pathlib.Path(BAO_DATA_DIR).is_dir():
     sys.exit(f"BAO data dir not found at {BAO_DATA_DIR!r} -- run from "
              "example/mcmc.")
 
-results = {"config": {"branch": "stream-b-sigmap", "meta": META,
-                      "rng_seed_chain": RNG_SEED_CHAIN,
+results = {"config": {"branch": "stream-b-sigmap", "cosmology": COSMOLOGY,
+                      "marginal_means": MARGINAL_MEANS,
+                      "desi_spec": DESI_SPEC_NAME, "desi_phase": DESI_SPEC_PHASE,
+                      "meta": META, "rng_seed_chain": RNG_SEED_CHAIN,
                       "num_samples": NUM_SAMPLES, "burn": BURN,
                       "smoke": SMOKE, "frozen_r": FROZEN_R,
                       "equiv": {"points_seed": EQUIV_SEED, "n": EQUIV_N,
@@ -219,7 +289,10 @@ save_results()
 _watch["stage"] = "load + assemble surrogate"
 print(f"===== {_watch['stage']} (smoke={SMOKE}) =====", flush=True)
 
-tt, wz = load_templates_and_whitening(TEMPLATES_PATH, WHITENING_PATH)
+tt, wz = load_templates_and_whitening(
+    TEMPLATES_PATH, WHITENING_PATH,
+    expect_template_meta=template_meta_for("marginalized", cosmology=COSMOLOGY),
+    expect_meta=meta_for("marginalized", cosmology=COSMOLOGY))
 
 packed_params = jnp.asarray(wz["packed_params"])
 pb_fid = jnp.asarray(wz["pb_fid"])
@@ -243,9 +316,10 @@ nl_prior_entries = [
 # (for the split + config-drift tripwires), the BAO theory fn, and the k-grid
 # triangles (for slicing pb_fid into per-bin data). ps1loop/bispectrum models
 # and the exact per-bin posterior are NOT needed here.
-pklin_emulator = CosmoEmulator(probe='custom_log', emulator_path=PFS_EMULATOR)
+pklin_emulator = CosmoEmulator(probe='custom_log', emulator_path=EMULATOR_PATH)
 
-cosmo_dict, cosmo, surveys, joint_survey_keys = build_fiducial_surveys()
+cosmo_dict, cosmo, surveys, joint_survey_keys = build_fiducial_surveys(
+    cosmology=COSMOLOGY)
 n_cosmo_params = sum(cosmo.param_sizes)
 
 # Config-drift tripwire: the rebuilt fiducial packed vector must equal the one
@@ -271,15 +345,18 @@ bao_dr2, bao_theory_fn = build_bao(
 # DESI priors (NEW): cov-mode survey/EFT prior + BBN/ns cosmology prior.
 # ---------------------------------------------------------------------------
 
-spec = load_desi_prior_spec()
+spec = load_desi_prior_spec(DESI_SPEC_NAME, phase=DESI_SPEC_PHASE)
 # The linear-Pk emulator's inputs include the baryon-feedback nuisances
-# A_b/eta_b/logT_AGN, which are FIXED in the production LCDM layout (not in the
+# A_b/eta_b/logT_AGN, which are FIXED in the production layout (not in the
 # sampled nl cosmo block). Inject them at their fiducial values as constants so
 # sigma8 is evaluated at the right point with zero spurious theta-derivative.
 FIXED_BARYON = {'A_b': cosmo_dict['A_b'], 'eta_b': cosmo_dict['eta_b'],
                 'logT_AGN': cosmo_dict['logT_AGN']}
+# nuLCDM uses the 6-key basis (SHARED_KEYS_NU incl mnu -> has_mnu path of
+# make_lcdm_rescaling_fns); lcdm the 5-key core. So sigma8 traces mnu in nuLCDM,
+# which is exactly what makes the b1sigma8 Jacobian a live mnu tilt.
 sigma8_bins_fn, a_ap_bins_fn, sigma8_ref_bins = make_lcdm_rescaling_fns(
-    pklin_emulator=pklin_emulator, cosmo_keys=SHARED_KEYS,
+    pklin_emulator=pklin_emulator, cosmo_keys=COSMO_KEYS,
     cosmo_sizes=(1,) * N_COSMO_NL, z_bins=z_bins,
     fid_cosmo_native=fid_nl[:N_COSMO_NL], mnu_fixed=MNU_FIXED,
     fixed_cosmo_extras=FIXED_BARYON)
@@ -300,10 +377,18 @@ if FROZEN_R:
     print("===== FROZEN_R mode: theta-dependent prior WIDTHS frozen at "
           "fiducial (R==1, b2/bG2 widths at sigma8_ref) =====", flush=True)
 
+# marginal_means (policy 2026-08-04): "spec" = paper-fidelity means (default,
+# the recorded LCDM gates); "fiducial" = per-bin fiducial theta_lin means (the
+# production policy config), the sanctioned fiducial vector
+# packed_params[split.lin_idx]. WIDTHS + correlated ctr block + rescaling are
+# identical in both modes.
+_fiducial_lin_means = (packed_params[jnp.array(split.lin_idx)]
+                       if MARGINAL_MEANS == "fiducial" else None)
 desi_prior_mean_fn, desi_prior_sigma_fn, desi_log_prior_nl = make_desi_prior_fns(
     spec, split=split, knl_bins=knl_bins,
     sigma8_bins_fn=sigma8_bins_fn_prior, a_ap_bins_fn=a_ap_bins_fn_prior,
-    sigma8_ref_bins=sigma8_ref_bins)
+    sigma8_ref_bins=sigma8_ref_bins,
+    marginal_means=MARGINAL_MEANS, fiducial_lin_means=_fiducial_lin_means)
 
 # The spec carries the ctr_rotation trio -> cov-mode: prior_sigma_fn returns
 # stacked (n_bins, 11, 11) prior covariance blocks (paper c0/c2/c4 rotated into
@@ -320,14 +405,25 @@ results["config"]["sigma8_ref_bins"] = np.asarray(sigma8_ref_bins).tolist()
 
 bbn_ns_log_prior = make_gaussian_log_prior(n_nl, nl_prior_entries)
 
+# nuLCDM: flat mnu prior with the physical bound Sum m_nu >= 0, applied as a -inf
+# indicator on the mnu theta_NL position (== cosmo_nl_pos[-1]; packed cosmo idx 9
+# -> theta_NL pos 5). RWMH-safe (simply rejects the proposal); mirrors the
+# nuLCDM notebook's log_prior_mnu_bound.
+MNU_NL_POS = cosmo_nl_pos[-1] if IS_NU else None
 
-def log_prior_nl(theta_nl):
-    """DESI (b2/bG2) + production BBN(ombh2)/ns Gaussian priors on nl params.
+if IS_NU:
+    def log_prior_nl(theta_nl):
+        """DESI (b2/bG2 + b1sigma8) + BBN/ns priors + Sum m_nu >= 0 bound."""
+        return (desi_log_prior_nl(theta_nl) + bbn_ns_log_prior(theta_nl)
+                + jnp.where(theta_nl[MNU_NL_POS] >= 0.0, 0.0, -jnp.inf))
+else:
+    def log_prior_nl(theta_nl):
+        """DESI (b2/bG2) + production BBN(ombh2)/ns Gaussian priors on nl params.
 
-    Disjoint positions: DESI touches b2/bG2 (split.nl_b1_pos + offset per bin);
-    BBN/ns touch nl positions 0 (ombh2) and 3 (ns).
-    """
-    return desi_log_prior_nl(theta_nl) + bbn_ns_log_prior(theta_nl)
+        Disjoint positions: DESI touches b2/bG2 (split.nl_b1_pos + offset per
+        bin); BBN/ns touch nl positions 0 (ombh2) and 3 (ns).
+        """
+        return desi_log_prior_nl(theta_nl) + bbn_ns_log_prior(theta_nl)
 
 
 to_whitened, to_physical = make_cholesky_transform(
@@ -377,9 +473,10 @@ if not np.all(np.isfinite(mu_tilt_w)):
 # ---------------------------------------------------------------------------
 
 _watch["stage"] = "equivalence dump"
-if FROZEN_R:
-    print("FROZEN_R mode: skipping branch-equivalence dump (the frozen "
-          "posterior is not the cross-branch reference).", flush=True)
+if FROZEN_R or IS_NU:
+    _why = "FROZEN_R" if FROZEN_R else "nuLCDM"
+    print(f"{_why} mode: skipping branch-equivalence dump (LCDM cross-branch "
+          "artifact only; the nuLCDM gate has no sister branch).", flush=True)
 else:
     equiv_pts = EQUIV_SCALE * jax.random.normal(
         jax.random.PRNGKey(EQUIV_SEED), (EQUIV_N, n_nl))
@@ -421,8 +518,9 @@ chain_w = np.asarray(samples_w[0])                        # (NUM_SAMPLES, n_nl)
 draws = chain_w[BURN:]
 
 if not SMOKE:
-    CHAIN_OUT = CACHE / "desi_chain_w.npy"
-    np.save(CHAIN_OUT, draws)          # post-burn whitened draws, raw-b1 measure
+    CHAIN_OUT = (CACHE / f"nulcdm_gate_{MARGINAL_MEANS}_chain_w.npy" if IS_NU
+                 else CACHE / "desi_chain_w.npy")
+    np.save(CHAIN_OUT, draws)          # post-burn whitened draws
     print(f"chain -> {CHAIN_OUT} {draws.shape}", flush=True)
 
 # ---------------------------------------------------------------------------
@@ -466,18 +564,73 @@ g2 = bool(corr_diff_max < 0.1)
 g3 = bool(np.all(np.abs(mean_pull) < 2.5 * mc_se + 0.05))
 verdict = "PASS" if (g1 and g2 and g3) else "REVIEW"
 
-print(f"\n{'param':>7s} {'width s/F':>10s} {'mean_pull':>10s} "
-      f"{'mc_se':>8s} {'ess':>9s}")
-for i, key in enumerate(SHARED_KEYS):
-    print(f"{key:>7s} {width_ratio[i]:10.4f} {mean_pull[i]:10.4f} "
-          f"{mc_se[i]:8.4f} {ess[i]:9.1f}")
+# tilt prediction (mu_tilt - fid)/sig_F per cosmo param, for the mnu measurement
+# and for parity with the doc table's "tilt pred (sigma_F)" column.
+tilt_pred = (mu_tilt_phys[:n_cosmo] - np.asarray(fid_nl)[:n_cosmo]) / sig_F
+
+print(f"\n{'param':>7s} {'width s/F':>10s} {'tilt_pred':>10s} "
+      f"{'mean_pull':>10s} {'mc_se':>8s} {'ess':>9s}")
+for i, key in enumerate(COSMO_KEYS):
+    print(f"{key:>7s} {width_ratio[i]:10.4f} {tilt_pred[i]:10.4f} "
+          f"{mean_pull[i]:10.4f} {mc_se[i]:8.4f} {ess[i]:9.1f}")
 print(f"max corr diff = {corr_diff_max:.4f} (require < 0.1)")
 print(f"G1 widths {g1}  G2 corrs {g2}  G3 means {g3}  ->  {verdict}", flush=True)
+
+# ---------------------------------------------------------------------------
+# nuLCDM mnu-direction measurement (the quantity the phase gate exists to
+# protect). (a) d(Sum_b log sigma8)/d(mnu) at the fiducial via jax.grad of the
+# b1sigma8 Jacobian term -- expect NEGATIVE (sigma8 falls with Sum m_nu);
+# (b) the induced first-order mnu tilt (F^-1 g)_mnu in sigma_F units under the
+# b1sigma8 measure (the mnu column of tilt_pred); (c) the realized chain-level
+# mnu mean pull vs the AD-tilted center. Plus the Sum m_nu >= 0 boundary-hit
+# fraction (near-wall mass -- expected, NOT a failure unless the chain STICKS).
+# ---------------------------------------------------------------------------
+if IS_NU:
+    mnu_i = MNU_NL_POS                                   # theta_NL / cosmo pos 5
+
+    def _sum_log_sigma8(theta_nl):
+        return jnp.sum(jnp.log(sigma8_bins_fn(theta_nl)))
+
+    dlogs8_dmnu = float(jax.grad(_sum_log_sigma8)(fid_nl)[mnu_i])
+    mnu_tilt_sigmaF = float(tilt_pred[mnu_i])
+    mnu_mean_pull = float(mean_pull[mnu_i])
+    mnu_phys = phys[:, mnu_i]
+    mnu_min = float(mnu_phys.min())
+    mnu_boundary_frac = float(np.mean(mnu_phys < 0.01))   # within 0.01 eV of wall
+    # Sticking check: longest run of identical whitened mnu draws (a chain stuck
+    # against the wall shows a dominant repeat spike). Healthy RWMH ~ 1/accept.
+    _stuck = _mx = 1
+    for _dv in np.diff(draws[:, mnu_i]):
+        _stuck = _stuck + 1 if _dv == 0.0 else 1
+        _mx = max(_mx, _stuck)
+    mnu_max_stick = int(_mx)
+    print("\n----- nuLCDM mnu-direction measurement -----")
+    print(f"(a) d(Sum_b log sigma8)/d(mnu)|_fid = {dlogs8_dmnu:+.4f}  "
+          "(expect NEGATIVE)")
+    print(f"(b) induced 1st-order mnu tilt (F^-1 g)_mnu = "
+          f"{mnu_tilt_sigmaF:+.4f} sigma_F")
+    print(f"(c) realized chain mnu mean pull vs tilted center = "
+          f"{mnu_mean_pull:+.4f} sigma_F")
+    print(f"    Sum m_nu>=0 wall: min(mnu)={mnu_min:.4f} eV, "
+          f"boundary-hit frac(<0.01 eV)={mnu_boundary_frac:.4f}, "
+          f"max identical-run={mnu_max_stick} draws", flush=True)
+    results["mnu_measurement"] = {
+        "mnu_theta_nl_pos": int(mnu_i),
+        "d_sumlogsigma8_d_mnu_fid": dlogs8_dmnu,
+        "induced_mnu_tilt_sigmaF": mnu_tilt_sigmaF,
+        "chain_mnu_mean_pull_sigmaF": mnu_mean_pull,
+        "mnu_min_eV": mnu_min,
+        "mnu_boundary_frac_lt_0p01eV": mnu_boundary_frac,
+        "mnu_max_identical_run": mnu_max_stick,
+        "sig_F_mnu": float(sig_F[mnu_i]),
+        "mnu_fid_eV": float(np.asarray(fid_nl)[mnu_i]),
+    }
 
 results["gates"] = {"G1_widths": g1, "G2_corrs": g2, "G3_means": g3}
 results["verdict"] = verdict
 results["numbers"] = {
-    "names": list(SHARED_KEYS),
+    "names": list(COSMO_KEYS),
+    "tilt_pred_sigmaF": tilt_pred.tolist(),
     "width_ratio": width_ratio.tolist(),
     "corr_diff_max": corr_diff_max,
     "mean_pull_vs_tilted": mean_pull.tolist(),
@@ -498,9 +651,11 @@ results["numbers"] = {
 }
 save_results()
 
-print(f"\n===== VALIDATION {verdict} (smoke={SMOKE}, frozen_r={FROZEN_R}) =====")
+print(f"\n===== VALIDATION {verdict} (cosmology={COSMOLOGY}, "
+      f"marginal_means={MARGINAL_MEANS}, smoke={SMOKE}, frozen_r={FROZEN_R}) "
+      "=====")
 print(f"-> {RESULT_PATH}")
-if not FROZEN_R:
+if not FROZEN_R and not IS_NU:
     print(f"-> {EQUIV_PATH}")
 print(f"peak RSS {_watch['peak_gb']:.1f} GB, total "
       f"{time.perf_counter() - _T0:.0f}s", flush=True)
