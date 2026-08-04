@@ -626,3 +626,30 @@ re-running chains. Raw b1 remains the production default; the phase gate
 guards the real-data and nuLCDM phases, where the Table-I measure — or a
 chain-level reweighting equivalent to it, as validated here — can be switched
 on without touching the theory or the templates.
+
+## LCDM production MCMC — first run (2026-08-04)
+
+First end-to-end execution of the production path (commit 89888a7): 4 chains ×
+5000 NUTS draws on the Taylor surrogate under the DESI DR1-reanalysis priors,
+launched by flipping SMOKE_TEST=False in the production notebook.
+
+**Sampler health (first execution of this branch):** mean acceptance 0.887,
+zero divergences, R-hat 0.99992–1.00002 on all five cosmology parameters,
+ESS 15,493–26,628 of 20,000 post-warmup draws. Wall: minutes-scale end to end
+— the same chain on the exact per-bin path would have taken ~10 days.
+
+**Headline Fisher↔MCMC result (the project's central question):**
+
+| param | fid | MCMC mean | Fisher σ (DESI spec) | MCMC σ | ratio |
+|-------|-----|-----------|----------------------|--------|-------|
+| ombh2 | 0.02242 | 0.022085 | 0.00048211 | 0.00047489 | 0.99 |
+| omch2 | 0.11933 | 0.11704 | 0.003422 | 0.0032227 | 0.94 |
+| logA  | 3.047 | 3.0902 | 0.062477 | 0.057345 | 0.92 |
+| ns    | 0.9665 | 0.97939 | 0.027963 | 0.027349 | 0.98 |
+| h     | 0.6766 | 0.67358 | 0.0036491 | 0.0035587 | 0.98 |
+
+The Gaussian Fisher forecast tracks the full posterior's widths at the ≤8 %
+level under the production priors. Means sit off-fiducial as expected from the
+documented mechanisms (non-fiducial prior means + logdet/volume tilts;
+logA +0.69 σ_F, consistent with the +0.76 seen in the RWMH surrogate chain —
+different sampler, same posterior). Tripwire log_post(x0) = −172.996046 exact.
