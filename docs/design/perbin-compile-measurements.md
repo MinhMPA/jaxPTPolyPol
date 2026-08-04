@@ -861,3 +861,11 @@ notebook's broader diagonal-consumed comparison Fisher σ (0.208 eV). The bound
 is load-bearing: the unbounded diagnostic collapsed to a spurious extrapolation
 mode at mnu ≈ −0.33 eV (verdict INVALID_CONFIGURATION; see the mnu wall
 diagnostic section above).
+
+Reader note on differing defaults: the validation gate
+(`desi_prior_validation.py`) defaults to `--marginal-means spec`, preserving the
+LCDM `log_post(x0) = -172.996046` tripwire and the recorded Stream-B artifacts,
+while the production notebooks default to `PRIOR_VARIANT = "fiducial_centered"`
+(the CONTEXT.md policy). This is deliberate — gate JSONs and notebook outputs
+therefore use different prior means and are not directly comparable on lp0 or
+AD-tilted centers unless the modes are matched.
