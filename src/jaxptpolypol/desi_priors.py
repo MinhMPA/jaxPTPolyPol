@@ -321,7 +321,8 @@ def _rescale_power(token):
 
 def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
                         a_ap_bins_fn, sigma8_ref_bins, f_bins=DESI_F_FID,
-                        lin_keys=LIN_SURVEY_KEYS, sampled_marginal_priors=()):
+                        lin_keys=LIN_SURVEY_KEYS, sampled_marginal_priors=(),
+                        marginal_means="spec", fiducial_lin_means=None):
     """Build (prior_mean_fn, prior_sigma_fn, log_prior_nl_fn) from a spec.
 
     All three receive the physical theta_NL vector. Layer-2 rescaling divides
@@ -376,6 +377,30 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
     mean and the width match ``_per_bin_arrays``, so this is exactly the prior
     the marginalized path integrates analytically and a sampled-c1 chain and a
     marginalized-c1 chain carry an equivalent c1 prior.
+
+    ``marginal_means`` / ``fiducial_lin_means`` (fiducial-centered policy)
+    ---------------------------------------------------------------------
+    Policy 2026-08-04 (user decision, CONTEXT.md): in forecast runs the
+    marginalized-nuisance (theta_lin) prior MEANS default to the per-bin
+    FIDUCIAL values rather than the spec's Table-I means. This keyword selects
+    which means ``prior_mean_fn`` returns; WIDTHS AND STRUCTURE
+    (``prior_sigma_fn`` -- per-bin knl factors, the correlated cov-mode ctr
+    block, the R = A_AP*A_amp division) are UNTOUCHED in both modes.
+
+    - ``"spec"`` (default): the paper-fidelity behaviour documented above
+      (coevolution bGamma3, mapped/rescaled means, cov-mode ctr rotation);
+      bit-identical to the pre-policy factory.
+    - ``"fiducial"``: requires ``fiducial_lin_means``, an ``(n_lin,)`` array of
+      the per-bin fiducial theta_lin values in ``lin_keys`` bin-major order (the
+      caller supplies ``packed_params[jnp.array(split.lin_idx)]``). In this mode
+      ``prior_mean_fn(theta_NL)`` returns that CONSTANT vector -- no R division,
+      no coevolution, no offsets -- so its gradient w.r.t. theta_NL is exactly
+      zero (the point of the policy). ``prior_sigma_fn`` and ``log_prior_nl_fn``
+      are identical to the ``"spec"`` mode.
+
+    Any other ``marginal_means`` value, ``"fiducial"`` without
+    ``fiducial_lin_means``, or a vector whose length is not ``split.n_lin``
+    raises ``ValueError``.
     """
     n_bins = len(split.nl_b1_pos)
     lin_keys = tuple(lin_keys)
@@ -394,6 +419,25 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
             f"n_lin={split.n_lin} ({split_lin_keys}) per bin, lin_keys has "
             f"{n_lin_keys} ({lin_keys}). Pass the SAME key tuple to "
             "split_marginal_indices(lin_survey_keys=...) and here.")
+    # Fiducial-centered marginal-means policy (2026-08-04): validate the mode and
+    # (for "fiducial") the supplied constant mean vector up front. Static Python
+    # branch -- see the prior_mean_fn override after the cov/diag block below.
+    if marginal_means not in ("spec", "fiducial"):
+        raise ValueError(
+            f"marginal_means must be 'spec' or 'fiducial', got "
+            f"{marginal_means!r}")
+    if marginal_means == "fiducial":
+        if fiducial_lin_means is None:
+            raise ValueError(
+                "marginal_means='fiducial' requires fiducial_lin_means: an "
+                f"(n_lin={split.n_lin},) array of the per-bin fiducial theta_lin "
+                "values in lin_keys bin-major order (e.g. "
+                "packed_params[jnp.array(split.lin_idx)])")
+        fiducial_lin_means = jnp.asarray(fiducial_lin_means, dtype=jnp.float64)
+        if fiducial_lin_means.shape != (split.n_lin,):
+            raise ValueError(
+                f"fiducial_lin_means must have shape ({split.n_lin},) "
+                f"(n_bins*len(lin_keys)); got {fiducial_lin_means.shape}")
     knl_arr = jnp.asarray(knl_bins, dtype=jnp.float64)
     if knl_arr.shape != (n_bins,):
         raise ValueError(f"knl_bins must have length {n_bins}")
@@ -478,6 +522,17 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
 
         def prior_sigma_fn(theta_nl):
             return _per_bin_arrays(theta_nl)[2].reshape(-1)
+
+    # marginal_means="fiducial" (policy 2026-08-04): center the marginalized
+    # theta_lin priors on the raw per-bin FIDUCIAL values. Static Python branch
+    # that overrides ONLY prior_mean_fn -- prior_sigma_fn (widths + cov-mode
+    # structure) and log_prior_nl_fn are untouched, and the "spec" path above is
+    # bit-identical by construction. A constant mean vector has zero gradient
+    # w.r.t. theta_NL (no R division, no coevolution, no offsets), which is the
+    # point of the policy.
+    if marginal_means == "fiducial":
+        def prior_mean_fn(theta_nl):
+            return fiducial_lin_means
 
     gaussian_sampled = [(nm, spec.sampled[nm]) for nm in ("b2", "bG2")
                         if spec.sampled[nm].kind == "gaussian"]

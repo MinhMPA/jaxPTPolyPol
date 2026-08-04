@@ -1161,3 +1161,167 @@ def test_b1s8_variant_differs_from_base_only_in_b1_and_metadata():
     assert base.sampled["b1"].measure == "raw"
     assert variant.sampled["b1"].measure == "b1sigma8"
 
+
+# ---------------------------------------------------------------------------
+# Fiducial-centered marginal-means policy (2026-08-04): make_desi_prior_fns
+# marginal_means="spec"|"fiducial". In forecast runs the marginalized-nuisance
+# (theta_lin) prior MEANS default to the per-bin FIDUCIAL values; WIDTHS AND
+# STRUCTURE (prior_sigma_fn -- per-bin knl factors, correlated cov-mode ctr
+# block, R = A_AP*A_amp division) are UNTOUCHED in both modes. A constant mean
+# vector has zero gradient, which is the point of the policy.
+# ---------------------------------------------------------------------------
+
+
+def _make_prior_fns(spec, split, **extra):
+    """Build make_desi_prior_fns from the toy rescaling closures + extra kwargs."""
+    sigma8_ref, s8_fn, aap_fn = _toy_rescaling()
+    return make_desi_prior_fns(
+        spec, split=split, knl_bins=KNL_BINS, sigma8_bins_fn=s8_fn,
+        a_ap_bins_fn=aap_fn, sigma8_ref_bins=sigma8_ref, f_bins=TOY_F_FID,
+        **extra)
+
+
+def _toyless_spec_split(tmp_path):
+    """Diag-mode toy: same fixture with the ctr_rotation trio popped."""
+    raw = yaml.safe_load(TOY_YAML)
+    for k in ("pk.ctr.c0", "pk.ctr.c2", "pk.ctr.c4"):
+        raw["marginalized"][k].pop("ctr_rotation", None)
+    p = tmp_path / "toyless_fidmeans.yaml"
+    p.write_text(yaml.safe_dump(raw))
+    spec = load_desi_prior_spec(p)
+    split = split_marginal_indices(
+        n_cosmo_params=N_COSMO, survey_keys=SURVEY_KEYS_TOY, n_bins=N_BINS)
+    return spec, split
+
+
+def _fid_lin_vec(split):
+    """A distinctive, non-spec constant theta_lin mean vector (len split.n_lin)."""
+    return jnp.arange(1, split.n_lin + 1, dtype=jnp.float64)
+
+
+def test_marginal_means_spec_default_regression(toy_setup, tmp_path):
+    """`marginal_means="spec"` (explicit) == the by-default behaviour, bit-for-bit
+    at fiducial AND off-fiducial, in BOTH cov-mode and diag-mode; plus the known
+    diag-mode spec mean c2 = 15.0/R still appears."""
+    theta_fid = jnp.zeros(toy_setup[1].n_nl)
+    # cov-mode (toy_setup carries the ctr_rotation token)
+    spec_c, split_c, (mean_default_c, _, _) = toy_setup
+    mean_spec_c, _, _ = _make_prior_fns(spec_c, split_c, marginal_means="spec")
+    theta_off_c = jnp.zeros(split_c.n_nl).at[0].set(0.4).at[1].set(0.5)
+    for theta in (theta_fid, theta_off_c):
+        np.testing.assert_array_equal(
+            np.asarray(mean_default_c(theta)), np.asarray(mean_spec_c(theta)))
+    # diag-mode + the 15.0/R anchor (R=1 at fiducial -> 15.0)
+    spec_d, split_d = _toyless_spec_split(tmp_path)
+    mean_default_d, _, _ = _make_prior_fns(spec_d, split_d)
+    mean_spec_d, _, _ = _make_prior_fns(spec_d, split_d, marginal_means="spec")
+    n = len(LIN_SURVEY_KEYS)
+    j_c2 = LIN_SURVEY_KEYS.index(("pk", "ctr", "c2"))
+    theta_off_d = jnp.zeros(split_d.n_nl).at[1].set(0.5)   # a_ap=1.1 -> R=1.1
+    for theta in (theta_fid, theta_off_d):
+        np.testing.assert_array_equal(
+            np.asarray(mean_default_d(theta)), np.asarray(mean_spec_d(theta)))
+    mu0 = mean_spec_d(theta_fid)
+    assert float(mu0[j_c2]) == pytest.approx(15.0)            # R=1 -> 15.0
+    mu_off = mean_spec_d(theta_off_d)
+    assert float(mu_off[j_c2]) == pytest.approx(15.0 / 1.1)   # 15.0/R appears
+
+
+def test_fiducial_mode_returns_supplied_vector_constant(toy_setup):
+    """`prior_mean_fn` returns the supplied vector EXACTLY, at fiducial AND at
+    off-fiducial theta (constant -- no R division). At a_ap=1.1 the fiducial-mode
+    mean does NOT change while the spec-mode mean DOES."""
+    spec, split, _ = toy_setup
+    fid = _fid_lin_vec(split)
+    mean_fid, _, _ = _make_prior_fns(spec, split, marginal_means="fiducial",
+                                     fiducial_lin_means=fid)
+    mean_spec, _, _ = _make_prior_fns(spec, split, marginal_means="spec")
+    theta_fid = jnp.zeros(split.n_nl)
+    theta_off = jnp.zeros(split.n_nl).at[1].set(0.5)          # a_ap = 1.1
+    for theta in (theta_fid, theta_off):
+        np.testing.assert_array_equal(np.asarray(mean_fid(theta)),
+                                      np.asarray(fid))
+    # fiducial mode is constant across the two thetas; spec mode is not.
+    np.testing.assert_array_equal(np.asarray(mean_fid(theta_fid)),
+                                  np.asarray(mean_fid(theta_off)))
+    assert not np.allclose(np.asarray(mean_spec(theta_fid)),
+                           np.asarray(mean_spec(theta_off)))
+
+
+def test_fiducial_mode_sigma_identical_to_spec(toy_setup, tmp_path):
+    """prior_sigma_fn is IDENTICAL between the two modes at the same theta, in
+    BOTH cov-mode (stacked blocks) and diag-mode (flat vector). Widths untouched."""
+    # cov-mode
+    spec_c, split_c, _ = toy_setup
+    fid_c = _fid_lin_vec(split_c)
+    _, sig_spec_c, _ = _make_prior_fns(spec_c, split_c, marginal_means="spec")
+    _, sig_fid_c, _ = _make_prior_fns(spec_c, split_c, marginal_means="fiducial",
+                                      fiducial_lin_means=fid_c)
+    theta_c = jnp.zeros(split_c.n_nl).at[0].set(0.4).at[1].set(0.5)
+    for th in (jnp.zeros(split_c.n_nl), theta_c):
+        np.testing.assert_array_equal(np.asarray(sig_spec_c(th)),
+                                      np.asarray(sig_fid_c(th)))
+    # diag-mode
+    spec_d, split_d = _toyless_spec_split(tmp_path)
+    fid_d = _fid_lin_vec(split_d)
+    _, sig_spec_d, _ = _make_prior_fns(spec_d, split_d, marginal_means="spec")
+    _, sig_fid_d, _ = _make_prior_fns(spec_d, split_d, marginal_means="fiducial",
+                                      fiducial_lin_means=fid_d)
+    theta_d = jnp.zeros(split_d.n_nl).at[0].set(0.4).at[1].set(0.5)
+    for th in (jnp.zeros(split_d.n_nl), theta_d):
+        np.testing.assert_array_equal(np.asarray(sig_spec_d(th)),
+                                      np.asarray(sig_fid_d(th)))
+
+
+def test_fiducial_mode_mean_gradient_is_exactly_zero(toy_setup):
+    """jax.grad of sum(prior_mean_fn(theta)) is EXACTLY zero in fiducial mode."""
+    spec, split, _ = toy_setup
+    fid = _fid_lin_vec(split)
+    mean_fid, _, _ = _make_prior_fns(spec, split, marginal_means="fiducial",
+                                     fiducial_lin_means=fid)
+    theta = jnp.full(split.n_nl, 0.1)
+    g = jax.grad(lambda t: jnp.sum(mean_fid(t)))(theta)
+    assert g.shape == (split.n_nl,)
+    assert jnp.all(g == 0.0)          # exactly zero, not just small
+
+
+def test_fiducial_mode_bGamma3_is_baked_not_live_coevolution(toy_setup):
+    """In fiducial mode the bGamma3 mean is the SUPPLIED fiducial value, NOT the
+    live coevolution 23/42*(b1-1) of the sampled b1: shifting b1 leaves it
+    constant, whereas the spec mode tracks the shifted b1."""
+    spec, split, _ = toy_setup
+    n = len(LIN_SURVEY_KEYS)
+    j_bg3 = LIN_SURVEY_KEYS.index(("shared", "bias", "bGamma3"))
+    row = spec.marginalized[("shared", "bias", "bGamma3")]
+    b1_fid = 1.9
+    baked = (23.0 / 42.0) * (b1_fid - 1.0) * row.factor + row.offset
+    fid = jnp.zeros(split.n_lin)
+    for b in range(N_BINS):
+        fid = fid.at[b * n + j_bg3].set(baked)
+    mean_fid, _, _ = _make_prior_fns(spec, split, marginal_means="fiducial",
+                                     fiducial_lin_means=fid)
+    mean_spec, _, _ = _make_prior_fns(spec, split, marginal_means="spec")
+    # theta with SHIFTED b1 (not b1_fid).
+    theta = jnp.zeros(split.n_nl)
+    for pos in split.nl_b1_pos:
+        theta = theta.at[pos].set(2.5)
+    mu_fid, mu_spec = mean_fid(theta), mean_spec(theta)
+    for b in range(N_BINS):
+        assert float(mu_fid[b * n + j_bg3]) == pytest.approx(baked)   # constant
+        # spec mode is the LIVE coevolution of the shifted b1 -> differs.
+        live = (23.0 / 42.0) * (2.5 - 1.0) * row.factor + row.offset
+        assert float(mu_spec[b * n + j_bg3]) == pytest.approx(live)
+        assert not np.isclose(live, baked)
+
+
+def test_fiducial_mode_error_cases(toy_setup):
+    """Bad mode string; missing vector; wrong-length vector -> ValueError."""
+    spec, split, _ = toy_setup
+    with pytest.raises(ValueError, match="marginal_means"):
+        _make_prior_fns(spec, split, marginal_means="paper")
+    with pytest.raises(ValueError, match="requires fiducial_lin_means"):
+        _make_prior_fns(spec, split, marginal_means="fiducial")
+    with pytest.raises(ValueError, match="shape"):
+        _make_prior_fns(spec, split, marginal_means="fiducial",
+                        fiducial_lin_means=jnp.zeros(split.n_lin + 1))
+
