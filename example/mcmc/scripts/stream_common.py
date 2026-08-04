@@ -147,13 +147,68 @@ _THEORY_CONFIG = {
 THEORY_CONFIG_HASH = hashlib.sha256(
     repr(sorted(_THEORY_CONFIG.items())).encode()).hexdigest()
 
+# ---------------------------------------------------------------------------
+# nuLCDM config block (ADDITIVE -- every LCDM constant above is byte-unchanged).
+# The nuLCDM run reuses the whole LCDM production config with mnu ADDED to the
+# sampled cosmology basis; only the cosmology-dependent hash inputs (cosmo basis,
+# linear-Pk emulator, fiducial) differ, so a nuLCDM template cache can never be
+# confused with the LCDM one (NULCDM_THEORY_CONFIG_HASH != THEORY_CONFIG_HASH).
+# ---------------------------------------------------------------------------
+
+#: The mnu linear-Pk network (jense_2023_camb_mnu), verified from the nuLCDM
+#: Fisher notebooks (example/fisher/fisher_joint_PFS_BAO_BBN_ns_nuLCDM.ipynb cell
+#: "Emulator and models (mnu variant)": ``PFS_EMULATOR = '.../jense_2023_camb_mnu/
+#: networks/jense_2023_camb_mnu_Pk_lin.npz'``).
+NULCDM_EMULATOR = '/Users/nguyenmn/cosmopower-jax-for-pfs/cosmology/jense2024/jense_2023_camb_mnu/networks/jense_2023_camb_mnu_Pk_lin.npz'
+
+#: nuLCDM sampled cosmo basis: the LCDM :data:`SHARED_KEYS` plus ``'mnu'``.
+#: Per fisher_joint_PFS_BAO_BBN_ns_nuLCDM.ipynb cell "Emulator and models (mnu
+#: variant)", the packed cosmo dict places mnu LAST so the fixed-cosmo indices
+#: are UNCHANGED from LCDM (quoting the notebook construction verbatim)::
+#:
+#:     cosmo_dict = {
+#:         'ombh2': ..., 'omch2': ..., 'logA': ..., 'ns': ..., 'h': ...,  # 0-4 sampled core
+#:         'z': 0.7, 'A_b': 3.13, 'eta_b': 0.603, 'logT_AGN': 7.8,        # 5-8 FIXED
+#:         'mnu': FIDUCIAL['mnu'],  # keep LAST: fixed_cosmo=[5,6,7,8] indexes z/A_b/eta_b/logT_AGN
+#:     }
+#:
+#: so the packed order is (ombh2, omch2, logA, ns, h, z, A_b, eta_b, logT_AGN, mnu):
+#: a 10-key packed basis in which mnu is SAMPLED at index 9 and :data:`FIXED_COSMO`
+#: == (5, 6, 7, 8) is REUSED byte-for-byte (notebook cell "Remove truly fixed
+#: parameters": ``fixed_cosmo = [5, 6, 7, 8]``; varied cosmo = ombh2(0), omch2(1),
+#: logA(2), ns(3), h(4), mnu(9) -> 6 params).
+SHARED_KEYS_NU = ('ombh2', 'omch2', 'logA', 'ns', 'h', 'mnu')
+
+#: nuLCDM fiducial = the LCDM :data:`FIDUCIAL` plus ``mnu`` at :data:`MNU_FIXED`
+#: (0.06 eV), matching the notebook FIDUCIAL. Numerically the same mnu as the LCDM
+#: fixed value, but here it is the Taylor-expansion centre of a SAMPLED parameter.
+NULCDM_FIDUCIAL = {**FIDUCIAL, 'mnu': MNU_FIXED}
+
+#: nuLCDM theory-config: the LCDM :data:`_THEORY_CONFIG` with ONLY the three
+#: cosmology-dependent entries swapped -- ``cosmo_basis`` gains mnu, ``emulator``
+#: is the mnu network, ``fiducial`` gains mnu. Every survey/grid/model entry is
+#: SHARED by reference (``**_THEORY_CONFIG``), so the two dicts carry an identical
+#: key set (locked in tests/test_stream_common_meta.py) and cannot silently drop a
+#: hash input on one side only.
+NULCDM_THEORY_CONFIG = {
+    **_THEORY_CONFIG,
+    "cosmo_basis": (SHARED_KEYS_NU, FIXED_COSMO, MNU_FIXED),
+    "emulator": NULCDM_EMULATOR,
+    "fiducial": tuple(sorted(NULCDM_FIDUCIAL.items())),
+}
+NULCDM_THEORY_CONFIG_HASH = hashlib.sha256(
+    repr(sorted(NULCDM_THEORY_CONFIG.items())).encode()).hexdigest()
+
+#: The cosmologies :func:`meta_for` / :func:`template_meta_for` can stamp.
+_COSMOLOGIES = ("lcdm", "nulcdm")
+
 #: c1 treatments: 'marginalized' (the base LCDM split, c1 in theta_lin) and
 #: 'sampled' (the Tier-3 split, c1 moved into theta_NL). See CONTEXT.md's c1
 #: section and build_taylor_templates_lcdm.py --c1-sampled.
 C1_TREATMENTS = ("marginalized", "sampled")
 
 
-def meta_for(treatment):
+def meta_for(treatment, *, cosmology="lcdm"):
     """Config-stamp META for a c1 treatment, ``{**META, 'c1_treatment': treatment}``.
 
     ``build_taylor_templates_lcdm.py`` stamps this on the WHITENING npz (plus
@@ -170,14 +225,26 @@ def meta_for(treatment):
     either way -- an old cache lacking ``c1_treatment`` warns (backward compat)
     and a newer cache carrying it matches -- so naming it costs no
     compatibility.
+
+    ``cosmology`` (default ``"lcdm"``) selects the run family. The default is
+    byte-identical to the pre-nuLCDM stamp -- it adds NO ``cosmology`` key, so the
+    committed LCDM caches and the production tripwire are untouched. ``"nulcdm"``
+    adds ``cosmology: "nulcdm"`` (and, in :func:`template_meta_for`, swaps in the
+    nuLCDM theory-config hash) so the two families' caches are guard-distinct.
     """
     if treatment not in C1_TREATMENTS:
         raise ValueError(
             f"unknown c1 treatment {treatment!r}; expected one of {C1_TREATMENTS}")
-    return {**META, "c1_treatment": treatment}
+    if cosmology not in _COSMOLOGIES:
+        raise ValueError(
+            f"unknown cosmology {cosmology!r}; expected one of {_COSMOLOGIES}")
+    meta = {**META, "c1_treatment": treatment}
+    if cosmology == "nulcdm":
+        meta["cosmology"] = "nulcdm"   # lcdm adds nothing -> byte-identical default
+    return meta
 
 
-def template_meta_for(treatment):
+def template_meta_for(treatment, *, cosmology="lcdm"):
     """Full expected TEMPLATES-npz stamp: :func:`meta_for` + the theory config.
 
     This is exactly what ``build_taylor_templates_lcdm.py`` stamps on the
@@ -188,9 +255,18 @@ def template_meta_for(treatment):
     Whitening stamps deliberately do NOT carry the theory identifiers (they
     carry the PRIOR ones instead), so the whitening side keeps expecting the
     plain :func:`meta_for` stamp -- see :func:`load_templates_and_whitening`.
+
+    ``cosmology`` (default ``"lcdm"``) selects which theory-config hash is
+    stamped: the LCDM default is byte-identical to the pre-nuLCDM stamp (no
+    ``cosmology`` key, :data:`THEORY_CONFIG_HASH`), while ``"nulcdm"`` stamps
+    :data:`NULCDM_THEORY_CONFIG_HASH` plus ``cosmology: "nulcdm"``.
     """
-    return {**meta_for(treatment),
-            "theory_config_hash": THEORY_CONFIG_HASH,
+    hashes = {"lcdm": THEORY_CONFIG_HASH, "nulcdm": NULCDM_THEORY_CONFIG_HASH}
+    if cosmology not in hashes:
+        raise ValueError(
+            f"unknown cosmology {cosmology!r}; expected one of {tuple(hashes)}")
+    return {**meta_for(treatment, cosmology=cosmology),
+            "theory_config_hash": hashes[cosmology],
             "z_bins": str(z_bins), "knl_bins": str(knl_bins),
             "n_bar": str(n_bar), "V_bins": str(V_bins)}
 

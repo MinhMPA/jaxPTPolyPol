@@ -280,3 +280,79 @@ def test_old_hash_cache_hard_fails_after_extension(tmp_path):
     tpath, wpath = _write_pair(tmp_path, stamped, WHITENING_META_SHAPE)
     with pytest.raises(ValueError, match="theory_config_hash"):
         stream_common.load_templates_and_whitening(tpath, wpath)
+
+
+# ---------------------------------------------------------------------------
+# nuLCDM config block (Task 1): hash disambiguation, per-cosmology meta stamp
+# (LCDM default byte-unchanged), and the hash-input key-set RIDER.
+# ---------------------------------------------------------------------------
+
+#: The exact hash-input key set. LOCKED so silently dropping (or renaming) a
+#: hashed input fails the suite -- the RIDER from the prereq review. The LCDM and
+#: nuLCDM configs share this set by construction (nuLCDM is ``{**_THEORY_CONFIG,
+#: ...}`` overriding three values), which is what makes them guard-distinguishable
+#: only through the three cosmology-dependent VALUES, never a missing key.
+_THEORY_CONFIG_KEYS = frozenset({
+    "V_bins", "n_bar", "knl_bins", "z_bins", "k_grid", "k_nl_rsd",
+    "cosmo_basis", "emulator", "fiducial", "n_gl", "num_mu", "num_phi",
+    "background_mode",
+})
+
+
+def test_theory_config_key_set_is_locked():
+    assert set(stream_common._THEORY_CONFIG.keys()) == _THEORY_CONFIG_KEYS
+
+
+def test_nulcdm_theory_config_key_set_mirrors_lcdm():
+    assert set(stream_common.NULCDM_THEORY_CONFIG.keys()) == _THEORY_CONFIG_KEYS
+    # ... and only the three cosmology-dependent entries differ in VALUE.
+    diff = {k for k in _THEORY_CONFIG_KEYS
+            if stream_common._THEORY_CONFIG[k] != stream_common.NULCDM_THEORY_CONFIG[k]}
+    assert diff == {"cosmo_basis", "emulator", "fiducial"}
+
+
+def test_nulcdm_hash_differs_from_lcdm_and_is_live():
+    """The nuLCDM template cache can never be confused with the LCDM one, and the
+    nuLCDM hash is the live sha256 of NULCDM_THEORY_CONFIG (not hard-coded)."""
+    assert (stream_common.NULCDM_THEORY_CONFIG_HASH
+            != stream_common.THEORY_CONFIG_HASH)
+    assert (_hash_config(dict(stream_common.NULCDM_THEORY_CONFIG))
+            == stream_common.NULCDM_THEORY_CONFIG_HASH)
+    # The cosmo_basis gains 'mnu'; FIXED_COSMO is reused byte-for-byte.
+    shared_nu, fixed_nu, mnu_nu = stream_common.NULCDM_THEORY_CONFIG["cosmo_basis"]
+    assert "mnu" in shared_nu
+    assert fixed_nu == stream_common.FIXED_COSMO == (5, 6, 7, 8)
+
+
+def test_lcdm_meta_default_is_byte_identical():
+    """REGRESSION: the LCDM default path is byte-identical to cosmology='lcdm'
+    and carries NO ``cosmology`` key -- the production stamp/tripwire must not
+    shift when the nuLCDM branch is added."""
+    default_t = stream_common.template_meta_for("marginalized")
+    lcdm_t = stream_common.template_meta_for("marginalized", cosmology="lcdm")
+    assert default_t == lcdm_t
+    assert "cosmology" not in default_t
+    assert default_t["theory_config_hash"] == stream_common.THEORY_CONFIG_HASH
+    # meta_for (whitening side) likewise unchanged by default.
+    default_w = stream_common.meta_for("marginalized")
+    assert default_w == stream_common.meta_for("marginalized", cosmology="lcdm")
+    assert "cosmology" not in default_w
+    assert default_w == {**stream_common.META, "c1_treatment": "marginalized"}
+
+
+def test_nulcdm_meta_carries_hash_and_cosmology_key():
+    """cosmology='nulcdm' stamps the nuLCDM hash and a cosmology key on both the
+    templates side and the whitening side."""
+    t = stream_common.template_meta_for("marginalized", cosmology="nulcdm")
+    assert t["theory_config_hash"] == stream_common.NULCDM_THEORY_CONFIG_HASH
+    assert t["cosmology"] == "nulcdm"
+    w = stream_common.meta_for("sampled", cosmology="nulcdm")
+    assert w["cosmology"] == "nulcdm"
+    assert w["c1_treatment"] == "sampled"
+
+
+def test_meta_rejects_unknown_cosmology():
+    with pytest.raises(ValueError, match="cosmology"):
+        stream_common.meta_for("marginalized", cosmology="wcdm")
+    with pytest.raises(ValueError, match="cosmology"):
+        stream_common.template_meta_for("marginalized", cosmology="wcdm")

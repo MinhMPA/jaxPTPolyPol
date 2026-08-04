@@ -1114,3 +1114,50 @@ def test_reweighting_gaussian_tilt_analytic_oracle():
     assert float(mean[0]) == pytest.approx(a, abs=4.0 / np.sqrt(ess))
     assert float(std[0]) == pytest.approx(1.0, abs=4.0 / np.sqrt(ess))
 
+
+# ---------------------------------------------------------------------------
+# nuLCDM b1sigma8 spec VARIANT (Task 1): the packaged _b1s8.yaml file passes the
+# phase="nulcdm" gate legitimately (measure: b1sigma8) while the base spec still
+# raises, and it differs from the base ONLY in the b1 row + metadata.
+# ---------------------------------------------------------------------------
+import dataclasses
+
+_BASE_SPEC = "desi_dr1_reanalysis_2511_20757"
+_B1S8_SPEC = "desi_dr1_reanalysis_2511_20757_b1s8"
+
+
+def test_b1s8_variant_loads_under_nulcdm_phase():
+    """The variant satisfies the nuLCDM phase gate (its b1 row IS b1sigma8)."""
+    spec = load_desi_prior_spec(_B1S8_SPEC, phase="nulcdm")
+    assert spec.sampled["b1"].measure == "b1sigma8"
+    assert spec.sampled["b1"].paper_lower == 0.0
+    assert spec.sampled["b1"].paper_upper == 3.0
+
+
+def test_base_spec_still_raises_under_nulcdm_phase():
+    """The base spec (measure: raw) must still be refused under phase="nulcdm" --
+    the whole reason the variant exists (never bypass the gate by mutating)."""
+    with pytest.raises(SpecValidationError, match="measure"):
+        load_desi_prior_spec(_BASE_SPEC, phase="nulcdm")
+
+
+def test_b1s8_variant_differs_from_base_only_in_b1_and_metadata():
+    """All 11 marginalized rows are field-by-field IDENTICAL to the base spec;
+    the b2/bG2 sampled rows too. The variant differs ONLY in the b1 sampled row
+    (measure raw -> b1sigma8) and the metadata deviation note."""
+    base = load_desi_prior_spec(_BASE_SPEC)        # forecast default
+    variant = load_desi_prior_spec(_B1S8_SPEC)     # forecast: b1sigma8 allowed here too
+    assert set(base.marginalized) == set(LIN_SURVEY_KEYS)
+    assert set(variant.marginalized) == set(base.marginalized)
+    assert len(base.marginalized) == 11
+    for key in sorted(base.marginalized):
+        b, v = base.marginalized[key], variant.marginalized[key]
+        for f in dataclasses.fields(b):
+            assert getattr(b, f.name) == getattr(v, f.name), (key, f.name)
+    # sampled b2/bG2 identical; only b1's measure differs.
+    for nm in ("b2", "bG2"):
+        assert dataclasses.asdict(base.sampled[nm]) == dataclasses.asdict(
+            variant.sampled[nm]), nm
+    assert base.sampled["b1"].measure == "raw"
+    assert variant.sampled["b1"].measure == "b1sigma8"
+
