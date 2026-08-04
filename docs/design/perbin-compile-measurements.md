@@ -768,3 +768,47 @@ Reproduce (from `example/mcmc`, after `build_taylor_templates_lcdm.py
 `python scripts/desi_prior_validation.py --cosmology nulcdm --marginal-means
 {spec,fiducial}`. LCDM default unchanged: tripwire log_post(x0) = −172.996046
 in smoke.
+
+### mnu wall diagnostic (2026-08-04) — unbounded run: NEGATIVE RESULT
+
+**Production remains BOUNDED (flat Σm_ν ≥ 0) per the user decision
+(2026-08-04).** One diagnostic chain was run WITHOUT the wall
+(`--mnu-unbounded`, valid only with `--cosmology nulcdm`; seed 20260809,
+200 000 RWMH / burn 20 000, otherwise identical to the bounded fiducial-means
+gate — shared-F tripwire confirmed: lp0 = −173.635756, σ_F and tilt_pred
+bit-identical to the bounded run, i.e. the Hessian is wall-blind as expected)
+to measure the truncation's effect on the mnu marginal rather than infer it.
+
+**The diagnostic returned a negative result: the unbounded configuration is
+INVALID for this pipeline.** Σm_ν < 0 lies outside both the mnu emulator's
+training domain and the Taylor surrogate's validity radius; their composition
+manufactures a spurious sharp mode, and the chain collapsed into it at
+mnu ≈ −0.33 eV (−3.2 σ_F from the fiducial): SD 0.00098 eV (~σ_F/124),
+negative-mass fraction 1.000, acceptance 0.005, ESS ~20–27, max identical-draw
+run 14 547. The Σm_ν ≥ 0 wall was not only physics — it was protecting the
+sampler from undefined-model territory. The recorded table is **pathology
+evidence, not a truncation measurement**
+(`cache/nulcdm_gate_fiducial_means_unbounded.json`, `"diagnostic_verdict":
+"INVALID_CONFIGURATION"`):
+
+| mnu marginal (eV) | bounded | unbounded (INVALID) |
+|-------------------|---------|---------------------|
+| mean | 0.15025 | −0.32795 |
+| SD | 0.09568 | 0.00098 |
+| mean pull vs tilt (σ_F) | +0.557 | −3.398 |
+| neg-mass frac (mnu<0) | 0.000 | 1.000 |
+| σ_F(mnu) shared (eV) | 0.12094 | 0.12094 |
+
+(SD "ratio" 97.96 and core-5 "leaks" up to 3.95 σ_F are artifacts of the
+collapse, not wall effects.) **The truncation effect therefore stands
+quantified analytically, not by chain comparison:** a 1-D truncated normal
+with the wall at −0.496 σ_F predicts an SD factor **0.697**, against the
+observed bounded marginal width ratio **0.791** — the gap between 0.70 and
+0.79 reflecting the multivariate correlations (the mnu marginal is not the
+1-D conditional the analytic formula truncates). Any future genuine unbounded
+diagnostic would require an emulator trained through mnu ≤ 0 and a surrogate
+re-centered/validated there — out of scope.
+
+Reproduce (evidence only — do not expect a truncated-Gaussian comparison):
+`python scripts/desi_prior_validation.py --cosmology nulcdm --marginal-means
+fiducial --mnu-unbounded`.

@@ -64,9 +64,35 @@ behaviour (tripwire surrogate lp0 = -172.996046 in smoke)::
     python scripts/desi_prior_validation.py --cosmology nulcdm --marginal-means spec
     # nuLCDM, fiducial means, seed 20260808:
     python scripts/desi_prior_validation.py --cosmology nulcdm --marginal-means fiducial
+
+mnu wall diagnostic (user decision 2026-08-04). Production stays BOUNDED (flat
+Sum m_nu >= 0). ``--mnu-unbounded`` (valid ONLY with ``--cosmology nulcdm``) runs
+ONE diagnostic chain that OMITS the Sum m_nu >= 0 indicator; everything else is
+identical to the fiducial-means nulcdm gate. It writes to its OWN outputs
+(``cache/nulcdm_gate_fiducial_means_unbounded.json`` + ``..._unbounded_chain_w
+.npy``, "diagnostic": "mnu_unbounded" marker) so the bounded gate is never
+overwritten, and prints/stores a bounded-vs-unbounded mnu-marginal comparison
+against ``cache/nulcdm_gate_fiducial_means.json``.
+
+RECORDED OUTCOME (2026-08-04, seed 20260809): NEGATIVE RESULT -- the unbounded
+configuration is INVALID for this pipeline ("diagnostic_verdict":
+"INVALID_CONFIGURATION" in the JSON). mnu < 0 lies outside both the emulator's
+training domain and the Taylor surrogate's validity radius; their composition
+manufactured a spurious sharp mode and the chain collapsed into it at
+mnu ~ -0.33 eV (SD 0.001 eV, acceptance 0.005, max identical run 14547). The
+run's tables are pathology EVIDENCE, not truncation measurements; the wall's
+truncation stands quantified analytically (1-D truncated-normal factor 0.697 vs
+the observed 0.791 marginal width ratio). Do not re-run expecting a
+truncated-Gaussian comparison without an emulator trained through mnu <= 0 and
+a surrogate re-centered/validated there::
+
+    # nuLCDM, fiducial means, UNBOUNDED diagnostic, seed 20260809:
+    python scripts/desi_prior_validation.py --cosmology nulcdm \\
+        --marginal-means fiducial --mnu-unbounded
 """
 
 import json
+import math
 import os
 import pathlib
 import subprocess
@@ -183,6 +209,21 @@ if MARGINAL_MEANS not in ("spec", "fiducial"):
     sys.exit(f"--marginal-means must be 'spec' or 'fiducial', got "
              f"{MARGINAL_MEANS!r}.")
 
+# nuLCDM mnu WALL DIAGNOSTIC (user decision 2026-08-04). Production stays BOUNDED
+# (flat Sum m_nu >= 0). --mnu-unbounded runs ONE diagnostic chain WITHOUT the
+# wall so the wall's truncation of the mnu marginal is MEASURED (not inferred) by
+# comparison against the bounded fiducial-means gate. Valid ONLY with
+# --cosmology nulcdm; everything else is identical to the fiducial-means nulcdm
+# gate config. Separate outputs (..._unbounded.json / ..._unbounded_chain_w.npy)
+# so the committed bounded gate results are never overwritten. RECORDED OUTCOME:
+# NEGATIVE RESULT / INVALID_CONFIGURATION (extrapolation collapse at mnu ~ -0.33
+# eV) -- see the module docstring before re-running.
+UNBOUNDED = "--mnu-unbounded" in sys.argv[1:]
+if UNBOUNDED and COSMOLOGY != "nulcdm":
+    sys.exit("--mnu-unbounded is only valid with --cosmology nulcdm (got "
+             f"--cosmology {COSMOLOGY!r}). Production stays BOUNDED; the "
+             "unbounded run is the mnu wall-truncation diagnostic only.")
+
 IS_NU = COSMOLOGY == "nulcdm"
 COSMO_KEYS = SHARED_KEYS_NU if IS_NU else SHARED_KEYS
 EMULATOR_PATH = NULCDM_EMULATOR if IS_NU else PFS_EMULATOR
@@ -207,7 +248,10 @@ if not pathlib.Path(BAO_DATA_DIR).is_dir():
 # (spec 20260807, fiducial 20260808 -- Task 5 dispatch); --seed overrides. The
 # equivalence dump is an LCDM cross-branch artifact only (skipped for nulcdm).
 if IS_NU:
-    _DEFAULT_SEED = 20260807 if MARGINAL_MEANS == "spec" else 20260808
+    if UNBOUNDED:
+        _DEFAULT_SEED = 20260809          # mnu wall diagnostic (fiducial-means)
+    else:
+        _DEFAULT_SEED = 20260807 if MARGINAL_MEANS == "spec" else 20260808
 else:
     _DEFAULT_SEED = 20260731
 RNG_SEED_CHAIN = int(_arg_value("--seed", str(_DEFAULT_SEED)))
@@ -246,10 +290,13 @@ TEMPLATES_PATH = CACHE / f"taylor_templates_{COSMOLOGY}.npz"
 # gate artifacts, and a 2000-step smoke chain (whose numbers are meaningless as
 # a gate) must never be able to overwrite a committed gate result.
 _SFX = "_smoke" if SMOKE else ""
+# The --mnu-unbounded diagnostic tags its outputs so it never overwrites the
+# committed bounded gate JSON/chain (its own file: ..._means_unbounded.json).
+_UB = "_unbounded" if UNBOUNDED else ""
 if IS_NU:
     # Per-mode nuLCDM gate outputs (Task 5); each marginal-mean mode gets its own
     # file so the two production runs never overwrite each other.
-    RESULT_PATH = CACHE / f"nulcdm_gate_{MARGINAL_MEANS}_means{_SFX}.json"
+    RESULT_PATH = CACHE / f"nulcdm_gate_{MARGINAL_MEANS}_means{_UB}{_SFX}.json"
 else:
     RESULT_PATH = (CACHE / f"desi_prior_validation_sigmap_frozenR{_SFX}.json"
                    if FROZEN_R else
@@ -266,12 +313,15 @@ if not pathlib.Path(BAO_DATA_DIR).is_dir():
 
 results = {"config": {"branch": "stream-b-sigmap", "cosmology": COSMOLOGY,
                       "marginal_means": MARGINAL_MEANS,
+                      "mnu_unbounded": UNBOUNDED,
                       "desi_spec": DESI_SPEC_NAME, "desi_phase": DESI_SPEC_PHASE,
                       "meta": META, "rng_seed_chain": RNG_SEED_CHAIN,
                       "num_samples": NUM_SAMPLES, "burn": BURN,
                       "smoke": SMOKE, "frozen_r": FROZEN_R,
                       "equiv": {"points_seed": EQUIV_SEED, "n": EQUIV_N,
                                 "scale": EQUIV_SCALE}}}
+if UNBOUNDED:
+    results["diagnostic"] = "mnu_unbounded"
 
 
 def save_results():
@@ -410,18 +460,27 @@ bbn_ns_log_prior = make_gaussian_log_prior(n_nl, nl_prior_entries)
 # -> theta_NL pos 5). RWMH-safe (simply rejects the proposal); mirrors the
 # nuLCDM notebook's log_prior_mnu_bound.
 MNU_NL_POS = cosmo_nl_pos[-1] if IS_NU else None
+# The Sum m_nu >= 0 wall is applied only for BOUNDED nuLCDM production. The
+# --mnu-unbounded diagnostic OMITS the indicator so the chain samples negative
+# Sum m_nu, letting the wall's truncation of the mnu marginal be measured against
+# the bounded run. The Hessian-Fisher is unaffected either way: the indicator is
+# 0 at the fiducial (mnu>0) with zero curvature, so F/tilt/lp0 are shared.
+APPLY_MNU_WALL = IS_NU and not UNBOUNDED
 
-if IS_NU:
+if APPLY_MNU_WALL:
     def log_prior_nl(theta_nl):
         """DESI (b2/bG2 + b1sigma8) + BBN/ns priors + Sum m_nu >= 0 bound."""
         return (desi_log_prior_nl(theta_nl) + bbn_ns_log_prior(theta_nl)
                 + jnp.where(theta_nl[MNU_NL_POS] >= 0.0, 0.0, -jnp.inf))
 else:
     def log_prior_nl(theta_nl):
-        """DESI (b2/bG2) + production BBN(ombh2)/ns Gaussian priors on nl params.
+        """DESI (b2/bG2[+b1s8]) + production BBN(ombh2)/ns Gaussian priors on nl.
 
-        Disjoint positions: DESI touches b2/bG2 (split.nl_b1_pos + offset per
-        bin); BBN/ns touch nl positions 0 (ombh2) and 3 (ns).
+        LCDM: disjoint positions -- DESI touches b2/bG2 (split.nl_b1_pos + offset
+        per bin); BBN/ns touch nl positions 0 (ombh2) and 3 (ns). nuLCDM
+        --mnu-unbounded uses this same body: the Sum m_nu >= 0 indicator is
+        OMITTED so the chain samples negative Sum m_nu (wall-truncation
+        diagnostic; bounded production keeps the wall).
         """
         return desi_log_prior_nl(theta_nl) + bbn_ns_log_prior(theta_nl)
 
@@ -518,8 +577,10 @@ chain_w = np.asarray(samples_w[0])                        # (NUM_SAMPLES, n_nl)
 draws = chain_w[BURN:]
 
 if not SMOKE:
-    CHAIN_OUT = (CACHE / f"nulcdm_gate_{MARGINAL_MEANS}_chain_w.npy" if IS_NU
-                 else CACHE / "desi_chain_w.npy")
+    # _UB keeps the --mnu-unbounded diagnostic chain on its OWN filename so the
+    # committed bounded production chain is never overwritten.
+    CHAIN_OUT = (CACHE / f"nulcdm_gate_{MARGINAL_MEANS}{_UB}_chain_w.npy"
+                 if IS_NU else CACHE / "desi_chain_w.npy")
     np.save(CHAIN_OUT, draws)          # post-burn whitened draws
     print(f"chain -> {CHAIN_OUT} {draws.shape}", flush=True)
 
@@ -597,6 +658,10 @@ if IS_NU:
     mnu_phys = phys[:, mnu_i]
     mnu_min = float(mnu_phys.min())
     mnu_boundary_frac = float(np.mean(mnu_phys < 0.01))   # within 0.01 eV of wall
+    # Negative-mass posterior fraction: ~0 for the bounded wall (indicator
+    # rejects mnu<0), O(30-40)% for the --mnu-unbounded diagnostic (the wall's
+    # truncated low-mnu tail restored). The headline unbounded diagnostic number.
+    mnu_negative_frac = float(np.mean(mnu_phys < 0.0))
     # Sticking check: longest run of identical whitened mnu draws (a chain stuck
     # against the wall shows a dominant repeat spike). Healthy RWMH ~ 1/accept.
     _stuck = _mx = 1
@@ -611,8 +676,9 @@ if IS_NU:
           f"{mnu_tilt_sigmaF:+.4f} sigma_F")
     print(f"(c) realized chain mnu mean pull vs tilted center = "
           f"{mnu_mean_pull:+.4f} sigma_F")
-    print(f"    Sum m_nu>=0 wall: min(mnu)={mnu_min:.4f} eV, "
-          f"boundary-hit frac(<0.01 eV)={mnu_boundary_frac:.4f}, "
+    print(f"    Sum m_nu{'>=0 wall' if APPLY_MNU_WALL else ' UNBOUNDED'}: "
+          f"min(mnu)={mnu_min:.4f} eV, boundary frac(<0.01 eV)="
+          f"{mnu_boundary_frac:.4f}, neg-mass frac(mnu<0)={mnu_negative_frac:.4f}, "
           f"max identical-run={mnu_max_stick} draws", flush=True)
     results["mnu_measurement"] = {
         "mnu_theta_nl_pos": int(mnu_i),
@@ -621,6 +687,7 @@ if IS_NU:
         "chain_mnu_mean_pull_sigmaF": mnu_mean_pull,
         "mnu_min_eV": mnu_min,
         "mnu_boundary_frac_lt_0p01eV": mnu_boundary_frac,
+        "mnu_negative_frac": mnu_negative_frac,
         "mnu_max_identical_run": mnu_max_stick,
         "sig_F_mnu": float(sig_F[mnu_i]),
         "mnu_fid_eV": float(np.asarray(fid_nl)[mnu_i]),
@@ -650,6 +717,118 @@ results["numbers"] = {
     "total_wall_s": round(time.perf_counter() - _T0, 1),
 }
 save_results()
+
+# ---------------------------------------------------------------------------
+# mnu WALL DIAGNOSTIC comparison (the point of --mnu-unbounded). Compare this
+# unbounded chain's mnu marginal against the BOUNDED fiducial-means gate
+# (cache/nulcdm_gate_fiducial_means.json). The Hessian-Fisher is blind to the
+# wall (the >=0 indicator is 0 with zero curvature at the fiducial), so sig_F,
+# tilt_pred and lp0 are SHARED between the two runs -- which makes (i) the core-5
+# "leak" reduce to the mean-pull difference, and (ii) the mnu SD ratio the direct
+# measured truncation factor. A shared-F tripwire guards against config drift.
+# ---------------------------------------------------------------------------
+if IS_NU and UNBOUNDED:
+    BOUNDED_PATH = CACHE / "nulcdm_gate_fiducial_means.json"
+    if not BOUNDED_PATH.exists():
+        print(f"\n[mnu wall diagnostic] bounded reference {BOUNDED_PATH} missing "
+              "-- skipping the comparison table (run the bounded fiducial-means "
+              "gate first).", flush=True)
+    else:
+        bnd = json.loads(BOUNDED_PATH.read_text())
+        b_tilt = np.asarray(bnd["numbers"]["tilt_pred_sigmaF"])
+        b_pull = np.asarray(bnd["numbers"]["mean_pull_vs_tilted"])
+        b_sig_chain = np.asarray(bnd["numbers"]["sig_chain_phys"])
+        b_sig_F = np.asarray(bnd["numbers"]["sig_F_phys"])
+        b_fid_mnu = float(bnd["mnu_measurement"]["mnu_fid_eV"])
+        b_mnu_pos = int(bnd["mnu_measurement"]["mnu_theta_nl_pos"])
+
+        # Shared-F tripwire: the Hessian-Fisher is wall-blind, so this unbounded
+        # run and the bounded run MUST share sig_F and tilt_pred (identical F at
+        # the fiducial). A mismatch means the configs drifted beyond the wall.
+        d_sigF = float(np.max(np.abs(sig_F - b_sig_F[:n_cosmo])))
+        d_tilt = float(np.max(np.abs(tilt_pred - b_tilt)))
+        wall_blind_ok = bool(d_sigF < 1e-6 and d_tilt < 1e-6)
+        if not wall_blind_ok:
+            print(f"\n[mnu wall diagnostic] WARNING: sig_F/tilt_pred differ from "
+                  f"bounded (max|dsigF|={d_sigF:.2e}, |dtilt|={d_tilt:.2e}); the "
+                  "Hessian should be wall-blind -- configs may have drifted.",
+                  flush=True)
+
+        # mnu marginal, physical (eV). Unbounded from this chain; bounded from the
+        # committed JSON (mean reconstructed as fid + (tilt_pred+pull)*sig_F, both
+        # stored to full float64 precision).
+        u_mnu = phys[:, mnu_i]
+        u_mnu_mean = float(u_mnu.mean())
+        u_mnu_sd = float(u_mnu.std(ddof=1))
+        u_mnu_pull = float(mean_pull[mnu_i])
+        u_mnu_neg_frac = float(np.mean(u_mnu < 0.0))
+        b_mnu_sd = float(b_sig_chain[b_mnu_pos])
+        b_mnu_pull = float(b_pull[b_mnu_pos])
+        b_sigF_mnu = float(b_sig_F[b_mnu_pos])
+        b_mnu_mean = float(b_fid_mnu
+                           + (b_tilt[b_mnu_pos] + b_mnu_pull) * b_sigF_mnu)
+
+        sd_ratio = b_mnu_sd / u_mnu_sd                    # measured truncation
+        mean_shift_eV = b_mnu_mean - u_mnu_mean           # wall pushes mean UP
+        mean_shift_sigmaF = mean_shift_eV / b_sigF_mnu
+        # 1-D truncated-normal SD ratio: lower truncation at a = -(fid/sig_F)
+        # (~ -0.5 sig_F), the fiducial-referenced wall used in the gate doc.
+        a = -(b_fid_mnu / b_sigF_mnu)
+        _lam = (math.exp(-0.5 * a * a) / math.sqrt(2.0 * math.pi)) / (
+            1.0 - 0.5 * (1.0 + math.erf(a / math.sqrt(2.0))))
+        tn_sd_ratio = float(math.sqrt(1.0 + a * _lam - _lam * _lam))
+        b_width_ratio = b_mnu_sd / b_sigF_mnu             # observed marginal ~0.80
+
+        # core-5 leak: mean shift in sigma_F. Since sig_F and tilt_pred are shared,
+        # (mean-fid)/sig_F difference == mean_pull difference (unbounded-bounded).
+        core_leak_sigmaF = (mean_pull[:n_cosmo] - b_pull[:n_cosmo]).tolist()
+        core_max_leak = float(max(abs(x) for x in core_leak_sigmaF))
+
+        print("\n===== mnu WALL DIAGNOSTIC (bounded vs unbounded) =====")
+        print(f"  {'mnu marginal (eV)':<26s} {'bounded':>12s} {'unbounded':>12s}")
+        print(f"  {'mean':<26s} {b_mnu_mean:12.5f} {u_mnu_mean:12.5f}")
+        print(f"  {'SD':<26s} {b_mnu_sd:12.5f} {u_mnu_sd:12.5f}")
+        print(f"  {'mean pull vs tilt (sigF)':<26s} {b_mnu_pull:12.4f} "
+              f"{u_mnu_pull:12.4f}")
+        print(f"  {'neg-mass frac (mnu<0)':<26s} {0.0:12.4f} "
+              f"{u_mnu_neg_frac:12.4f}")
+        print(f"  {'sig_F(mnu) shared':<26s} {b_sigF_mnu:12.5f} "
+              f"{b_sigF_mnu:12.5f}")
+        print(f"\n  SD ratio bounded/unbounded (measured truncation factor) = "
+              f"{sd_ratio:.4f}")
+        print(f"    1-D truncated-normal prediction (wall at {a:+.3f} sigF)  = "
+              f"{tn_sd_ratio:.4f}")
+        print(f"    observed bounded marginal ratio (chain/Fisher)          = "
+              f"{b_width_ratio:.4f}")
+        print(f"  mnu mean shift (wall pushes UP) = {mean_shift_eV:+.5f} eV = "
+              f"{mean_shift_sigmaF:+.4f} sigF")
+        print(f"\n  core-5 mean leak (unbounded - bounded, sigma_F):")
+        for i, key in enumerate(list(COSMO_KEYS)[:n_cosmo]):
+            print(f"    {key:>7s} {core_leak_sigmaF[i]:+.4f}")
+        print(f"  max |core leak| = {core_max_leak:.4f}", flush=True)
+
+        results["mnu_wall_diagnostic"] = {
+            "bounded_source": BOUNDED_PATH.name,
+            "wall_blind_ok": wall_blind_ok,
+            "sigF_max_abs_diff": d_sigF,
+            "tilt_pred_max_abs_diff": d_tilt,
+            "mnu_mean_eV": {"bounded": b_mnu_mean, "unbounded": u_mnu_mean},
+            "mnu_sd_eV": {"bounded": b_mnu_sd, "unbounded": u_mnu_sd},
+            "mnu_mean_pull_sigmaF": {"bounded": b_mnu_pull,
+                                     "unbounded": u_mnu_pull},
+            "mnu_negative_frac": {"bounded": 0.0, "unbounded": u_mnu_neg_frac},
+            "sig_F_mnu_eV_shared": b_sigF_mnu,
+            "sd_ratio_bounded_over_unbounded": sd_ratio,
+            "truncated_normal_sd_ratio_pred": tn_sd_ratio,
+            "wall_position_sigmaF": a,
+            "observed_bounded_marginal_ratio": b_width_ratio,
+            "mnu_mean_shift_eV": mean_shift_eV,
+            "mnu_mean_shift_sigmaF": mean_shift_sigmaF,
+            "core_names": list(COSMO_KEYS)[:n_cosmo],
+            "core_mean_leak_sigmaF": core_leak_sigmaF,
+            "core_max_abs_leak_sigmaF": core_max_leak,
+        }
+    save_results()
 
 print(f"\n===== VALIDATION {verdict} (cosmology={COSMOLOGY}, "
       f"marginal_means={MARGINAL_MEANS}, smoke={SMOKE}, frozen_r={FROZEN_R}) "
