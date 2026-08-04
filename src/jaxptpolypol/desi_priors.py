@@ -215,6 +215,7 @@ def load_desi_prior_spec(name_or_path="desi_dr1_reanalysis_2511_20757",
 # theta_NL-dependent prior functions (Task 5sigma: base factory + cov-mode)
 # =============================================================================
 
+import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 
 from .marginal_likelihood import LIN_SURVEY_KEYS  # noqa: E402
@@ -736,3 +737,37 @@ def build_prior_sigmas_from_desi_spec(spec, *, knl_bins, sigma8_ref_bins,
     if return_ctr_blocks:
         return survey_sigma_dicts, sampled_sigma_bins, ctr_cov_blocks
     return survey_sigma_dicts, sampled_sigma_bins
+
+
+# =============================================================================
+# Option D: post-hoc reweighting of a raw-measure chain to the b1*sigma8 measure
+# =============================================================================
+
+__all__ += ["b1sigma8_log_weights"]
+
+
+def b1sigma8_log_weights(theta_nl_samples, sigma8_bins_fn, *,
+                         b1_pos=None, lower=None, upper=None):
+    """Unnormalized log-weights converting a RAW-measure chain to the Table-I
+    b1*sigma8 measure (arXiv:2511.20757): lw_i = sum_b log sigma8(z_b; theta_i),
+    optionally -inf where any b1_b*sigma8_b leaves [lower, upper].
+
+    Exact on the interior: the analytic theta_lin marginalization conditions
+    on b1, so the measure change is a pure prior reweighting of theta_NL
+    (see docs: options report / CONTEXT.md deviation 3). Weights are one
+    scalar per sample, a function of the cosmology block only (plus b1 for
+    the bounds). Normalize downstream (softmax) before use with
+    ``marginal_taylor.reweighted_moments``.
+    """
+    theta_nl_samples = jnp.asarray(theta_nl_samples, dtype=jnp.float64)
+
+    def one(theta):
+        s8 = sigma8_bins_fn(theta)
+        lw = jnp.sum(jnp.log(s8))
+        if b1_pos is not None:
+            y = theta[jnp.asarray(b1_pos)] * s8
+            inside = jnp.all((y >= lower) & (y <= upper))
+            lw = jnp.where(inside, lw, -jnp.inf)
+        return lw
+
+    return jax.vmap(one)(theta_nl_samples)

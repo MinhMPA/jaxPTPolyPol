@@ -420,6 +420,11 @@ print(f"chain wall {wall:.0f}s -> {s_per_step * 1000:.2f} ms/step; "
 chain_w = np.asarray(samples_w[0])                        # (NUM_SAMPLES, n_nl)
 draws = chain_w[BURN:]
 
+if not SMOKE:
+    CHAIN_OUT = CACHE / "desi_chain_w.npy"
+    np.save(CHAIN_OUT, draws)          # post-burn whitened draws, raw-b1 measure
+    print(f"chain -> {CHAIN_OUT} {draws.shape}", flush=True)
+
 # ---------------------------------------------------------------------------
 # Gates on the cosmology block (whitened positions 0..4 == cosmo_nl_pos;
 # physical projection via the loaded Cholesky whitening). Exactly the brief.

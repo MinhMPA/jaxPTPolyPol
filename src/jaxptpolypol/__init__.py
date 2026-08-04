@@ -58,6 +58,7 @@ from .desi_priors import (
     DESI_F_FID,
     DesiPriorSpec,
     SpecValidationError,
+    b1sigma8_log_weights,
     build_prior_sigmas_from_desi_spec,
     ctr_rotation_matrices,
     load_desi_prior_spec,

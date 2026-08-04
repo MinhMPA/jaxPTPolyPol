@@ -1037,6 +1037,10 @@ def test_b1sigma8_bounds_give_minus_inf(tmp_path):
     assert np.isfinite(float(lp_on(ok)))
     assert float(lp_on(bad_hi)) == -np.inf
     assert float(lp_on(bad_lo)) == -np.inf
+    # Discriminates bounds-on-y from bounds-on-raw-b1: with the toy s8 (0.6 at
+    # bin 0, theta=0), b1 = 4.0 gives y = 2.4 in [0,3] but raw 4.0 > 3, so a
+    # bounds-on-raw-b1 mutant would (wrongly) return -inf here.
+    assert np.isfinite(float(lp_on(theta.at[split.nl_b1_pos[0]].set(4.0))))
 
 
 def test_b1sigma8_gradient_slope(tmp_path):
@@ -1058,4 +1062,48 @@ def test_raw_measure_bitwise_unchanged(tmp_path):
     theta = jnp.full(split.n_nl, 0.2)
     # raw measure adds no term and no bounds:
     assert np.isfinite(float(lp_a(theta.at[split.nl_b1_pos[0]].set(50.0))))
+
+
+# ---------------------------------------------------------------------------
+# b1 sigma8 measure: post-hoc reweighting helper (option D)
+# ---------------------------------------------------------------------------
+from jaxptpolypol.desi_priors import b1sigma8_log_weights
+from jaxptpolypol.marginal_taylor import reweighted_moments
+
+
+def test_log_weights_match_pointwise_jacobian(tmp_path):
+    _, split, s8_fn, _ = _fns_for_measure(tmp_path, "raw")
+    rng = np.random.default_rng(4)
+    samples = jnp.asarray(rng.normal(0.0, 0.3, size=(16, split.n_nl)))
+    lw = b1sigma8_log_weights(samples, s8_fn)
+    assert lw.shape == (16,)
+    for i in range(16):
+        assert float(lw[i]) == pytest.approx(
+            float(jnp.sum(jnp.log(s8_fn(samples[i])))), abs=1e-12)
+
+
+def test_log_weights_bounds(tmp_path):
+    _, split, s8_fn, _ = _fns_for_measure(tmp_path, "raw")
+    samples = jnp.zeros((2, split.n_nl))
+    samples = samples.at[1, split.nl_b1_pos[0]].set(10.0)   # y = 6 > 3
+    lw = b1sigma8_log_weights(samples, s8_fn,
+                              b1_pos=split.nl_b1_pos, lower=0.0, upper=3.0)
+    assert np.isfinite(float(lw[0])) and float(lw[1]) == -np.inf
+
+
+def test_reweighting_gaussian_tilt_analytic_oracle():
+    """Reweighting N(0,1) draws by exp(a*x) must give N(a,1): the exact
+    finite-sample check is that reweighted moments match the ANALYTIC
+    importance estimate, and at n=200k they must be within MC error of (a, 1)."""
+    rng = np.random.default_rng(20260804)
+    n, a = 200_000, 0.35
+    x = rng.normal(0.0, 1.0, size=(n, 1))
+    lw = a * x[:, 0]
+    w = np.exp(lw - lw.max()); w /= w.sum()
+    mean, std = reweighted_moments(x, w)
+    se = 1.0 / np.sqrt(n * float((w.sum() ** 2) / (w ** 2).sum()) / n)  # ~1/sqrt(ESS)
+    ess = 1.0 / np.sum(w ** 2)
+    assert ess / n > 0.85                       # exp(-a^2) = 0.885 predicted
+    assert float(mean[0]) == pytest.approx(a, abs=4.0 / np.sqrt(ess))
+    assert float(std[0]) == pytest.approx(1.0, abs=4.0 / np.sqrt(ess))
 
