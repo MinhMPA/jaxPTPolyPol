@@ -812,3 +812,52 @@ re-centered/validated there — out of scope.
 Reproduce (evidence only — do not expect a truncated-Gaussian comparison):
 `python scripts/desi_prior_validation.py --cosmology nulcdm --marginal-means
 fiducial --mnu-unbounded`.
+
+## nuLCDM production run (2026-08-05, Task 6)
+
+First end-to-end execution of the nuLCDM production path (notebook
+`example/mcmc/mcmc_joint_PFS_BAO_BBN_ns_nuLCDM.ipynb`, committed with this doc):
+4 chains × 200k **RWMH** draws (20k burn → 180k kept/chain) on the Taylor
+surrogate under the DESI DR1-reanalysis **b1σ8** priors
+(`desi_dr1_reanalysis_2511_20757_b1s8`, `phase="nulcdm"`), fiducial-centered
+marginalized-prior means (policy default), seed 20260806, launched by flipping
+SMOKE_TEST=False. RWMH not NUTS: the b1σ8 `U[0,3]` and the mnu ≥ 0 walls are
+−∞ indicators (non-differentiable). `log_post(x0) = −173.635756`
+(fiducial-centered; the spec-means/`desi_paper` value is −178.879579); surrogate
+identity |surrogate − exact| = 5.7×10⁻¹³.
+
+**Sampler health:** acceptance per chain [0.281, 0.281, 0.280, 0.284]
+(RWMH-optimal ~0.234), R-hat 1.00008–1.00057 on all six cosmology parameters,
+ESS 5570–10697 of 180k kept draws/chain. Wall: 25 min 23 s for the sampling
+cell (~30 min notebook end to end) — the same chain on the exact per-bin path
+would have taken days.
+
+**Headline Fisher↔MCMC result:**
+
+| param | fid | MCMC mean | Fisher σ (DESI spec) | MCMC σ | ratio |
+|-------|-----|-----------|----------------------|--------|-------|
+| ombh2 | 0.02242 | 0.022158 | 0.00049003 | 0.00048188 | 0.98 |
+| omch2 | 0.11933 | 0.11662 | 0.0037219 | 0.0032276 | 0.87 |
+| logA  | 3.047 | 3.1388 | 0.1337 | 0.078534 | 0.59 |
+| ns    | 0.9665 | 0.99635 | 0.035172 | 0.033284 | 0.95 |
+| h     | 0.6766 | 0.67293 | 0.0043902 | 0.0036311 | 0.83 |
+| mnu   | 0.06 | 0.14719 | 0.20804 | 0.095725 | 0.46 |
+
+Residual pulls (volume term only under fiducial_centered):
+ombh2 −0.53, omch2 −0.73, logA +0.69, ns +0.85, h −0.84, mnu +0.42.
+
+The well-constrained parameters track the Gaussian Fisher at the few-percent
+level (ombh2 0.98, ns 0.95), while **logA (0.59) and mnu (0.46) sit below 1
+because of the Σm_ν ≥ 0 wall**, not a Fisher failure: the comparison Fisher is
+unbounded, so marginalizing over mnu inflates the logA and mnu marginal σ along
+their degeneracy direction, whereas the MCMC posterior is truncated at the wall
+and is correspondingly narrower on exactly those two. The mnu marginal is a
+truncated shape, not a detection — its chain σ = 0.0957 eV reproduces the
+validation-gate chain σ exactly (`cache/nulcdm_gate_fiducial_means.json`),
+giving a width ratio **0.791** against the gate's Hessian Fisher σ_F ≈ 0.121 eV
+(1-D truncated-normal analytic 0.697; ~3.2% of draws within 0.01 eV of the
+wall). The 0.46 in the table above is the same chain σ measured against the
+notebook's broader diagonal-consumed comparison Fisher σ (0.208 eV). The bound
+is load-bearing: the unbounded diagnostic collapsed to a spurious extrapolation
+mode at mnu ≈ −0.33 eV (verdict INVALID_CONFIGURATION; see the mnu wall
+diagnostic section above).
