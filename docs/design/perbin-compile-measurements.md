@@ -576,3 +576,53 @@ remains fair.
 Artifact: `scripts/tier3_c1_bound.py` → `cache/tier3_c1_bound.json`
 (runs in seconds, asserts the 5σ-draw signal stays below 1e-2 σ, and fails loudly
 if a template rebuild ever breaks the `dM[:, :, c1] ≡ 0` premise).
+
+## b1 sigma8 measure (2026-08-04)
+
+Production chain-level measurement (option D) of the shift induced by sampling
+the DESI Table-I prior in b1·σ8 rather than raw b1. The 200 000-step raw-measure
+gate chain (`desi_prior_validation.py`, seed 20260731, burn 20 000 → 180 000
+draws; the re-run reproduced every committed gate statistic bit-identically and
+the `branch_equiv_sigmap.json` dump byte-identically) was reweighted with
+`b1sigma8_log_weights` (w ∝ exp Σ_b log σ8(z_b; θ), b1·σ8 ∈ [0,3]). This
+reweighting is *exactly* the flag-ON posterior: Task 4's cross-check proved
+`log_post_ON − log_post_OFF == Σ_b log σ8` pointwise to **5.95e-14** across 64
+production-posterior points (fiducial identity residual 1.78e-15,
+`jac_fid = Σ_b log σ8(fid) = −5.874902`). Script:
+`scripts/b1sigma8_measure_report.py`; numbers in `cache/b1sigma8_measure.json`.
+
+**Kish ESS/N = 0.9611** (172 998/180 000), **zero** draws hit the [0,3]
+b1·σ8 bounds, max normalized weight 1.3e-05 — the two measures are this close.
+
+| param | mean (raw) | σ (raw) | mean (b1σ8) | σ (b1σ8) | σ ratio | shift (σ_F) | predicted F⁻¹g (σ_F) | \|Δ\| / 3·MC-SE |
+|-------|-----------|---------|-------------|----------|---------|-------------|----------------------|-----------------|
+| ombh2 | 0.0220967 | 0.000481 | 0.0220952 | 0.000481 | 1.001 | −0.0032 | −0.006 | 0.034 |
+| omch2 | 0.117012  | 0.003250 | 0.116925  | 0.003241 | 0.997 | −0.0265 | −0.028 | 0.015 |
+| logA  | 3.090275  | 0.057348 | 3.100180  | 0.057235 | 0.998 | **+0.1731** | **+0.172** | 0.010 |
+| ns    | 0.978596  | 0.028116 | 0.981513  | 0.028205 | 1.003 | **+0.1052** | **+0.097** | 0.066 |
+| h     | 0.673644  | 0.003565 | 0.673598  | 0.003566 | 1.000 | −0.0127 | −0.016 | 0.037 |
+
+The measured shift matches the first-order prediction F⁻¹g on every parameter
+well inside 3× the (conservative, quadrature-combined) MC standard error of
+0.027–0.042 σ_F — the largest residual is ns at 0.0082 σ_F. The residuals sit
+far below even 1× SE because the raw and reweighted means are estimated from
+the *same* draws with near-uniform weights, so their MC errors cancel almost
+completely in the difference; the agreement is a genuine confirmation that the
+posterior responds to the measure change at first order, not a coincidence of
+noise. Width ratios are 0.997–1.003, i.e. the tilt is mean-only — as Task 4's
+review proved, an analytic log-density offset that is (locally) linear in the
+parameters cannot change a width, so width agreement is forced and the
+measured ratios are a consistency check, not a finding.
+
+**Framing.** This is a prior-measure *robustness* result: switching the b1
+prior measure between raw b1 (our default) and b1·σ8 (the 2511.20757 Table-I
+convention) moves the cosmology posterior centers by at most **0.17 σ_F**
+(logA; ns +0.11 σ_F, all others ≲ 0.03 σ_F) and leaves the widths
+measure-independent. On this forecast-grade surrogate the effect is therefore
+quantified and small-but-not-negligible; the measured shift equals the
+first-order Fisher prediction, so the sensitivity can be forecast without
+re-running chains. Raw b1 remains the production default; the phase gate
+(`desi_priors` spec `measure` field + `b1sigma8_log_weights` reweighting)
+guards the real-data and nuLCDM phases, where the Table-I measure — or a
+chain-level reweighting equivalent to it, as validated here — can be switched
+on without touching the theory or the templates.
