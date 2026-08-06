@@ -32,6 +32,7 @@ from . import derived
 from . import marginalization
 from . import cmb
 from . import cmb_mcmc_utils
+from . import joint_forecast
 
 from .marginal_likelihood import (
     LIN_SURVEY_KEYS,

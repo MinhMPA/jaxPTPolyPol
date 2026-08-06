@@ -429,3 +429,55 @@ def test_build_script_imports_nulcdm_config_from_stream_common():
         assert name in imported, (
             f"build_taylor_templates_lcdm.py must import {name} from "
             "stream_common for the nuLCDM build mode.")
+
+
+# ---------------------------------------------------------------------------
+# CMB Fisher block loader guards (joint PFS+BAO+CMB+BBN forecasts).
+#
+# The CMB block is an EXPENSIVE precomputed artifact (a candl/clipy Hessian) that
+# the joint MCMC notebooks load rather than rebuild, so the loader must refuse
+# every way the wrong file can be handed to it: the other cosmology's artifact,
+# a stale theory config, or a shared-basis ordering that does not match the one
+# the consumer packs into. Same ENFORCE semantics as the template guards above,
+# except the shared-basis keys and cosmology are HARD (never backward-compat):
+# a mismatch there silently mis-assigns Fisher rows to parameters.
+# ---------------------------------------------------------------------------
+
+def _write_cmb_artifact(path, *, cosmology="lcdm", shared_keys=None,
+                        hash_val=None):
+    """Write a minimal, structurally valid CMB-block npz (identity Fisher)."""
+    keys = shared_keys or list(stream_common.SHARED_KEYS_CMB_LCDM)
+    k = len(keys)
+    meta = {"cosmology": cosmology, "shared_keys": keys,
+            "theory_config_hash": hash_val or stream_common.THEORY_CONFIG_HASH}
+    np.savez(path, F_cmb_shared=np.eye(k), fid_shared=np.zeros(k),
+             shared_keys=np.array(keys), F_cmb_native=np.eye(k),
+             fid_native=np.zeros(k), native_keys=np.array(keys),
+             sigma_tau=np.float64(0.007), meta_json=json.dumps(meta))
+
+
+def test_cmb_loader_roundtrip(tmp_path):
+    _write_cmb_artifact(tmp_path / "cmb_fisher_lcdm.npz")
+    out = stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)
+    assert out["shared_keys"] == tuple(stream_common.SHARED_KEYS_CMB_LCDM)
+    assert out["F_shared"].shape == (6, 6)
+    assert out["sigma_tau"] == pytest.approx(0.007)
+
+
+def test_cmb_loader_rejects_wrong_cosmology(tmp_path):
+    _write_cmb_artifact(tmp_path / "cmb_fisher_nulcdm.npz", cosmology="lcdm")
+    with pytest.raises(ValueError, match="cosmology"):
+        stream_common.load_cmb_fisher_block("nulcdm", cache_dir=tmp_path)
+
+
+def test_cmb_loader_rejects_wrong_hash(tmp_path):
+    _write_cmb_artifact(tmp_path / "cmb_fisher_lcdm.npz", hash_val="deadbeef")
+    with pytest.raises(ValueError, match="hash"):
+        stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)
+
+
+def test_cmb_loader_rejects_wrong_shared_keys(tmp_path):
+    bad = ["ombh2", "omch2", "logA", "ns", "tau", "h"]   # swapped order
+    _write_cmb_artifact(tmp_path / "cmb_fisher_lcdm.npz", shared_keys=bad)
+    with pytest.raises(ValueError, match="shared_keys"):
+        stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)

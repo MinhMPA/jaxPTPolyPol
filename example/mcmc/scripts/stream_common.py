@@ -30,6 +30,7 @@ already enabled float64 gets the production dtype; import order is irrelevant.
 
 import hashlib
 import json
+import pathlib
 import sys
 
 import numpy as np
@@ -435,3 +436,107 @@ def build_bao(bao_data_dir, cosmo, fiducial_cosmo, bao_fid):
         sys.exit("ABORT: recomputed BAO fiducial vector differs from the stored "
                  "one beyond 1e-10.")
     return bao_dr2, bao_theory_fn
+
+
+# ---------------------------------------------------------------------------
+# CMB Fisher block (joint PFS+BAO+CMB+BBN forecasts, 2026-08-06 decisions).
+# ADDITIVE -- every constant/function above is byte-unchanged.
+#
+# The CMB block is a fiducial-centered GAUSSIAN summary of the candl/clipy stack
+# (Planck highl TTTEEE + lowl TT + lowl EE simall + Planck lensing + ACT DR6
+# lensing), built once by ``build_cmb_fisher_block.py`` and loaded here. The
+# shared basis and its ORDER are copied from the Fisher notebooks
+# example/fisher/fisher_joint_PFS_BAO_CMB_{LCDM,nuLCDM}.ipynb cell 3
+# (``SHARED_KEYS``); tau is the CMB-only direction that PFS/BAO cannot constrain,
+# hence it sits LAST in the LCDM basis (and mnu after it in nuLCDM).
+# ---------------------------------------------------------------------------
+
+#: Cache directory for the mcmc artifacts, resolved from THIS file rather than
+#: the cwd (the scripts' ``CACHE = pathlib.Path("cache")`` convention is
+#: chdir-sensitive; ``b1sigma8_measure_report.py``'s ``HERE = parents[1]`` /
+#: "cache" is the chdir-proof form reused here). parents[1] == example/mcmc.
+CACHE_DIR = pathlib.Path(__file__).resolve().parents[1] / "cache"
+
+#: Shared cosmology basis of the CMB Fisher block, LCDM. Verbatim from
+#: fisher_joint_PFS_BAO_CMB_LCDM.ipynb cell 3 (``SHARED_KEYS``).
+SHARED_KEYS_CMB_LCDM = ('ombh2', 'omch2', 'logA', 'ns', 'h', 'tau')
+
+#: Shared cosmology basis, nuLCDM -- the LCDM basis plus ``mnu`` LAST. Verbatim
+#: from fisher_joint_PFS_BAO_CMB_nuLCDM.ipynb cell 3 (``SHARED_KEYS``).
+SHARED_KEYS_CMB_NULCDM = ('ombh2', 'omch2', 'logA', 'ns', 'h', 'tau', 'mnu')
+
+#: Fiducial optical depth (Planck 2018 TT,TE,EE+lowE+lensing+BAO), the CMB-only
+#: parameter absent from :data:`FIDUCIAL`'s sampled PFS basis but present in the
+#: notebooks' unified ``FIDUCIAL`` dict -- same value, quoted from there.
+TAU_FID = FIDUCIAL['tau']
+
+#: Mossa et al. 2020 BBN WIDTH on ombh2. This is a sigma, NOT a center: the
+#: forecast prior is ALWAYS centered on the fiducial ombh2 (fiducial-centered
+#: policy), so no measured central value enters.
+BBN_SIGMA_MOSSA = 0.00036
+
+
+def cmb_fisher_path(cosmology, cache_dir=None):
+    """Path of the CMB Fisher block artifact for ``cosmology``.
+
+    THE single place the artifact filename is constructed -- producer
+    (``build_cmb_fisher_block.py``) and consumer (:func:`load_cmb_fisher_block`)
+    both route through it, so a diagnostic/variant mode cannot tag one path and
+    miss another (the 2026-08-04 output-path lesson in CLAUDE.md).
+    """
+    if cosmology not in _COSMOLOGIES:
+        raise ValueError(
+            f"unknown cosmology {cosmology!r}; expected one of {_COSMOLOGIES}")
+    base = pathlib.Path(cache_dir) if cache_dir is not None else CACHE_DIR
+    return base / f"cmb_fisher_{cosmology}.npz"
+
+
+def load_cmb_fisher_block(cosmology, cache_dir=None):
+    """Load the precomputed fiducial-centered CMB Fisher block with META guards.
+
+    Returns ``{"F_shared", "fid_shared", "shared_keys", "sigma_tau", "meta"}``:
+    the shared-basis Fisher matrix and its expansion centre (both jnp arrays),
+    the basis key tuple, the marginalized sigma(tau) recorded at build time, and
+    the full META dict.
+
+    Three HARD guards, all ``ValueError`` (no backward-compat leniency -- unlike
+    the template stamps there is no legacy CMB cache to stay compatible with,
+    and each of these mismatches silently mis-assigns Fisher rows):
+
+    * ``cosmology`` -- an lcdm artifact must never load as nulcdm or vice versa
+      (different native basis, different emulators);
+    * ``shared_keys`` -- ORDER-sensitive: the consumer indexes this block by
+      position when embedding it into the joint packed vector;
+    * ``theory_config_hash`` -- :data:`THEORY_CONFIG_HASH` (lcdm) /
+      :data:`NULCDM_THEORY_CONFIG_HASH` (nulcdm), so a CMB block built against a
+      different production config cannot be summed with the PFS/BAO blocks.
+      Enforce-if-present, matching the template-guard convention.
+    """
+    if cosmology not in _COSMOLOGIES:
+        raise ValueError(
+            f"unknown cosmology {cosmology!r}; expected one of {_COSMOLOGIES}")
+    path = cmb_fisher_path(cosmology, cache_dir)
+    with np.load(path, allow_pickle=False) as z:
+        meta = json.loads(str(z["meta_json"]))
+        expected_keys = (SHARED_KEYS_CMB_LCDM if cosmology == "lcdm"
+                         else SHARED_KEYS_CMB_NULCDM)
+        if meta.get("cosmology") != cosmology:
+            raise ValueError(
+                f"artifact cosmology {meta.get('cosmology')!r} != requested "
+                f"{cosmology!r} ({path})")
+        if tuple(meta.get("shared_keys", ())) != expected_keys:
+            raise ValueError(
+                f"artifact shared_keys {meta.get('shared_keys')} != expected "
+                f"{expected_keys} ({path})")
+        expected_hash = (THEORY_CONFIG_HASH if cosmology == "lcdm"
+                         else NULCDM_THEORY_CONFIG_HASH)
+        got = meta.get("theory_config_hash")
+        if got is not None and got != expected_hash:
+            raise ValueError(
+                f"artifact theory_config_hash {got} != expected "
+                f"{expected_hash} ({path})")
+        return {"F_shared": jnp.asarray(z["F_cmb_shared"]),
+                "fid_shared": jnp.asarray(z["fid_shared"]),
+                "shared_keys": expected_keys,
+                "sigma_tau": float(z["sigma_tau"]),
+                "meta": meta}
