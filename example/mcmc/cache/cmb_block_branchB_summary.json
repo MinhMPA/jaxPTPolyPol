@@ -1,0 +1,113 @@
+{
+  "lcdm": {
+    "shared_keys": [
+      "ombh2",
+      "omch2",
+      "logA",
+      "ns",
+      "h",
+      "tau"
+    ],
+    "sigma_tau": 0.007080703602905915,
+    "eigenvalues": [
+      4332.3361235816865,
+      39827.20394665182,
+      129901.1946788462,
+      447579.2106335378,
+      10552286.301875614,
+      184657190.49426165
+    ],
+    "method_per_term": {
+      "planck_highl": "GN",
+      "planck_lowl_tt": "hessian",
+      "planck_lowl_ee": "hessian",
+      "planck_lensing": "GN",
+      "act_dr6_lensing": "GN"
+    },
+    "marginal_sigmas_when_regularized": {
+      "ombh2": 0.00011590349432549379,
+      "omch2": 0.000669614071574046,
+      "logA": 0.011895571923320053,
+      "ns": 0.0035941523127236354,
+      "h": 0.002799689073540976,
+      "tau": 0.006134669853799077
+    },
+    "regularizer_sigmas_pfs_only": {
+      "ombh2": 0.00047985,
+      "omch2": 0.0032185,
+      "logA": 0.060783,
+      "ns": 0.027632,
+      "h": 0.0035686,
+      "tau": 0.0
+    },
+    "gates": {
+      "G1a_lowl_ee_dtau": -110.1132786884539,
+      "G1b_sigma_tau": 0.007080703602905915,
+      "G1b_sigma_tau_range": [
+        0.004,
+        0.02
+      ],
+      "G2_min_eig": 4332.3361235816865,
+      "G2_max_eig": 184657190.49426165,
+      "G3_dh_dH0": 0.01
+    }
+  },
+  "nulcdm": {
+    "shared_keys": [
+      "ombh2",
+      "omch2",
+      "logA",
+      "ns",
+      "h",
+      "tau",
+      "mnu"
+    ],
+    "sigma_tau": 0.007375788257782554,
+    "eigenvalues": [
+      52.19667037805351,
+      4324.383883590188,
+      40840.82772215406,
+      130928.34918949149,
+      447929.09530010255,
+      10563760.335410135,
+      184653441.0531588
+    ],
+    "method_per_term": {
+      "planck_highl": "GN",
+      "planck_lowl_tt": "hessian",
+      "planck_lowl_ee": "hessian",
+      "planck_lensing": "GN",
+      "act_dr6_lensing": "GN"
+    },
+    "marginal_sigmas_when_regularized": {
+      "ombh2": 0.00012038893209780619,
+      "omch2": 0.0007490076612854065,
+      "logA": 0.013382234877656173,
+      "ns": 0.0036955940913822112,
+      "h": 0.0034414149027318917,
+      "tau": 0.006986172769458815,
+      "mnu": 0.03873945191999544
+    },
+    "regularizer_sigmas_pfs_only": {
+      "ombh2": 0.00048188,
+      "omch2": 0.0032276,
+      "logA": 0.078534,
+      "ns": 0.033284,
+      "h": 0.0036311,
+      "tau": 0.0,
+      "mnu": 0.095725
+    },
+    "gates": {
+      "G1a_lowl_ee_dtau": -110.08328646272628,
+      "G1b_sigma_tau": 0.007375788257782554,
+      "G1b_sigma_tau_range": [
+        0.004,
+        0.02
+      ],
+      "G2_min_eig": 52.19667037805351,
+      "G2_max_eig": 184653441.0531588,
+      "G3_dh_dH0": 0.01
+    }
+  },
+  "_note": "Branch B (expt/cmb-expected-fisher): hybrid Gauss-Newton expected CMB Fisher. F_reg = diag(1/sigma^2) from the PFS-only production sigmas; sigma=0 (tau) means PFS carries no constraint -> zero regularizer entry. No eigenvalue clipping was applied to F_shared."
+}
