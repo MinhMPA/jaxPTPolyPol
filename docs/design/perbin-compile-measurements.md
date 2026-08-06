@@ -869,3 +869,57 @@ while the production notebooks default to `PRIOR_VARIANT = "fiducial_centered"`
 (the CONTEXT.md policy). This is deliberate — gate JSONs and notebook outputs
 therefore use different prior means and are not directly comparable on lp0 or
 AD-tilted centers unless the modes are matched.
+
+## Profile-likelihood check (2026-08-05)
+
+Both production notebooks
+(`mcmc_joint_PFS_BAO_BBN_ns_LCDM.ipynb`, `mcmc_joint_PFS_BAO_BBN_ns_nuLCDM.ipynb`)
+carry a frequentist profile-likelihood cell (markdown + code, inserted after the
+Fisher-vs-MCMC comparison-table cell, before the corner plot). It profiles the
+DATA-ONLY chi-square on the Taylor surrogate — the exact whitened GLS profile-out
+of the 11 linear EFT/stochastic amplitudes per bin (no theta_lin priors, no
+b1sigma8 Jacobian/walls), plus the fiducial-centered BAO and BBN(ombh2)+ns10
+data-like terms — over each cosmological parameter, at a 17-point grid spanning
+fid +/- 2 sigma_F (for mnu: 0 to fid + 2 sigma_F, box-bounded mnu >= 0, the
+emulator/surrogate validity domain). The noiseless mock forces chi2_prof(fiducial)
+= 0 to the float64 floor (tripwire: LCDM 1.2e-23, nuLCDM 1.2e-23), so the profile
+minimum is at fiducial by construction; the marginal MEANS drift only from the
+cosmology-dependent marginalization volume. Free cosmo dimensions are box-bounded
+to fid +/- 6 sigma_F purely to keep the background-distance integral defined (a
+numerical validity safeguard; the profile ridge sits well inside).
+
+Punchline — profile-min offsets sit at fiducial while the marginal-mean pulls do
+not:
+
+LCDM (5 params):
+
+| param | profile-min offset (sigma_F) | marginal-mean pull (sigma_F) |
+|-------|------------------------------|------------------------------|
+| ombh2 | -0.000 | -0.62 |
+| omch2 | +0.001 | -0.77 |
+| logA  | +0.000 | +0.56 |
+| ns    | -0.000 | +0.43 |
+| h     | +0.000 | -0.80 |
+
+max |profile-min offset| = 0.001 sigma_F; pulls span 0.43-0.80 sigma_F.
+
+nuLCDM (6 params):
+
+| param | profile-min offset (sigma_F) | marginal-mean pull (sigma_F) |
+|-------|------------------------------|------------------------------|
+| ombh2 | -0.000 | -0.53 |
+| omch2 | +0.004 | -0.73 |
+| logA  | -0.010 | +0.69 |
+| ns    | +0.001 | +0.85 |
+| h     | +0.003 | -0.84 |
+| mnu   | -0.003 | +0.42 |
+
+max |profile-min offset| = 0.010 sigma_F; pulls span 0.42-0.85 sigma_F.
+
+The contrast is the point: the likelihood peaks at fiducial on every parameter
+(offsets ~ 0), so the 0.4-0.9 sigma_F marginal-mean pulls are Bayesian
+marginalization-volume / projection effects, not fitting errors. The strict
+|offset| < 0.1 sigma_F gate is asserted at the 17-point production resolution; the
+SMOKE gate uses a coarse 5-point grid (which cannot localize a broad profile's
+vertex to 0.1 sigma) with a loosened 0.5 sigma tolerance that still trips on a
+broken profile.
