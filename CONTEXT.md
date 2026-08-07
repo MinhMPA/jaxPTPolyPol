@@ -67,8 +67,10 @@ enters as a **fiducial-centered Gaussian likelihood term**: −½ Δθᵀ F_cmb 
 sampled cosmology(+tau) basis, where F_cmb is the Hessian-Fisher of the full candl
 stack (Planck high-ℓ TTTEEE + low-ℓ TT + low-ℓ EE simall + Planck/ACT lensing,
 CMB nuisances Schur-marginalized) at the fiducial — the same object the
-`fisher_joint_PFS_BAO_CMB_*` notebooks build. Rationale: the PFS data vector is a
-NOISELESS fiducial mock (Poisson noise in the covariance only), so a consistent
+`fisher_joint_PFS_BAO_CMB_*` notebooks build (method superseded 2026-08-07 →
+hybrid Gauss–Newton expected Fisher; see the F_cmb-method paragraph below).
+Rationale: the PFS data vector is a NOISELESS
+fiducial mock (Poisson noise in the covariance only), so a consistent
 forecast requires every likelihood term to peak at the fiducial; the Gaussian CMB
 term preserves the chi2(fid)=0 tripwire, the profile-likelihood check, and exact
 MCMC↔Fisher comparability. Rejected: real-Planck candl data (posterior would center

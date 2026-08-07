@@ -1179,9 +1179,14 @@ makes the joint posterior much more Gaussian.
 
 An independent orientation check on the inline comparison Fisher: the committed
 `example/fisher/fisher_joint_PFS_BAO_CMB_LCDM.ipynb` "PFS P+B+BAO+CMB" column is
-`(1.2042e-4, 5.3874e-4, 0.011693, 0.0034728, 0.002286, 0.005948)`; `F_cmp` lands
-within ~1% of it on every parameter and 5% tighter on ombh2 — the expected
-signature, since that notebook carries no BBN term.
+`(1.2042e-4, 5.3874e-4, 0.011693, 0.0034728, 0.002286, 0.005948)`; per parameter
+`F_cmp` sits at logA **+1.72%**, h **−1.47%**, ns **+0.90%**, tau **+0.46%**,
+omch2 **−0.24%**, and ombh2 **−4.7%** (tighter) — the ombh2 gap is the expected
+BBN signature, since that notebook carries no BBN term. The logA entry
+independently corroborates Open item 1: `F_cmp` uses the A_planck-**deduped**
+CMB block while the `fisher_joint` column still carries the 4× overcount, so
+`F_cmp`'s logA must be LOOSER by roughly the dedupe's measured effect (+2.36% on
+the LCDM joint proxy) — +1.72% is that sign and that rough size.
 
 ### tau: first appearance as a SAMPLED parameter
 
@@ -1368,3 +1373,19 @@ python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
    Relabel the f-strings whenever the notebook is next executed.
 3. **Rounding nit:** the wall-distance move 0.29 -> 1.58 sigma_F is 5.5x
    (1.5753/0.28841 = 5.46), not the 5.4x quoted in an intermediate report.
+4. **E3 projection unit test for `make_cmb_to_shared` never landed.** The plan's
+   E3 row asks for a unit test on the native->shared Jacobian (the H0<->h
+   factor-100 landmine, `J[h_row, H0_col] == 0.01`) in addition to the build-time
+   gate. Only the gate exists; the function lives in
+   `example/mcmc/scripts/build_cmb_fisher_block.py` and is data-free, so the test
+   is cheap.
+5. **E7/E8 are prints, not asserts, in both joint MCMC notebooks.** `E7_OK` /
+   `E8_OK` are computed and printed as `PASS`/`WARN` but never asserted, so a
+   regression would be silent in a headless re-run. Convert to post-print asserts
+   at each notebook's next execution (deferred for the same output-provenance
+   reason as item 2).
+6. **`inventory_shared_priors(..., atol=1e-8)` is misnamed.** The value is
+   compared against the RELATIVE residual `gap / span`
+   (`example/mcmc/scripts/cmb_gn_fisher.py`), not an absolute one, and the
+   function already takes a separate `rtol`. Rename to something unambiguous
+   (e.g. `sum_rtol`) when that signature is next touched.

@@ -80,8 +80,6 @@ import jax
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 
-import candl_data
-
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import cmb_gn_fisher  # noqa: E402
 import stream_common  # noqa: E402
@@ -122,7 +120,20 @@ PLANCK_HIGHL   = PLANCK_ROOT / 'hi_l/plik/plik_rd12_HM_v22b_TTTEEE.clik'
 PLANCK_LOWL_TT = PLANCK_ROOT / 'low_l/commander/commander_dx12_v3_2_29.clik'
 PLANCK_LOWL_EE = PLANCK_ROOT / 'low_l/simall/simall_100x143_offlike5_EE_Aplanck_B.clik'
 PLANCK_LENSING = PLANCK_ROOT / 'lensing/smicadx12_Dec5_ftl_mv2_ndclpp_p_teb_consext8_CMBmarged.clik_lensing'
-ACT_DR6_LENS   = candl_data.ACT_DR6_Lens_only
+
+
+def act_dr6_lens():
+    """ACT DR6 lensing dataset path -- resolved LAZILY, at call time.
+
+    ``candl_data`` is a DATA package: importing it at module scope would make
+    importing THIS module fail wherever the datasets are not installed, which
+    breaks collection of the data-free ``tests/test_cmb_gn_fisher.py`` (it
+    imports this module for its constants). Only the build path needs the
+    dataset, so the import lives here.
+    """
+    import candl_data
+    return candl_data.ACT_DR6_Lens_only
+
 
 INCLUDE_INTERNAL_PRIORS = True
 
@@ -183,7 +194,8 @@ TAU_GRAD_FLOOR = 1e-3
 #: not constrain the PFS-facing directions. ``sigma = 0`` means "PFS carries no
 #: information on this parameter" (tau) and maps to a ZERO regularizer entry,
 #: i.e. infinite prior width. These are inputs to a diagnostic summary only;
-#: nothing in the artifact depends on them.
+#: nothing in the artifact depends on them. Source: the committed production
+#: MCMC ``sig`` columns of ``mcmc_joint_PFS_BAO_BBN_ns_{LCDM,nuLCDM}.ipynb``.
 PFS_ONLY_SIGMAS = {
     "lcdm": {"ombh2": 0.00047985, "omch2": 0.0032185, "logA": 0.060783,
              "ns": 0.027632, "h": 0.0035686, "tau": 0.0},
@@ -293,7 +305,7 @@ def load_likelihood_terms():
         'planck_lowl_ee': load_candl_likelihood(str(PLANCK_LOWL_EE), wrapper='clipy', additional_args=clipy_args),
         'planck_lensing': load_candl_likelihood(str(PLANCK_LENSING), wrapper='clipy', additional_args=clipy_args),
         'act_dr6_lensing': load_candl_likelihood(
-            ACT_DR6_LENS, lensing=True, feedback=False,
+            act_dr6_lens(), lensing=True, feedback=False,
             clear_internal_priors=not INCLUDE_INTERNAL_PRIORS,
         ),
     }
@@ -501,7 +513,7 @@ def apply_shared_prior_dedupe(pieces, F_full):
     return F_dedup, policy
 
 
-def diagnose_negative_mode(pieces, per_term_observed, n_cosmo):
+def diagnose_negative_mode(per_term_observed, n_cosmo):
     """Per-term attribution of the observed-Hessian near-null eigenvalue.
 
     This recomputes -- rather than quotes -- the numbers that motivated the
@@ -686,7 +698,7 @@ def compute_cmb_config_hash(cosmology, *, method_per_term, prior_policy,
             "planck_lowl_ee": _sha256_tree(PLANCK_LOWL_EE),
             "planck_lensing": _sha256_tree(PLANCK_LENSING),
         },
-        "act_dr6_dataset": str(ACT_DR6_LENS),
+        "act_dr6_dataset": str(act_dr6_lens()),
         "library_versions": {
             "candl": getattr(candl, "__version__", "unknown"),
             "clipy": getattr(clipy, "__version__", "unknown"),
@@ -943,7 +955,7 @@ def main():
             else observed_hessian_fisher(pieces, t))
         for t in built["per_term"]}
     negative_mode = diagnose_negative_mode(
-        pieces, per_term_observed, len(cfg["cosmo_keys"]))
+        per_term_observed, len(cfg["cosmo_keys"]))
     print(f"[diagnose] observed-Hessian marginalized min eig = "
           f"{negative_mode['marginalized_min_eig']:.6g}", flush=True)
     for term_name, value in negative_mode["per_term"].items():
