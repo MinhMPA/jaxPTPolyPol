@@ -1,0 +1,204 @@
+{
+  "lcdm": {
+    "shared_keys": [
+      "ombh2",
+      "omch2",
+      "logA",
+      "ns",
+      "h",
+      "tau"
+    ],
+    "sigma_tau": 0.007089623562031232,
+    "eigenvalues": [
+      4188.532847471155,
+      39726.97795545523,
+      129686.81290696375,
+      184361.90135214187,
+      9243130.65850073,
+      183340494.3497578
+    ],
+    "method_per_term": {
+      "planck_highl": "GN",
+      "planck_lowl_tt": "hessian",
+      "planck_lowl_ee": "hessian",
+      "planck_lensing": "GN",
+      "act_dr6_lensing": "GN"
+    },
+    "negative_mode_attribution": {
+      "basis": "observed Hessian, pre-dedupe, packed (cosmo + nuisance)",
+      "marginalized_min_eig": 4.170946050010919,
+      "attribution_sums_to": 4.170946050015451,
+      "direction_cosmo_components": [
+        0.9998696197788984,
+        0.00019868609586661283,
+        -0.002080912810747641,
+        0.012593416830261678,
+        0.005390397680199277,
+        0.008289947786270424
+      ],
+      "per_term": {
+        "planck_highl": 2.2407301298477518,
+        "planck_lowl_tt": 0.05188743083944654,
+        "planck_lowl_ee": 0.9164765431285448,
+        "planck_lensing": 0.4320528978993546,
+        "act_dr6_lensing": 0.5297990483003534
+      }
+    },
+    "prior_policy": {
+      "shared_prior_inventory": {
+        "A_planck": {
+          "sigma": 0.0025,
+          "curvature": 160000.0,
+          "count": 4,
+          "terms": [
+            "planck_highl",
+            "planck_lowl_tt",
+            "planck_lowl_ee",
+            "planck_lensing"
+          ],
+          "packed_index": 26
+        }
+      },
+      "total_curvature_subtracted": {
+        "A_planck": 480000.0
+      },
+      "applied": "after summation of the per-term blocks",
+      "exactness": "Exact, not approximate: a Gaussian prior's Hessian is a constant matrix, so each duplicate copy contributes exactly curvature * e_p e_p^T to the summed block -- explicitly for the Gauss-Newton terms (which add the prior Hessian by hand) and identically for the observed-Hessian terms (whose Hessian contains that same constant). Removing count-1 copies restores single counting with no residual.",
+      "widths_source": "read programmatically by differentiating each likelihood object's own prior callable; never hardcoded",
+      "full_block_min_eig_before": 0.00015430662200147937,
+      "full_block_min_eig_after": 0.0001542988705503211
+    },
+    "cmb_config_hash": "97f8695acb8a05435fe5e7dc3ec9f923b5a453de78d74b27a3b137190f2d8417",
+    "marginal_sigmas_when_regularized": {
+      "ombh2": 0.00011593389646682776,
+      "omch2": 0.0006713745039457133,
+      "logA": 0.01217660467192139,
+      "ns": 0.0035969057206175583,
+      "h": 0.0028064561270106027,
+      "tau": 0.006179868969298693
+    },
+    "regularizer_sigmas_pfs_only": {
+      "ombh2": 0.00047985,
+      "omch2": 0.0032185,
+      "logA": 0.060783,
+      "ns": 0.027632,
+      "h": 0.0035686,
+      "tau": 0.0
+    },
+    "gates": {
+      "G1a_lowl_ee_dtau": -110.1132786884539,
+      "G1b_sigma_tau": 0.007089623562031232,
+      "G1b_sigma_tau_range": [
+        0.004,
+        0.02
+      ],
+      "G2_min_eig": 4188.532847471155,
+      "G2_max_eig": 183340494.3497578,
+      "G3_dh_dH0": 0.01
+    }
+  },
+  "nulcdm": {
+    "shared_keys": [
+      "ombh2",
+      "omch2",
+      "logA",
+      "ns",
+      "h",
+      "tau",
+      "mnu"
+    ],
+    "sigma_tau": 0.007376499170236379,
+    "eigenvalues": [
+      51.361320820136235,
+      4182.313614350256,
+      40736.58389846527,
+      130690.14140886953,
+      184457.36702110534,
+      9255370.371961422,
+      183335519.1133448
+    ],
+    "method_per_term": {
+      "planck_highl": "GN",
+      "planck_lowl_tt": "hessian",
+      "planck_lowl_ee": "hessian",
+      "planck_lensing": "GN",
+      "act_dr6_lensing": "GN"
+    },
+    "negative_mode_attribution": {
+      "basis": "observed Hessian, pre-dedupe, packed (cosmo + nuisance)",
+      "marginalized_min_eig": -0.2662577219112996,
+      "attribution_sums_to": -0.266257721738582,
+      "direction_cosmo_components": [
+        0.9969885757886229,
+        5.630622389087806e-05,
+        -0.0006139851037128234,
+        -0.004225243334662357,
+        0.0016885907404346411,
+        -0.001451738512553981,
+        -0.0773988891021073
+      ],
+      "per_term": {
+        "planck_highl": -0.24840304273263872,
+        "planck_lowl_tt": -0.025102756381981794,
+        "planck_lowl_ee": 0.07159199512716939,
+        "planck_lensing": -0.09648085211614835,
+        "act_dr6_lensing": 0.032136934365017515
+      }
+    },
+    "prior_policy": {
+      "shared_prior_inventory": {
+        "A_planck": {
+          "sigma": 0.0025,
+          "curvature": 160000.0,
+          "count": 4,
+          "terms": [
+            "planck_highl",
+            "planck_lowl_tt",
+            "planck_lowl_ee",
+            "planck_lensing"
+          ],
+          "packed_index": 27
+        }
+      },
+      "total_curvature_subtracted": {
+        "A_planck": 480000.0
+      },
+      "applied": "after summation of the per-term blocks",
+      "exactness": "Exact, not approximate: a Gaussian prior's Hessian is a constant matrix, so each duplicate copy contributes exactly curvature * e_p e_p^T to the summed block -- explicitly for the Gauss-Newton terms (which add the prior Hessian by hand) and identically for the observed-Hessian terms (whose Hessian contains that same constant). Removing count-1 copies restores single counting with no residual.",
+      "widths_source": "read programmatically by differentiating each likelihood object's own prior callable; never hardcoded",
+      "full_block_min_eig_before": 0.0001543029865066646,
+      "full_block_min_eig_after": 0.00015429304037990074
+    },
+    "cmb_config_hash": "e89efa399fe355907dcd3f85cec47e72c799c694dce6e9d8f35adc93bb94d421",
+    "marginal_sigmas_when_regularized": {
+      "ombh2": 0.00012056637907868992,
+      "omch2": 0.000754269035960552,
+      "logA": 0.013795744264322857,
+      "ns": 0.003703371064101421,
+      "h": 0.003441510057303343,
+      "tau": 0.006995025840941111,
+      "mnu": 0.03900668405005039
+    },
+    "regularizer_sigmas_pfs_only": {
+      "ombh2": 0.00048188,
+      "omch2": 0.0032276,
+      "logA": 0.078534,
+      "ns": 0.033284,
+      "h": 0.0036311,
+      "tau": 0.0,
+      "mnu": 0.095725
+    },
+    "gates": {
+      "G1a_lowl_ee_dtau": -110.08328646272628,
+      "G1b_sigma_tau": 0.007376499170236379,
+      "G1b_sigma_tau_range": [
+        0.004,
+        0.02
+      ],
+      "G2_min_eig": 51.361320820136235,
+      "G2_max_eig": 183335519.1133448,
+      "G3_dh_dH0": 0.01
+    }
+  },
+  "_note": "Branch B (expt/cmb-expected-fisher): hybrid Gauss-Newton expected CMB Fisher, with the shared-prior duplicate curvature removed. marginal_sigmas_when_regularized = sqrt(diag(inv(F_shared + F_reg))) with F_reg = diag(1/sigma^2) from the PFS-only production sigmas; sigma = 0 (tau) means PFS carries no constraint -> zero regularizer entry. No eigenvalue clipping was applied to F_shared. Regenerate with: python3 example/mcmc/scripts/build_cmb_fisher_block.py --summary"
+}

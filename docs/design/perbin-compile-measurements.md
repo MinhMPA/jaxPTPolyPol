@@ -923,3 +923,126 @@ marginalization-volume / projection effects, not fitting errors. The strict
 SMOKE gate uses a coarse 5-point grid (which cannot localize a broad profile's
 vertex to 0.1 sigma) with a loosened 0.5 sigma tolerance that still trips on a
 broken profile.
+
+## CMB Fisher block: two-branch experiment (2026-08-06/07)
+
+The joint PFS+BAO+CMB+BBN forecasts consume a fiducial-centered Gaussian CMB
+Fisher block built once by `example/mcmc/scripts/build_cmb_fisher_block.py`
+(Planck highl TTTEEE + lowl TT + lowl EE simall + Planck lensing + ACT DR6
+lensing). The first implementation reproduced the source notebooks exactly: the
+OBSERVED Hessian `F = -0.5 (H + H^T)` of the summed log-likelihood at our
+fiducial. It aborted gate G2 for nuLCDM.
+
+### The finding: an indefinite observed Hessian
+
+nuLCDM raw 28x28 min eigenvalue **-0.250293**; projected into the shared basis
+**-46.2436**. The direction is the CMB geometric degeneracy (99.7% H0, 7.7%
+mnu). Not a porting bug — the committed nuLCDM notebook carries the same
+`-2.663e-01` and prints `---` for `omch2`, `h`, `mnu` in its CMB-only column.
+
+Cause: for a Gaussian band-power likelihood the exact Hessian is
+`-d2 logL = J^T C^-1 J - sum_a (C^-1 delta)_a d2 m_a`. The residual-curvature
+term has no definite sign, and our fiducial is not the joint maximum of the real
+Planck/ACT data (`chi2_resid` at fiducial: 2345.6 highl, 9.11 Planck lensing,
+14.47 ACT), so along a near-null direction that term dominates and flips the
+sign. LCDM was never clean either — its raw 27x27 min eigenvalue was already
+**-0.00740928**; only the projection hid it.
+
+### Per-term attribution (measured, not asserted)
+
+The summed Fisher is exactly additive over the five terms in the packed basis,
+so for the nuisance-profiled minimum eigenvector `u` of the marginalized
+cosmology block, `sum_t u^T F_t u` reproduces the eigenvalue and splits it by
+term. Recomputed on EVERY build and stored in the artifact META under
+`method.negative_mode_attribution` (nuLCDM, observed Hessian, pre-dedupe):
+
+| term | `u^T F_t u` | share |
+|---|---|---|
+| planck_highl | -0.248403 | 93% |
+| planck_lensing | -0.0964809 | 36% |
+| planck_lowl_tt | -0.0251028 | 9% |
+| planck_lowl_ee | **+0.071592** | — |
+| act_dr6_lensing | **+0.0321369** | — |
+| SUM | -0.266258 | |
+
+Both dominant negative contributors are Gaussian in band powers; the two low-ell
+terms are net POSITIVE (+0.0465) along that direction. That is what makes a
+hybrid legitimate rather than a patch.
+
+### The two branches
+
+* **Branch A — `expt/cmb-psd-clip`**: eigenvalue clipping `max(lambda, 0)`.
+  Kept UNMERGED as the documented fallback. Do not develop further.
+* **Branch B — `expt/cmb-expected-fisher`** (ADOPTED): hybrid Gauss-Newton.
+  Terms with a Gaussian band-power data model contribute the EXPECTED Fisher
+  `J^T C^-1 J` (PSD by construction); the two non-Gaussian low-ell terms, for
+  which `J^T C^-1 J` does not exist, keep the observed Hessian.
+
+| term | likelihood object | method | covariance source |
+|---|---|---|---|
+| planck_highl | `clipy.smica.smica_lkl` | **GN** | `_internal.siginv` (2289x2289) |
+| planck_lowl_tt | `clipy.gibbs.gibbs_lkl` | hessian | none (Blackwell-Rao `cl2x` spline) |
+| planck_lowl_ee | `clipy.simall.simall_lkl` | hessian | none (`probEE` spline) |
+| planck_lensing | `clipy.lkl._clik_lensing` | **GN** | `clik.siginv` (9x9), `pp_hat` |
+| act_dr6_lensing | `candl.likelihood.LensLike` | **GN** | `covariance_chol_dec` (10x10) |
+
+`clik_candl.covariance` raises `NotImplementedError` for all four clipy terms;
+the inverse covariances live under `siginv`. `make_candl_theory_vector_fn` works
+only for the native-candl ACT term, so the two clipy model vectors are
+reconstructed and then validated against the untouched `log_like` in value, full
+Hessian, and along the reference minimum-eigenvalue direction.
+
+Branch comparison, `sigma(mnu)` from the PFS-regularized joint proxy:
+**0.0387** (branch B pre-dedupe) / **0.0404** (branch A, clipped) / **0.0957**
+(PFS only). Post-dedupe branch B: **0.0390**.
+
+### The A_planck defect (found by adversarial review, fixed on branch B)
+
+All four Planck `.clik` likelihoods are loaded with `all_priors=True`, so each
+folds the SAME Gaussian `A_planck` calibration prior (`sigma = 0.0025`,
+curvature `160000`) into its own `log_like`. Summing the five per-term blocks
+counted it **four times** — a pre-existing baseline defect, faithfully
+reproduced by both branches.
+
+Fix: a shared-prior INVENTORY (each prior's curvature obtained by
+differentiating the likelihood object's own prior callable — never hardcoded),
+then subtraction of `(count-1) x curvature = 3 x 160000` at the `A_planck`
+packed index, applied AFTER summation so no per-term log-likelihood and no
+Gauss-Newton validation reference is disturbed. Exact, not approximate: a
+Gaussian prior's Hessian is a constant matrix. Two hard checks guard it —
+COMPLETENESS (the enumerated per-prior curvatures must sum to the term's total
+prior curvature) and GAUSSIANITY (curvature must not move when its own
+parameters are perturbed); anything unresolvable raises `SharedPriorError`.
+
+Effect on the CMB-only marginal widths — the overcounted prior was making the
+amplitude direction look tighter than it is:
+
+| param | LCDM pre -> post | nuLCDM pre -> post |
+|---|---|---|
+| logA | 0.013163 -> 0.013558 (**+3.00%**) | 0.014757 -> 0.015320 (**+3.81%**) |
+| omch2 | 0.0010642 -> 0.0010727 (+0.81%) | 0.0016178 -> 0.0016179 (+0.01%) |
+| h | 0.0048581 -> 0.0048965 (+0.79%) | 0.018971 -> 0.019048 (+0.41%) |
+| mnu | — | 0.13697 -> 0.13807 (+0.80%) |
+| tau | 0.0070807 -> 0.0070896 (+0.13%) | 0.0073758 -> 0.0073765 (+0.01%) |
+
+All widths LOOSEN, as an over-confidence fix must.
+
+### Production numbers (post-dedupe, both artifacts)
+
+| | LCDM | nuLCDM |
+|---|---|---|
+| `sigma_tau` | 0.007089623562 | 0.007376499170 |
+| G2 min eig (strict `> 0`) | 4188.53 | **51.3613** |
+| max eig | 1.8334e+08 | 1.83336e+08 |
+| baseline observed-Hessian min eig | 4317.77 | **-46.2436 (ABORT)** |
+
+No eigenvalue clipping or regularization anywhere. Gate G2 is strict `> 0`.
+
+### Follow-up (DEFERRED, not this plan)
+
+The committed `example/fisher/fisher_joint_PFS_BAO_CMB_{LCDM,nuLCDM}.ipynb`
+notebooks carry the SAME 4x `A_planck` overcount and the same observed-Hessian
+indefiniteness. Their CMB-column numbers are therefore ~3-4% over-confident on
+logA. Not corrected here; the scripts are the production path.
+
+Adoption rationale and the decisions of record are in CONTEXT.md (2026-08-07).
