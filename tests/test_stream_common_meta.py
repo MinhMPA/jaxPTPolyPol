@@ -443,20 +443,37 @@ def test_build_script_imports_nulcdm_config_from_stream_common():
 # a mismatch there silently mis-assigns Fisher rows to parameters.
 # ---------------------------------------------------------------------------
 
+#: Stand-in for the pinned CMB fingerprint. The tests monkeypatch the pin to
+#: this rather than reading the real one, so they check the loader's SEMANTICS
+#: and keep passing across legitimate re-pins.
+_FAKE_CMB_HASH = "cmbhash-lcdm-0000"
+
+
 def _write_cmb_artifact(path, *, cosmology="lcdm", shared_keys=None,
-                        hash_val=None):
+                        hash_val=None, cmb_hash=_FAKE_CMB_HASH,
+                        omit_cmb_hash=False):
     """Write a minimal, structurally valid CMB-block npz (identity Fisher)."""
     keys = shared_keys or list(stream_common.SHARED_KEYS_CMB_LCDM)
     k = len(keys)
     meta = {"cosmology": cosmology, "shared_keys": keys,
             "theory_config_hash": hash_val or stream_common.THEORY_CONFIG_HASH}
+    if not omit_cmb_hash:
+        meta["cmb_config_hash"] = cmb_hash
     np.savez(path, F_cmb_shared=np.eye(k), fid_shared=np.zeros(k),
              shared_keys=np.array(keys), F_cmb_native=np.eye(k),
              fid_native=np.zeros(k), native_keys=np.array(keys),
              sigma_tau=np.float64(0.007), meta_json=json.dumps(meta))
 
 
-def test_cmb_loader_roundtrip(tmp_path):
+@pytest.fixture
+def pinned_cmb_hash(monkeypatch):
+    """Pin both CMB fingerprints to the fake value for the duration of a test."""
+    monkeypatch.setattr(stream_common, "CMB_CONFIG_HASH_LCDM", _FAKE_CMB_HASH)
+    monkeypatch.setattr(stream_common, "CMB_CONFIG_HASH_NULCDM", _FAKE_CMB_HASH)
+    return _FAKE_CMB_HASH
+
+
+def test_cmb_loader_roundtrip(tmp_path, pinned_cmb_hash):
     _write_cmb_artifact(tmp_path / "cmb_fisher_lcdm.npz")
     out = stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)
     assert out["shared_keys"] == tuple(stream_common.SHARED_KEYS_CMB_LCDM)
@@ -464,20 +481,57 @@ def test_cmb_loader_roundtrip(tmp_path):
     assert out["sigma_tau"] == pytest.approx(0.007)
 
 
-def test_cmb_loader_rejects_wrong_cosmology(tmp_path):
+def test_cmb_loader_rejects_wrong_cosmology(tmp_path, pinned_cmb_hash):
     _write_cmb_artifact(tmp_path / "cmb_fisher_nulcdm.npz", cosmology="lcdm")
     with pytest.raises(ValueError, match="cosmology"):
         stream_common.load_cmb_fisher_block("nulcdm", cache_dir=tmp_path)
 
 
-def test_cmb_loader_rejects_wrong_hash(tmp_path):
+def test_cmb_loader_rejects_wrong_hash(tmp_path, pinned_cmb_hash):
     _write_cmb_artifact(tmp_path / "cmb_fisher_lcdm.npz", hash_val="deadbeef")
-    with pytest.raises(ValueError, match="hash"):
+    with pytest.raises(ValueError, match="theory_config_hash"):
         stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)
 
 
-def test_cmb_loader_rejects_wrong_shared_keys(tmp_path):
+def test_cmb_loader_rejects_wrong_shared_keys(tmp_path, pinned_cmb_hash):
     bad = ["ombh2", "omch2", "logA", "ns", "tau", "h"]   # swapped order
     _write_cmb_artifact(tmp_path / "cmb_fisher_lcdm.npz", shared_keys=bad)
     with pytest.raises(ValueError, match="shared_keys"):
         stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)
+
+
+def test_cmb_loader_rejects_wrong_cmb_config_hash(tmp_path, pinned_cmb_hash):
+    """The CMB inputs changed since the pin -> refuse, do not warn-and-load."""
+    _write_cmb_artifact(tmp_path / "cmb_fisher_lcdm.npz",
+                        cmb_hash="a-different-fingerprint")
+    with pytest.raises(ValueError, match="cmb_config_hash"):
+        stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)
+
+
+def test_cmb_loader_rejects_artifact_without_a_fingerprint(tmp_path,
+                                                           pinned_cmb_hash):
+    """HARD-required: no enforce-if-present grace for the CMB fingerprint.
+
+    An artifact predating the fingerprint carries no record of which emulator or
+    .clik data went into it, which is exactly the situation the fingerprint
+    exists to prevent -- so it is refused rather than loaded with a warning.
+    """
+    _write_cmb_artifact(tmp_path / "cmb_fisher_lcdm.npz", omit_cmb_hash=True)
+    with pytest.raises(ValueError, match="no cmb_config_hash"):
+        stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)
+
+
+def test_cmb_loader_refuses_when_no_hash_is_pinned(tmp_path, monkeypatch):
+    """A ``None`` pin means nothing may load, even a well-formed artifact."""
+    monkeypatch.setattr(stream_common, "CMB_CONFIG_HASH_LCDM", None)
+    _write_cmb_artifact(tmp_path / "cmb_fisher_lcdm.npz")
+    with pytest.raises(ValueError, match="no CMB_CONFIG_HASH is pinned"):
+        stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)
+
+
+def test_cmb_config_hash_pins_are_declared():
+    """Both pins must exist as module attributes (value may be None pre-build)."""
+    for name in ("CMB_CONFIG_HASH_LCDM", "CMB_CONFIG_HASH_NULCDM"):
+        assert hasattr(stream_common, name), (
+            f"stream_common must declare {name}; load_cmb_fisher_block "
+            "hard-requires it.")

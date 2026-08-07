@@ -68,6 +68,7 @@ time and refuses to build unless each literal is still found in the source cell
 """
 
 import argparse
+import hashlib
 import json
 import pathlib
 import sys
@@ -633,6 +634,82 @@ def gate_g3_jacobian(jacobian, cosmology):
 
 
 # ---------------------------------------------------------------------------
+# Provenance fingerprint.
+# ---------------------------------------------------------------------------
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sha256_tree(root):
+    """Content digest of a directory: sorted (relpath, file-sha256) listing.
+
+    Paths are relative, so relocating a likelihood directory does not change the
+    fingerprint, but editing or re-downloading ANY file inside it does.
+    """
+    root = pathlib.Path(root)
+    if root.is_file():
+        return {"kind": "file", "sha256": _sha256_file(root)}
+    entries = sorted(p for p in root.rglob("*") if p.is_file())
+    listing = [[str(p.relative_to(root)), _sha256_file(p)] for p in entries]
+    digest = hashlib.sha256(
+        json.dumps(listing, sort_keys=True).encode()).hexdigest()
+    return {"kind": "dir", "n_files": len(listing), "sha256": digest}
+
+
+def compute_cmb_config_hash(cosmology, *, method_per_term, prior_policy,
+                            fiducial_native, shared_keys, native_keys):
+    """Content-derived fingerprint of everything that determines the block.
+
+    Deliberately hashes FILE CONTENT, not paths or mtimes: a re-downloaded
+    Planck likelihood or a regenerated emulator network changes the block and
+    must change the fingerprint, while moving the data tree must not.
+
+    Returns ``(hash, components)``; the components go into META verbatim so a
+    mismatch can be diagnosed without re-running anything.
+    """
+    cfg = CONFIG[cosmology]
+    import candl
+    import clipy
+    components = {
+        "cosmology": cosmology,
+        "emulator_files": {
+            spec: _sha256_file(path)
+            for spec, path in sorted(cfg["emulator_filenames"].items())},
+        "likelihood_data": {
+            "planck_highl": _sha256_tree(PLANCK_HIGHL),
+            "planck_lowl_tt": _sha256_tree(PLANCK_LOWL_TT),
+            "planck_lowl_ee": _sha256_tree(PLANCK_LOWL_EE),
+            "planck_lensing": _sha256_tree(PLANCK_LENSING),
+        },
+        "act_dr6_dataset": str(ACT_DR6_LENS),
+        "library_versions": {
+            "candl": getattr(candl, "__version__", "unknown"),
+            "clipy": getattr(clipy, "__version__", "unknown"),
+            "jax": jax.__version__,
+        },
+        "method_per_term": dict(method_per_term),
+        "gn_algorithm_version": cmb_gn_fisher.GN_ALGORITHM_VERSION,
+        "include_internal_priors": INCLUDE_INTERNAL_PRIORS,
+        "shared_prior_inventory": {
+            name: {"sigma": entry["sigma"], "count": entry["count"],
+                   "terms": entry["terms"],
+                   "packed_index": entry["packed_index"]}
+            for name, entry in
+            prior_policy["shared_prior_inventory"].items()},
+        "fiducial_native": {k: float(v) for k, v in fiducial_native.items()},
+        "shared_keys": list(shared_keys),
+        "native_keys": list(native_keys),
+    }
+    payload = json.dumps(components, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest(), components
+
+
+# ---------------------------------------------------------------------------
 # Summary mode.
 # ---------------------------------------------------------------------------
 
@@ -794,6 +871,22 @@ def main():
     min_eig, max_eig = gate_g2_positive_definite(F_cmb_shared)
     jac_entry = gate_g3_jacobian(jacobian, cosmology)
 
+    cmb_config_hash, hash_components = compute_cmb_config_hash(
+        cosmology, method_per_term=built["method"], prior_policy=prior_policy,
+        fiducial_native=pieces["fiducial_cosmo_cmb"], shared_keys=shared_keys,
+        native_keys=cfg["cosmo_keys"])
+    print(f"[fingerprint] cmb_config_hash = {cmb_config_hash}", flush=True)
+    pinned = (stream_common.CMB_CONFIG_HASH_LCDM if cosmology == "lcdm"
+              else stream_common.CMB_CONFIG_HASH_NULCDM)
+    if pinned is None:
+        print(f"[fingerprint] stream_common pins None for {cosmology!r}: pin "
+              "this value before any consumer can load the artifact",
+              flush=True)
+    elif pinned != cmb_config_hash:
+        print(f"[fingerprint] WARNING: stream_common pins {pinned}, which this "
+              "build does NOT match; the artifact will be REFUSED by the "
+              "loader until the pin is updated", flush=True)
+
     meta = {
         "cosmology": cosmology,
         "shared_keys": list(shared_keys),
@@ -806,6 +899,8 @@ def main():
         "n_nuisance": len(pieces["sampled_nuisance"]),
         "nuisance_names": list(pieces["sampled_nuisance"]),
         "fisher_seconds": round(fisher_seconds, 1),
+        "cmb_config_hash": cmb_config_hash,
+        "cmb_config_hash_components": hash_components,
         "prior_policy": prior_policy,
         "method": {
             "per_term": built["method"],
@@ -856,8 +951,28 @@ def main():
     print(f"[saved] {out_path}", flush=True)
 
     # Read-back through the production loader: the artifact must satisfy the
-    # very guards its consumers apply (cosmology / shared_keys / hash).
-    loaded = stream_common.load_cmb_fisher_block(cosmology)
+    # very guards its consumers apply (cosmology / shared_keys / hashes).
+    #
+    # One BOOTSTRAP exception. The CMB fingerprint is content-derived, so it
+    # cannot be pinned before the build that computes it; on the very first
+    # build (or the first after the inputs legitimately change) the pin is
+    # necessarily stale and the loader is RIGHT to refuse. That single case is
+    # reported as an actionable instruction. Every other loader complaint is a
+    # structural defect in the artifact and still aborts.
+    try:
+        loaded = stream_common.load_cmb_fisher_block(cosmology)
+    except ValueError as exc:
+        if "cmb_config_hash" in str(exc) or "CMB_CONFIG_HASH" in str(exc):
+            print(f"[loader] artifact written but NOT yet loadable: {exc}",
+                  flush=True)
+            print(f"[loader] ACTION: set CMB_CONFIG_HASH_"
+                  f"{cosmology.upper()} = {cmb_config_hash!r} in "
+                  "example/mcmc/scripts/stream_common.py, then re-run this "
+                  "build to confirm the round-trip.", flush=True)
+            print(f"[total] {time.time() - t0:.1f} s", flush=True)
+            return 0
+        sys.exit(f"ABORT: the artifact just written fails the production "
+                 f"loader's guards -- {exc}")
     print(f"[loader] round-trip OK: F_shared {tuple(loaded['F_shared'].shape)}, "
           f"sigma_tau {loaded['sigma_tau']:.6g}", flush=True)
     print(f"[total] {time.time() - t0:.1f} s", flush=True)

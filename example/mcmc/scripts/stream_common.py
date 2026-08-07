@@ -475,6 +475,28 @@ TAU_FID = FIDUCIAL['tau']
 #: policy), so no measured central value enters.
 BBN_SIGMA_MOSSA = 0.00036
 
+#: CONTENT-DERIVED fingerprint of the CMB Fisher block artifacts, pinned here
+#: and HARD-REQUIRED by :func:`load_cmb_fisher_block`.
+#:
+#: ``theory_config_hash`` above fingerprints the PFS/BAO production config; it
+#: says nothing about the CMB side. Everything that actually determines the CMB
+#: block -- which Cl emulator networks, which Planck .clik data, which candl /
+#: clipy / jax versions, which per-term method, which Gauss-Newton algorithm
+#: revision, which shared-prior policy, which fiducial and basis -- was
+#: previously unfingerprinted, so a block built against a different emulator
+#: generation or a re-downloaded likelihood would load silently.
+#:
+#: The value is computed by ``build_cmb_fisher_block.py`` from FILE CONTENT
+#: (sha256 of every emulator .npz and of every file under each .clik directory),
+#: not from paths or mtimes, and stamped into the artifact META.
+#:
+#: A ``None`` pin means "no artifact of this cosmology may be loaded" -- the
+#: loader refuses rather than falling back, so an unpinned build cannot be
+#: consumed by accident. Re-pin from the build's ``[fingerprint]`` line whenever
+#: the CMB inputs legitimately change.
+CMB_CONFIG_HASH_LCDM = None
+CMB_CONFIG_HASH_NULCDM = None
+
 
 def cmb_fisher_path(cosmology, cache_dir=None):
     """Path of the CMB Fisher block artifact for ``cosmology``.
@@ -499,7 +521,7 @@ def load_cmb_fisher_block(cosmology, cache_dir=None):
     the basis key tuple, the marginalized sigma(tau) recorded at build time, and
     the full META dict.
 
-    Three HARD guards, all ``ValueError`` (no backward-compat leniency -- unlike
+    Four HARD guards, all ``ValueError`` (no backward-compat leniency -- unlike
     the template stamps there is no legacy CMB cache to stay compatible with,
     and each of these mismatches silently mis-assigns Fisher rows):
 
@@ -511,6 +533,13 @@ def load_cmb_fisher_block(cosmology, cache_dir=None):
       :data:`NULCDM_THEORY_CONFIG_HASH` (nulcdm), so a CMB block built against a
       different production config cannot be summed with the PFS/BAO blocks.
       Enforce-if-present, matching the template-guard convention.
+    * ``cmb_config_hash`` -- :data:`CMB_CONFIG_HASH_LCDM` /
+      :data:`CMB_CONFIG_HASH_NULCDM`. HARD-REQUIRED, with NO enforce-if-present
+      grace: an artifact that carries no fingerprint is refused, and so is one
+      built while the pin was ``None``. The other three guards check what the
+      block CLAIMS to be; this one checks what actually went into it (emulator
+      and .clik file content, library versions, per-term method, Gauss-Newton
+      algorithm revision, shared-prior policy, fiducial and basis).
     """
     if cosmology not in _COSMOLOGIES:
         raise ValueError(
@@ -535,6 +564,26 @@ def load_cmb_fisher_block(cosmology, cache_dir=None):
             raise ValueError(
                 f"artifact theory_config_hash {got} != expected "
                 f"{expected_hash} ({path})")
+        expected_cmb_hash = (CMB_CONFIG_HASH_LCDM if cosmology == "lcdm"
+                             else CMB_CONFIG_HASH_NULCDM)
+        got_cmb = meta.get("cmb_config_hash")
+        if expected_cmb_hash is None:
+            raise ValueError(
+                f"no CMB_CONFIG_HASH is pinned for {cosmology!r} in "
+                "stream_common, so no artifact of that cosmology may be loaded."
+                f" Build it and pin the fingerprint it reports ({path})")
+        if got_cmb is None:
+            raise ValueError(
+                f"artifact carries no cmb_config_hash ({path}); it predates the "
+                "CMB provenance fingerprint. Rebuild it with "
+                "build_cmb_fisher_block.py")
+        if got_cmb != expected_cmb_hash:
+            raise ValueError(
+                f"artifact cmb_config_hash {got_cmb} != pinned "
+                f"{expected_cmb_hash} ({path}) -- the CMB inputs (emulators, "
+                ".clik data, candl/clipy/jax versions, per-term method, "
+                "Gauss-Newton algorithm version, shared-prior policy, fiducial "
+                "or basis) changed since the pin")
         return {"F_shared": jnp.asarray(z["F_cmb_shared"]),
                 "fid_shared": jnp.asarray(z["fid_shared"]),
                 "shared_keys": expected_keys,
