@@ -1046,3 +1046,325 @@ indefiniteness. Their CMB-column numbers are therefore ~3-4% over-confident on
 logA. Not corrected here; the scripts are the production path.
 
 Adoption rationale and the decisions of record are in CONTEXT.md (2026-08-07).
+
+## Joint PFS+BAO+CMB+BBN MCMC forecasts (2026-08-07)
+
+Two production notebooks, both committed with `SMOKE_TEST = False` and full
+outputs:
+
+| | LCDM | nuLCDM |
+|---|---|---|
+| notebook | `example/mcmc/mcmc_joint_PFS_BAO_CMB_BBN_LCDM.ipynb` | `example/mcmc/mcmc_joint_PFS_BAO_CMB_BBN_nuLCDM.ipynb` |
+| production commit | `e1fb52b` | `a71e949` (outputs), `e4d251a` (final source, doc-only) |
+| sampled dimension | 27 (26 theta_NL + tau) | 28 (27 theta_NL + tau) |
+| reported basis | ombh2, omch2, logA, ns, h, tau | + mnu (tau at 5, mnu at 6) |
+| sampler | NUTS on the Taylor surrogate, 4 x 5000 draws, 1000 warmup, `NUTS_SEED = 20260731` | RWMH on the Taylor surrogate, 4 x 200000 draws, 20000 burn, `RWMH_SEED = 20260806` |
+| `log_post_joint(theta0)` tripwire | **-167.752302** | **-173.635756** |
+| `chi2_prof(fiducial)` | 1.231e-23 | 1.193e-23 |
+| `cond(cov_joint)` | 2.045e+08 | 2.046e+08 (`cond(cov_nl_prior)` 1.209e+07) |
+
+The probe set and the CMB-as-Gaussian treatment are the decisions of record in
+CONTEXT.md (2026-08-06 / 2026-08-07); the CMB block itself and the two-branch
+experiment that produced it are documented above under
+"CMB Fisher block: two-branch experiment (2026-08-06/07)" and are not repeated
+here.
+
+Wall times (Apple silicon, same machine as the sections above):
+
+| stage | LCDM | nuLCDM |
+|---|---|---|
+| PFS P+B Jacobian/Fisher | 2 min 36 s | 2 min 33 s |
+| first exact `log_post` (trace+compile+eval) | 56.8 s | 55.7 s |
+| production sampling | **13 min 42 s** (NUTS) | **26 min 21 s** (RWMH, 800k total steps) |
+| profile scan | 20.3 s | 29.5 s |
+| notebook end-to-end | ~18 min | ~31 min |
+
+### Wiring tripwires, and what lp0 does NOT prove
+
+Both notebooks assert the hard identity
+`log_post_joint(theta0) == log_post_surr(x0) == exact-path lp0`, and both print
+`CMB loglike(theta0) = 0.000e+00; BBN loglike(theta0) = -0.000e+00 (both EXACTLY
+0 by construction)`. Exact-vs-surrogate PFS agreement: `|Delta| = 1.421e-13`
+(LCDM) / `5.684e-13` (nuLCDM). `log_post_joint_w(0)` reproduces the same value
+(affine reparametrisation only).
+
+**IMPORTANT — lp0 is BLIND to the `COSMO_PRIORS` removal.** These notebooks drop
+the old `{'ombh2': 0.00055, 'ns': 0.042}` cosmo priors so that BBN and the CMB
+block are not double-counted, but a fiducial-centered Gaussian prior contributes
+EXACTLY 0 at the fiducial: removing it cannot move lp0. lp0 tests the joint
+wiring (index maps, whitening composition, surrogate/exact equivalence), NOT the
+double-count avoidance. The evidence for the removal is the **prior-entry
+counts**, printed by both notebooks:
+
+```
+Legacy-spec prior entries (whitening geometry): 77; DESI-spec prior entries (comparison Fisher): 91
+```
+
+i.e. 79 -> 77 on the whitening side and 93 -> 91 on the comparison side vs the
+`mcmc_joint_PFS_BAO_BBN_ns_*` sources — exactly the two removed cosmo priors.
+Do not cite lp0 for this.
+
+### Sampler health (verbatim)
+
+LCDM:
+
+```
+production NUTS-on-surrogate samples: (4, 5000, 27)
+mean acceptance 0.882; divergence frac 0.0000
+  param     R-hat        ESS
+  ombh2   0.99992    30028.4
+  omch2   1.00002    24826.0
+   logA   0.99994    26703.6
+     ns   0.99991    27509.7
+      h   0.99992    24230.1
+    tau   0.99994    26007.4
+```
+
+nuLCDM:
+
+```
+production RWMH-on-surrogate samples (post burn-in): (4, 180000, 28)
+acceptance per chain = [0.351 0.35  0.351 0.353] (RWMH optimal ~0.234)
+  param     R-hat        ESS
+  ombh2   1.00028    11756.5
+  omch2   1.00006    11781.9
+   logA   1.00006    12972.6
+     ns   1.00003    11901.2
+      h   1.00034     9973.9
+    tau   1.00002    12939.7
+    mnu   1.00026    12848.1
+```
+
+R-hat max 1.00002 / 1.00034, zero divergences (LCDM), ESS >= 24230 (LCDM) and
+>= 9974 (nuLCDM) INCLUDING tau and mnu. nuLCDM acceptance 0.350-0.353 sits at
+the top edge of the RWMH band with nothing tuned — the expected consequence of a
+more Gaussian target once the CMB block dominates.
+
+### Headline Fisher-vs-MCMC tables (verbatim)
+
+LCDM — `Fisher: PFS P+B + DESI DR2 BAO + CMB block + BBN + DESI DR1-reanalysis
+EFT priors (same information as the sampled target)`:
+
+```
+  param        fid    MCMC mean   Fisher sig     MCMC sig   ratio
+  ombh2    0.02242     0.022397   0.00011478   0.00011327    0.99
+  omch2    0.11933       0.1194   0.00053746   0.00053177    0.99
+   logA      3.047       3.0467     0.011894     0.011984    1.01
+     ns     0.9665      0.96636    0.0035039    0.0035062    1.00
+      h     0.6766      0.67607    0.0022525    0.0022193    0.99
+    tau     0.0561     0.055947    0.0059752    0.0060354    1.01
+residual pulls (volume term only under fiducial_centered): ombh2=-0.20  omch2=+0.13  logA=-0.02  ns=-0.04  h=-0.24  tau=-0.03
+```
+
+nuLCDM — same line with `b1sigma8 EFT priors`:
+
+```
+  param        fid    MCMC mean   Fisher sig     MCMC sig   ratio
+  ombh2    0.02242     0.022403   0.00011903   0.00011786    0.99
+  omch2    0.11933      0.11933   0.00070789   0.00067388    0.95
+   logA      3.047       3.0486     0.014276     0.013727    0.96
+     ns     0.9665      0.96662    0.0036972    0.0036756    0.99
+      h     0.6766      0.67589    0.0026304    0.0025049    0.95
+    tau     0.0561     0.056894     0.007228    0.0069281    0.96
+    mnu       0.06     0.065965     0.038089      0.03341    0.88
+residual pulls (volume term only under fiducial_centered): ombh2=-0.14  omch2=-0.01  logA=+0.11  ns=+0.03  h=-0.27  tau=+0.11  mnu=+0.16
+```
+
+MCMC/Fisher sigma ratios are 0.99-1.01 on all six LCDM parameters and 0.95-0.99
+on six of seven nuLCDM parameters; **mnu at 0.88 is the only outlier** and it is
+the `mnu >= 0` wall (see below), not a convergence problem. Residual volume
+pulls collapse to |.| <= 0.24 sigma_F (LCDM) / 0.27 sigma_F (nuLCDM) — far
+smaller than the 0.4-0.9 sigma_F of the PFS-only runs, because the CMB block
+makes the joint posterior much more Gaussian.
+
+An independent orientation check on the inline comparison Fisher: the committed
+`example/fisher/fisher_joint_PFS_BAO_CMB_LCDM.ipynb` "PFS P+B+BAO+CMB" column is
+`(1.2042e-4, 5.3874e-4, 0.011693, 0.0034728, 0.002286, 0.005948)`; `F_cmp` lands
+within ~1% of it on every parameter and 5% tighter on ombh2 — the expected
+signature, since that notebook carries no BBN term.
+
+### tau: first appearance as a SAMPLED parameter
+
+This is the first time tau appears as a SAMPLED MCMC dimension in this repo (it
+had appeared only inside Fisher blocks; the simall-zero-gradient era's tau-prior
+workaround was retired 2026-07-14). Here tau is sampled with
+**no tau prior and no bound**; its only constraint is the CMB block's curvature.
+
+| | LCDM | nuLCDM |
+|---|---|---|
+| sigma(tau), comparison Fisher | 0.0059752 | 0.007228 |
+| sigma(tau), chain | 0.0060354 | 0.0069281 |
+| sigma(tau), CMB-alone artifact | 0.007090 | 0.007376 |
+| ratio joint/CMB-alone (Fisher) | **0.843** | **0.980** |
+| tau range over the chain | [0.03260, 0.07963] | [0.02811, 0.08765] |
+
+Both ratios are below 1, as they must be (PFS+BAO+BBN can only sharpen tau
+through its degeneracies), and both chains stay strictly positive with no bound
+imposed (`min(tau) > 0` is a hard physicality assert, not a prior).
+
+**Why nuLCDM's ratio is so much closer to 1 (0.980 vs 0.843): mnu absorbs the
+degeneracy-breaking.** With mnu free, the direction along which PFS+BAO would
+otherwise donate information to tau is partly spent on mnu instead. The Task-4
+review confirmed this numerically rather than by assertion: refitting with mnu
+FIXED recovers ratio **0.927**, and the PFS+BAO-only sigma(logA) — the parameter
+tau is degenerate with — degrades by **3.4x** when mnu is freed
+(0.065085 -> 0.22439 in the two cell-29 gain tables, 3.45x).
+
+corr(logA, tau), the CMB degeneracy the joint target must transport correctly:
+
+```
+[PASS] E7 corr(logA, tau) = +0.900 (chain) vs +0.898 (F_cmp)     # LCDM
+[PASS] E7 corr(logA, tau) = +0.923 (chain) vs +0.930 (F_cmp)     # nuLCDM
+```
+
+Chain and Fisher agree to 0.002 / 0.007, and tau's marginal is NOT simply the
+CMB-alone one.
+
+### The mnu wall, remeasured (nuLCDM) — READ THE FLAVOR LABELS
+
+`sigma_F` appears in two incompatible flavors in this lineage and they must
+never be mixed:
+
+* **Gauss-Newton (GN) comparison Fisher** — `F_cmp` here, `F_pfs_bao_prior_cosmo`
+  in the PFS-only notebook. Joint sigma_F(mnu) = **0.038089 eV**; PFS-only
+  GN baseline = **0.20804 eV**.
+* **Marginal-posterior Hessian-Fisher** — the validation gate's flavor.
+  PFS-only sigma_F(mnu) = **0.120937 eV**.
+
+The same PFS-only chain sigma of 0.095725 eV therefore yields a truncation ratio
+of 0.46 against the GN denominator and 0.79 against the Hessian denominator.
+The notebook's originally reported "0.791 -> 0.877, essentially unchanged"
+crossed the two flavors; Task-4 review caught it and it was corrected in
+`e4d251a`.
+
+**On matched Gauss-Newton denominators:**
+
+| quantity (GN flavor throughout) | PFS-only | joint |
+|---|---|---|
+| sigma_F(mnu) | 0.20804 eV | 0.038089 eV |
+| chain sigma(mnu) | 0.095725 eV | **0.033410 eV** (2.87x tighter) |
+| truncation ratio sigma_chain/sigma_F | **0.46** | **0.877** |
+| fiducial distance from the `mnu >= 0` wall | **0.29 sigma_F** | **1.58 sigma_F** (5.5x further out) |
+
+So the truncation is **strongly weakened** by the CMB block — 0.46 -> 0.877, not
+the marginal move the mixed-flavor text implied.
+
+**Flavor-free facts — the wall still bites:**
+
+* draws within an ABSOLUTE 0.01 eV of the wall: **3.24%** (PFS-only 3.24%,
+  printed as "3.2%") — no sigma_F enters this fraction, so it needs no flavor
+  caveat, and it is essentially unchanged;
+* `min(mnu) = 0.00000 eV` — the chain still reaches the wall;
+* mnu is the only parameter with an MCMC/Fisher sigma ratio of **0.88** against
+  0.95-0.99 for the other six.
+
+Both halves must be carried together: the truncation weakened a lot AND the
+bound is still load-bearing. The mnu marginal remains **a truncated shape by
+construction, not a detection**, and must not be quoted as a Gaussian sigma; the
+corner panel's Fisher ellipse overhangs a region the samples cannot occupy.
+
+Verbatim (note: the two parentheticals in this printed line are Hessian-flavored
+— see Open items):
+
+```
+mnu wall (E13): sigma_F = 0.038089 eV, fiducial sits 1.58 sigma_F above the mnu >= 0 wall (PFS-only notebook: ~0.5 sigma_F)
+mnu chain: sigma = 0.033410 eV, truncation ratio sigma_chain/sigma_F = 0.877 (PFS-only: 0.791); draws within 0.01 eV of the wall = 3.24% (PFS-only: 3.2%); min(mnu) = 0.00000 eV
+```
+
+### E8 — information only ADDS (joint <= PFS-only widths)
+
+Both notebooks compare against their own committed PFS-only production sigmas:
+
+```
+  param   PFS-only sig      joint sig   joint/PFS-only      # LCDM
+  ombh2     0.00047985     0.00011327            0.236
+  omch2      0.0032185     0.00053177            0.165
+   logA       0.060783       0.011984            0.197
+     ns       0.027632      0.0035062            0.127
+      h      0.0035686      0.0022193            0.622
+[PASS] E8 max(joint/PFS-only) = 0.622 (expect <= 1.02)
+```
+
+```
+  param   PFS-only sig      joint sig   joint/PFS-only      # nuLCDM
+  ombh2     0.00048188     0.00011786            0.245
+  omch2      0.0032276     0.00067388            0.209
+   logA       0.078534       0.013727            0.175
+     ns       0.033284      0.0036756            0.110
+      h      0.0036311      0.0025049            0.690
+    mnu       0.095725        0.03341            0.349
+[PASS] E8 max(joint/PFS-only) = 0.690 (expect <= 1.02)
+```
+
+Every width shrinks; the loosest direction is `h` in both cases (0.622 / 0.690).
+
+### E9 — BBN redundancy
+
+`BBN effect on sigma(ombh2)`: **5.5%** (LCDM), **6.0%** (nuLCDM) — a few percent,
+as the probe-set decision predicted. BBN is retained as a deliberate consistency
+anchor, not because it carries the ombh2 constraint. Width source:
+`BBN_SIGMA_MOSSA = 0.00036` in `example/mcmc/scripts/stream_common.py`, whose
+provenance is `mcmc_cmb_bao_bbn_LCDM.ipynb` cell 2 (`MOSSABBN_SIGMA`), NOT the
+`fisher_joint_*` notebooks; the CENTER is the fiducial 0.02242, not Mossa's
+0.02233.
+
+### Profile-likelihood check (E11/E12) — PASS in both, tau and mnu included
+
+```
+chi2_prof(fiducial) = 1.231e-23   (LCDM;   noiseless-mock exactness tripwire, expect < 1e-10)
+[PASS] max |profile-min offset| = 0.000 sigma_F (< 0.1 tol) vs marginal-mean pulls |.| in [0.02, 0.24] sigma_F -- the likelihood peaks at fiducial; the pulls are marginalization-volume effects.
+```
+
+```
+chi2_prof(fiducial) = 1.193e-23   (nuLCDM; noiseless-mock exactness tripwire, expect < 1e-10)
+[PASS] max |profile-min offset| = 0.000 sigma_F (< 0.1 tol) vs marginal-mean pulls |.| in [0.01, 0.27] sigma_F -- the likelihood peaks at fiducial; the pulls are marginalization-volume effects.
+```
+
+All 6 (LCDM) / 7 (nuLCDM) shared parameters were scanned, tau included. tau's
+objective comes from the CMB quadratic form alone, so its profile is an exact
+parabola with its minimum at the fiducial (E12). mnu's grid is clipped to
+`>= 0`. The conclusion carries over from the PFS-only sections above: the
+likelihood peaks at the fiducial and every pull is a marginalization-volume
+effect.
+
+### Artifact provenance
+
+Both notebooks consume a precomputed CMB block and take no candl/clipy/.clik
+runtime dependency:
+
+| | LCDM | nuLCDM |
+|---|---|---|
+| artifact | `example/mcmc/cache/cmb_fisher_lcdm.npz` | `example/mcmc/cache/cmb_fisher_nulcdm.npz` |
+| `CMB_CONFIG_HASH` (pinned in `stream_common`, HARD-REQUIRED by `load_cmb_fisher_block`) | `97f8695acb8a0543...` | `e89efa399fe35590...` |
+| `theory_config_hash` | `903aeb06e1cca1c1...` | `8f0f2e74332a4a80...` |
+| method | hybrid GN (highl, Planck lensing, ACT DR6 lensing) + observed Hessian (lowl TT, lowl EE) | same |
+| shared-prior dedupe | `A_planck` sigma 0.0025, curvature 160000, count 4, subtracted 3 x 160000 = 480000 after summation | same (packed index 27) |
+| G1b `sigma_tau` | 0.007089623562031232 | 0.007376499170236379 |
+| G2 min eig (strict > 0) | 4188.532847 | 51.361321 |
+| G2 max eig | 1.83340e+08 | 1.83336e+08 |
+| G1a `lowl_ee_dtau` | -110.1132786885 | -110.0832864627 |
+| Fisher build time | 10.8 s | 10.9 s |
+
+Regeneration (from the repo root; the pinned hash must match or the build aborts
+nonzero before writing):
+
+```bash
+python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology lcdm
+python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
+```
+
+### Open items
+
+1. **`fisher_joint_PFS_BAO_CMB_{LCDM,nuLCDM}.ipynb` still carry the 4x
+   `A_planck` overcount** (and the observed-Hessian indefiniteness). Their
+   CMB-column logA widths are ~3-4% over-confident. DEFERRED — the scripts are
+   the production path; the MCMC notebooks here use the deduped artifacts.
+2. **nuLCDM notebook cell-30 print relabel, at the next execution.** The two
+   parentheticals `(PFS-only: 0.791)` and `~0.5 sigma_F` in the printed E13 lines
+   are Hessian-Fisher-flavored and are NOT like-for-like baselines for the
+   GN-flavored `wall_ratio` printed beside them. They were left byte-identical in
+   `e4d251a` to preserve source/output provenance (a fix would require a ~31 min
+   re-run); the flavor labels live in cell 28's markdown and cell 30's comment.
+   Relabel the f-strings whenever the notebook is next executed.
+3. **Rounding nit:** the wall-distance move 0.29 -> 1.58 sigma_F is 5.5x
+   (1.5753/0.28841 = 5.46), not the 5.4x quoted in an intermediate report.

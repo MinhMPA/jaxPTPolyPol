@@ -61,6 +61,105 @@ Priors are on `c0·A_AP·A_amp`, `bΓ3·A_AP·A_amp²`, etc. — so the effectiv
 6. **Acceptance gate:** (i) load-time spec validation; (ii) per-parameter width/mean unit tests incl. θ_NL-dependent entries at and off fiducial; (iii) end-to-end surrogate chain under the new priors (Taylor templates are prior-independent — no rebuild) vs Fisher with the same spec: widths/corrs in the established bands, means vs the AD-tilted center fid + F⁻¹∇logpost(fid) (extends the logdet-tilt rule — paper prior means are non-fiducial: c2→30, c̃→400, bΓ3→23/42(b1−1)). Overnight DA exact-chain confirmation optional.
 7. **Scope:** Stream-B ends with the LCDM MCMC notebook switched to the new spec (keeping the exact-RWMH sampler; surrogate/DA promotion is a separate follow-up). Fisher example notebooks stay on the legacy spec pending a separate migration; the gate itself exercises the Fisher-from-spec path. nuLCDM assemblies must call `load_desi_prior_spec(..., phase="nulcdm")` — the loader enforces the b1σ8 measure there.
 
+**Joint PFS+CMB MCMC forecasts — CMB treatment (DECIDED 2026-08-06).** For the joint
+MCMC forecast notebooks (PFS P+B + Planck CMB [+ BBN], LCDM and nuLCDM), the CMB
+enters as a **fiducial-centered Gaussian likelihood term**: −½ Δθᵀ F_cmb Δθ in the
+sampled cosmology(+tau) basis, where F_cmb is the Hessian-Fisher of the full candl
+stack (Planck high-ℓ TTTEEE + low-ℓ TT + low-ℓ EE simall + Planck/ACT lensing,
+CMB nuisances Schur-marginalized) at the fiducial — the same object the
+`fisher_joint_PFS_BAO_CMB_*` notebooks build. Rationale: the PFS data vector is a
+NOISELESS fiducial mock (Poisson noise in the covariance only), so a consistent
+forecast requires every likelihood term to peak at the fiducial; the Gaussian CMB
+term preserves the chi2(fid)=0 tripwire, the profile-likelihood check, and exact
+MCMC↔Fisher comparability. Rejected: real-Planck candl data (posterior would center
+on Planck's best fit ≠ fiducial — reserve for a separate "PFS + real Planck"
+analysis); mock-injection into .clik files (plumbing risk, payoff limited to
+CMB-side non-Gaussianity, which is not what these forecasts measure). Consequences:
+tau becomes a genuinely sampled dimension constrained by the CMB curvature (no tau
+prior — post-simall-fix doctrine), and ALL non-Gaussianity of the joint posterior is
+PFS-side (volume effects + the Σm_ν wall); the tau marginal is exactly Gaussian by
+construction. **IMPLEMENTED 2026-08-07** in `example/mcmc/mcmc_joint_PFS_BAO_CMB_BBN_LCDM.ipynb`
+(commit `e1fb52b`, NUTS 4×5000, `log_post_joint(θ0) = −167.752302`) and
+`..._nuLCDM.ipynb` (`a71e949`/`e4d251a`, RWMH 4×200k seed 20260806,
+`−173.635756`): tau is sampled with no prior and no bound, σ(tau) = 0.0060 (LCDM,
+0.843× CMB-alone 0.007090) / 0.0069 (nuLCDM, 0.980× CMB-alone 0.007376 — m_ν
+absorbs the degeneracy-breaking), corr(logA,tau) = +0.900/+0.923 chain vs
++0.898/+0.930 Fisher, and both profile checks PASS at 0.000 σ_F with
+chi2_prof(fid) ≈ 1.2e-23. Full numbers:
+`docs/design/perbin-compile-measurements.md` §"Joint PFS+BAO+CMB+BBN MCMC
+forecasts (2026-08-07)".
+
+**Joint PFS+CMB MCMC forecasts — probe set (DECIDED 2026-08-06).** The combination is
+**PFS P+B + DESI DR2 BAO + CMB(Gaussian, above) + BBN(fiducial-centered)**, for both
+LCDM and nuLCDM. BBN prior: **ombh2 = 0.02242 (fiducial) ± 0.00036** — Mossa et al.
+(2020) width, but the center is the fiducial, NOT Mossa's 0.02233: a real-data mean
+breaks the peaks-at-fiducial forecast doctrine (0.25σ_BBN spurious pull). BBN is
+nearly redundant with primary TT/TE/EE on ombh2 (~2% width effect) and is retained as
+a deliberate consistency anchor. **No ns10 prior** in CMB-containing combinations
+(CMB constrains ns; matches the fisher_joint exclusion convention). This probe set
+has no committed `fisher_joint_*` counterpart (those exclude BBN when CMB is
+present), so each MCMC notebook builds its **own matching comparison Fisher inline**:
+F_pfs_bao_shared + F_cmb_shared + F_bbn, in the shared basis
+(ombh2, omch2, logA, ns, h, tau[, mnu]) with tau constrained only by the CMB block.
+The DESI DR1-reanalysis EFT/stochastic priors stay on the PFS block as in production.
+F_cmb is provisioned as a **precomputed cached artifact** (`example/mcmc/cache/
+cmb_fisher_{lcdm,nulcdm}.npz`, built by `scripts/build_cmb_fisher_block.py` reusing
+the fisher_joint cells; META carries likelihood terms, emulator paths, and the
+theory-config hash with the enforce-if-present guard pattern) — the MCMC notebooks
+load it and never take candl/clipy/.clik as runtime dependencies.
+**IMPLEMENTED 2026-08-07** (same two notebooks): the inline comparison Fisher
+`F_cmp` lands within ~1% of the committed `fisher_joint_PFS_BAO_CMB_LCDM.ipynb`
+column, MCMC/Fisher σ ratios are 0.99–1.01 (LCDM, 6 params) and 0.95–0.99
+(nuLCDM, 6 of 7 — m_ν 0.88 is the wall), σ(m_ν) = 0.033410 eV = 2.87× tighter
+than PFS-only 0.095725 eV, and information only adds (E8 max joint/PFS-only
+0.622 / 0.690). The old `COSMO_PRIORS = {'ombh2','ns'}` are removed to avoid
+double-counting BBN/CMB — evidenced by the prior-entry counts 79→77 (whitening)
+and 93→91 (comparison), NOT by lp0, which a fiducial-centered Gaussian prior
+leaves exactly unchanged. BBN's measured effect on σ(ombh2) is 5.5% (LCDM) /
+6.0% (nuLCDM), confirming the "nearly redundant, kept as an anchor" rationale.
+
+**F_cmb method (DECIDED 2026-08-07, two-branch experiment): hybrid Gauss–Newton
+expected Fisher**, not the observed Hessian. The nuLCDM observed Hessian is
+indefinite (one eig −0.25 raw, ~1e-9 relative, along the H0–mnu geometric
+degeneracy — real-Planck-data residual curvature at our fiducial, sourced 93% by
+plik TTTEEE per the per-term diagnostic). Adopted branch `expt/cmb-expected-fisher`:
+GN (JᵀC⁻¹J) for the Gaussian-bandpower terms (plik high-ℓ TTTEEE, Planck lensing,
+ACT DR6 lensing), observed Hessian for the non-Gaussian low-ℓ terms (commander TT,
+simall EE — net positive along the degeneracy direction); per-build validation of
+the reconstructed models against the untouched log_like (value + full 28-dim
+Hessian, ~1e-15). Rejected: PSD-clip (branch `expt/cmb-psd-clip`, kept unmerged as
+the documented fallback) — a clipped eigenvalue is a repair, not a forecast
+statement, and it retains real-data contamination in retained directions. The
+joint-proxy forecast is insensitive to the choice (σ(mnu) 0.0387 GN vs 0.0404
+clip vs 0.0957 PFS-only), so the decision is doctrinal. Known cross-cutting defect
+found by review during the experiment (fix required before artifacts are consumed):
+the shared A_planck internal prior is counted once per Planck term (4×) in ANY
+sum-of-terms Fisher/Hessian with all_priors=True — this also afflicts the committed
+`fisher_joint_PFS_BAO_CMB_*` notebooks (~3–4% overconfident logA widths; separate
+follow-up). Fix mechanism (DECIDED 2026-08-07): automated shared-prior inventory
+across terms + duplicate-curvature subtraction after summation, prior widths read
+programmatically from the likelihood objects (per-term log_likes and their
+validation references stay untouched); hard abort if a shared prior's curvature
+cannot be located analytically. Provenance (DECIDED 2026-08-07): artifacts carry a
+content-derived `CMB_CONFIG_HASH` (sha256 over Cl-emulator file hashes, .clik
+content listings, clipy/candl/jax versions, per-term method map +
+GN_ALGORITHM_VERSION, shared-prior inventory, fiducial+basis) pinned in
+stream_common and HARD-REQUIRED by `load_cmb_fisher_block` — absent or mismatched
+fingerprint fails; no enforce-if-present grace (no legacy CMB artifacts exist).
+**IMPLEMENTED and CONSUMED 2026-08-07**: `example/mcmc/cache/cmb_fisher_{lcdm,
+nulcdm}.npz` (hashes pinned `97f8695a…` / `e89efa39…`, G2 min eig 4188.53 /
+51.3613 strict > 0, A_planck dedupe 3×160000 subtracted after summation) are
+loaded by both joint MCMC notebooks. The deferred `fisher_joint_PFS_BAO_CMB_*`
+A_planck overcount remains OPEN (~3–4% overconfident logA there). Measured
+consequences of the hybrid-GN choice for the m_ν wall, with σ_F flavors labelled:
+on matched Gauss–Newton denominators the truncation ratio moves 0.46 → 0.877 and
+the fiducial sits 0.29 → 1.58 σ_F above the wall (a large weakening), while the
+flavor-free evidence shows the bound is still load-bearing (wall-hit 3.24%,
+unchanged from PFS-only 3.24%; min(m_ν) = 0; σ-ratio 0.88 vs 0.95–0.99 for every
+other parameter). The 0.791 truncation ratio in the older notes is the
+Hessian-Fisher flavor (σ_F = 0.120937 eV) and must not be compared with the GN
+0.877.
+
 **nuLCDM production status (2026-08-05, retires the "on hold" note in Stream-B decision 7 above).** The nuLCDM P+B MCMC is now a committed production run: `example/mcmc/mcmc_joint_PFS_BAO_BBN_ns_nuLCDM.ipynb` — 6-key mnu-last cosmology basis (n_NL 26→27), RWMH 200k×4 draws (20k burn) on the prior-independent Taylor surrogate, seed 20260806, R-hat ≤ 1.0006, acceptance ≈ 0.28, and `log_post(x0) = −173.635756` under the fiducial-centered default (the earlier spec-means value −178.879579 is the `desi_paper` variant). Priors load via `load_desi_prior_spec("desi_dr1_reanalysis_2511_20757_b1s8", phase="nulcdm")` — the `_b1s8` variant's b1σ8 measure is MANDATORY in nuLCDM (the phase gate REFUSES `measure: raw`, since the dropped Π_b σ8 weight tilts Σm_ν; deviation 3). The Σm_ν prior is flat with the physical bound Σm_ν ≥ 0 (a −∞ indicator, RWMH-safe / NUTS-hostile), fiducial 0.06 eV. **The m_ν marginal is a truncated shape by construction, not a detection:** observed chain width 0.791× the untruncated Fisher σ (1-D truncated-normal analytic 0.697), 3.2% wall-hit — `example/mcmc/cache/nulcdm_gate_fiducial_means.json` (spec-means variant: `nulcdm_gate_spec_means.json`). The bound is load-bearing: the unbounded diagnostic collapsed to a spurious extrapolation mode at m_ν ≈ −0.33 eV outside the emulator/surrogate domain — `example/mcmc/cache/nulcdm_gate_fiducial_means_unbounded.json`, verdict **INVALID_CONFIGURATION**. Full convergence/measure/mnu-Jacobian evidence: `scripts/desi_prior_validation.py --cosmology nulcdm`.
 
 ### Templates (m₀, M)
