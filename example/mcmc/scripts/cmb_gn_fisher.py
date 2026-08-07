@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gauss-Newton (expected) Fisher pieces for the CMB likelihood terms.
+r"""Gauss-Newton (expected) Fisher pieces for the CMB likelihood terms.
 
 Motivation
 ----------
@@ -99,6 +99,27 @@ GN_TERMS = ("planck_highl", "planck_lensing", "act_dr6_lensing")
 #: Terms with a non-Gaussian likelihood -> observed Hessian is the only option.
 HESSIAN_TERMS = ("planck_lowl_tt", "planck_lowl_ee")
 
+#: Bumped whenever the Gauss-Newton construction changes in a way that alters
+#: the produced Fisher block. Feeds the artifact fingerprint.
+GN_ALGORITHM_VERSION = "1.0"
+
+
+class GNValidationError(RuntimeError):
+    """A reconstructed Gaussian form does not reproduce the candl/clipy term.
+
+    A dedicated exception rather than ``assert``: assertions are stripped by
+    ``python -O`` / ``PYTHONOPTIMIZE=1``, which would silently disable the only
+    check standing between a drifted clipy internal and a wrong Fisher block.
+    """
+
+
+class SharedPriorError(RuntimeError):
+    """A likelihood's internal priors could not be inventoried analytically."""
+
+
+class UnknownCmbTermError(RuntimeError):
+    """A term name belongs to neither ``GN_TERMS`` nor ``HESSIAN_TERMS``."""
+
 
 def _whitener_from_inv_cov(inv_cov):
     """``x -> A^T x`` with ``A A^T = S = C^-1``, so ``|A^T x|^2 == x^T S x``.
@@ -107,8 +128,14 @@ def _whitener_from_inv_cov(inv_cov):
     instead of only up to the rounding of an explicit ``J^T S J`` product.
     """
     S = np.asarray(inv_cov, dtype=np.float64)
-    S = 0.5 * (S + S.T)
-    chol = jnp.asarray(np.linalg.cholesky(S))
+    scale = max(float(np.abs(S).max()), 1.0)
+    asym = float(np.abs(S - S.T).max()) / scale
+    if asym > 1e-8:
+        raise SharedPriorError(
+            f"inverse covariance is not symmetric (max |S - S^T| / max |S| = "
+            f"{asym:.3g} > 1e-8); silently symmetrizing it would hide a "
+            "corrupted or mis-shaped covariance")
+    chol = jnp.asarray(np.linalg.cholesky(0.5 * (S + S.T)))
     return lambda x: chol.T @ x
 
 
@@ -175,7 +202,7 @@ def _clipy_cls_and_tot(likelihood, mapping, pars_to_theory_specs):
     for old, new in likelihood.rename_dict.items():
         tot_dict[old] = tot_dict[new]
         del tot_dict[new]
-    return cls, tot_dict, params_with_dls
+    return cls, tot_dict
 
 
 def _make_planck_highl_pieces(likelihood, *, pars_to_theory_specs, layout,
@@ -192,8 +219,8 @@ def _make_planck_highl_pieces(likelihood, *, pars_to_theory_specs, layout,
 
     def model_fn(theta):
         mapping = mapping_fn(theta)
-        cls, tot_dict, _ = _clipy_cls_and_tot(likelihood, mapping,
-                                              pars_to_theory_specs)
+        cls, tot_dict = _clipy_cls_and_tot(likelihood, mapping,
+                                           pars_to_theory_specs)
         cls = internal._calib(cls, tot_dict)
         rq = internal.get_model_rq(cls, tot_dict, do_bin)
         return rq.flatten()[internal.oo]
@@ -221,8 +248,8 @@ def _make_planck_lensing_pieces(likelihood, *, pars_to_theory_specs, layout,
 
     def model_fn(theta):
         mapping = mapping_fn(theta)
-        cls, tot_dict, _ = _clipy_cls_and_tot(likelihood, mapping,
-                                              pars_to_theory_specs)
+        cls, tot_dict = _clipy_cls_and_tot(likelihood, mapping,
+                                           pars_to_theory_specs)
         calib = jnp.asarray(1.0)
         if len(extra_names) == 1:
             a = jnp.asarray(tot_dict["A_planck"])
@@ -274,7 +301,7 @@ _BUILDERS = {
 }
 
 
-def make_prior_loglike_fn(likelihood, *, layout, fixed_cmb_params):
+def make_prior_loglike_fn(likelihood, *, layout, fixed_cmb_params=None):
     """Closure over the term's INTERNAL nuisance priors only.
 
     clipy adds ``self.prior(nuisance_dict)`` on top of the Gaussian chi2 inside
@@ -301,10 +328,23 @@ def make_prior_loglike_fn(likelihood, *, layout, fixed_cmb_params):
 
 def make_gn_pieces(term_name, likelihood, *, pars_to_theory_specs, layout,
                    fixed_cmb_params=None):
-    """Gauss-Newton ingredients for one term, or ``None`` if not Gaussian."""
+    """Gauss-Newton ingredients for one term, or ``None`` for a low-ell term.
+
+    ``None`` means "this term is on the observed-Hessian path", and it is
+    returned ONLY for the names in :data:`HESSIAN_TERMS`. An unrecognised term
+    name raises :class:`UnknownCmbTermError` -- previously it fell through to
+    ``None`` and silently took the observed-Hessian path, so a typo'd or newly
+    added term would have been Fishered by the wrong method without a word.
+    """
     builder = _BUILDERS.get(term_name)
     if builder is None:
-        return None
+        if term_name in HESSIAN_TERMS:
+            return None
+        raise UnknownCmbTermError(
+            f"unknown CMB term {term_name!r}: it is in neither GN_TERMS "
+            f"{GN_TERMS} nor HESSIAN_TERMS {HESSIAN_TERMS}. Classify it "
+            "explicitly -- a new term must not inherit the observed-Hessian "
+            "path by default.")
     pieces = builder(likelihood, pars_to_theory_specs=pars_to_theory_specs,
                      layout=layout, fixed_cmb_params=fixed_cmb_params)
     pieces["prior_loglike_fn"] = make_prior_loglike_fn(
@@ -340,20 +380,33 @@ def gn_fisher(pieces, theta):
 
 
 def validate_gn_term(term_name, pieces, term_loglike_fn, theta, *,
-                     value_rtol=1e-8, hess_rtol=1e-6):
+                     value_rtol=1e-8, hess_rtol=1e-12,
+                     directional_rtol=0.01):
     """Prove the reconstructed Gaussian form IS the term's likelihood.
 
-    Two checks, both against the untouched ``jaxptpolypol`` log-likelihood
+    Three checks, all against the untouched ``jaxptpolypol`` log-likelihood
     closure the observed-Hessian build uses:
 
     1. VALUE at the fiducial: ``gaussian + prior == log_like``;
     2. HESSIAN over the whole packed parameter vector: ``d2(gaussian + prior) ==
-       d2 log_like``. This is the strong one -- it holds only if the
-       reconstructed model vector is the right FUNCTION of theta, not merely the
-       right number at one point.
+       d2 log_like``, as a max-abs error relative to ``max |H_ref|``;
+    3. DIRECTIONAL, along the minimum-eigenvalue direction ``v`` of the
+       reference Fisher ``F_ref = -0.5 (H_ref + H_ref^T)``:
+       ``|v^T (F_got - F_ref) v| < directional_rtol * |lambda_min_ref|``.
 
-    Returns a dict of the measured discrepancies; raises ``AssertionError`` on
-    failure.
+    Why (3) exists. Check (2) is normalized by ``max |H_ref| ~ 2e8``, so even a
+    tight-looking ``hess_rtol`` buys a generous ABSOLUTE budget. The quantity
+    this whole module exists to get right is a near-null eigenvalue of order
+    1e-1 to 1e-2. A relative-to-the-largest-eigenvalue test is blind to it by
+    construction. Check (3) measures the error exactly where it matters, in the
+    units it matters in: a fraction of the smallest eigenvalue of the very
+    matrix being reconstructed. ``hess_rtol`` is 1e-12 (was 1e-6, which admitted
+    absolute errors ~2e2, i.e. ~400x the eigenvalue at stake).
+
+    Returns a dict of the measured discrepancies; raises
+    :class:`GNValidationError` on failure. NOT ``assert`` -- assertions are
+    stripped under ``python -O`` / ``PYTHONOPTIMIZE=1``, which would turn this
+    gate into a no-op exactly when someone runs the build "for speed".
     """
     gauss_fn = gaussian_loglike_from_pieces(pieces)
     prior_fn = pieces["prior_loglike_fn"]
@@ -370,6 +423,16 @@ def validate_gn_term(term_name, pieces, term_loglike_fn, theta, *,
     scale = max(np.abs(ref_h).max(), 1.0)
     hess_err = float(np.abs(got_h - ref_h).max() / scale)
 
+    # Fisher convention for the directional check: symmetrization is what makes
+    # v^T dF v == -v^T dH v, so the two conventions agree up to sign.
+    f_ref = -0.5 * (ref_h + ref_h.T)
+    f_got = -0.5 * (got_h + got_h.T)
+    eigvals, eigvecs = np.linalg.eigh(f_ref)
+    v = eigvecs[:, 0]
+    lam_min_ref = float(eigvals[0])
+    dir_err = float(abs(v @ (f_got - f_ref) @ v))
+    dir_budget = directional_rtol * abs(lam_min_ref)
+
     r = np.asarray(pieces["whiten"](pieces["data"] - pieces["model_fn"](theta)))
     chi2_resid = float(r @ r)
 
@@ -379,13 +442,228 @@ def validate_gn_term(term_name, pieces, term_loglike_fn, theta, *,
         "loglike_reconstructed": got_val,
         "value_rel_err": val_err,
         "hessian_max_rel_err": hess_err,
+        "hessian_max_abs_err": float(np.abs(got_h - ref_h).max()),
+        "min_eig_ref": lam_min_ref,
+        "directional_abs_err": dir_err,
+        "directional_budget": dir_budget,
         "n_data": int(np.asarray(pieces["data"]).shape[0]),
         "chi2_residual_at_fiducial": chi2_resid,
     }
-    assert val_err < value_rtol, (
-        f"{term_name}: reconstructed Gaussian log-like {got_val!r} != "
-        f"candl/clipy log_like {ref_val!r} (rel err {val_err:.3g})")
-    assert hess_err < hess_rtol, (
-        f"{term_name}: reconstructed Hessian differs from the candl/clipy "
-        f"Hessian by {hess_err:.3g} (relative to max |H| = {scale:.3g})")
+    if not val_err < value_rtol:
+        raise GNValidationError(
+            f"{term_name}: reconstructed Gaussian log-like {got_val!r} != "
+            f"candl/clipy log_like {ref_val!r} (rel err {val_err:.3g} >= "
+            f"{value_rtol:.3g})")
+    if not hess_err < hess_rtol:
+        raise GNValidationError(
+            f"{term_name}: reconstructed Hessian differs from the candl/clipy "
+            f"Hessian by {hess_err:.3g} relative to max |H| = {scale:.3g} "
+            f"(>= {hess_rtol:.3g})")
+    if not dir_err < dir_budget:
+        raise GNValidationError(
+            f"{term_name}: reconstructed Fisher differs from the candl/clipy "
+            f"Fisher by {dir_err:.6g} along the reference minimum-eigenvalue "
+            f"direction, which is >= {directional_rtol:.3g} of "
+            f"|lambda_min_ref| = {abs(lam_min_ref):.6g} (budget "
+            f"{dir_budget:.6g}). The near-null direction is exactly what this "
+            "block is built to get right.")
     return report
+
+
+# ---------------------------------------------------------------------------
+# Shared internal priors: inventory and duplicate-curvature removal.
+# ---------------------------------------------------------------------------
+
+def _enumerate_term_priors(term_name, likelihood, *, layout, fixed_cmb_params):
+    """``[(key, prior_loglike_fn(theta))]`` for every internal prior of a term.
+
+    ``key`` is a parameter name, or a tuple of names for clipy's joint priors.
+    The returned closures mirror ``clipy._clik_common.prior`` term by term, so
+    their sum is bit-for-bit the term's total prior log-likelihood -- which is
+    what :func:`inventory_shared_priors` then asserts.
+
+    candl likelihoods with a NON-EMPTY ``priors`` list raise: candl prior
+    objects are not enumerated here, and silently skipping them would under-count
+    the inventory. (ACT DR6 lens-only has ``priors == []``, and the
+    sum-consistency check below proves it.)
+    """
+    mapping_fn = _mapping_from_theta(layout, fixed_cmb_params)
+    clipy_priors = getattr(likelihood, "_prior", None)
+    if clipy_priors is None:
+        candl_priors = list(getattr(likelihood, "priors", []))
+        if candl_priors:
+            raise SharedPriorError(
+                f"{term_name}: candl likelihood carries {len(candl_priors)} "
+                "internal prior object(s), which this inventory cannot read "
+                "analytically. Enumerate them explicitly before building.")
+        return []
+
+    entries = []
+    for key, prior_fn in clipy_priors.items():
+        names = key if isinstance(key, tuple) else (key,)
+
+        def one_prior_loglike(theta, _names=names, _key=key, _fn=prior_fn):
+            mapping = mapping_fn(theta)
+            if isinstance(_key, tuple):
+                value = jnp.array([mapping[n] for n in _names])
+            else:
+                value = jnp.asarray(mapping[_names[0]])
+            return jnp.asarray(_fn(value), dtype=jnp.float64).reshape(())
+
+        entries.append((key, one_prior_loglike))
+    return entries
+
+
+def _packed_names(layout):
+    """Packed-vector index -> parameter name (requires scalar cosmo entries)."""
+    if any(int(s) != 1 for s in layout.cosmo_sizes):
+        raise SharedPriorError(
+            f"non-scalar cosmology entries in the layout ({layout.cosmo_sizes}); "
+            "the shared-prior inventory addresses parameters by packed index "
+            "and needs a one-slot-per-name layout")
+    names = list(layout.cosmo_keys) + [""] * (
+        layout.nuisance_offset - layout.n_cosmo)
+    names += list(layout.cmb_nuisance_names)
+    return names
+
+
+def _prior_curvature(prior_loglike_fn, theta):
+    """``-0.5 (H + H^T)`` of a prior log-likelihood over the packed vector."""
+    h = np.asarray(jax.hessian(prior_loglike_fn)(theta))
+    return -0.5 * (h + h.T)
+
+
+def inventory_shared_priors(likelihoods, *, layout, theta_fid,
+                            fixed_cmb_params=None, atol=1e-8, rtol=1e-10):
+    """Locate every internal prior and flag the ones counted more than once.
+
+    Each of the four Planck ``.clik`` likelihoods is loaded with
+    ``all_priors=True``, so each one folds the SAME Gaussian ``A_planck``
+    calibration prior into its own ``log_like``. Summing the five per-term
+    Fisher blocks therefore counts that one prior four times. This function
+    finds such priors; :func:`duplicate_prior_curvature` builds the correction.
+
+    Widths are never hardcoded: each prior's curvature is obtained by
+    differentiating the likelihood object's OWN prior callable, so it is the
+    effective curvature actually entering the sum. Two hard checks make that
+    trustworthy:
+
+    * COMPLETENESS -- for every term, the sum of the enumerated per-prior
+      curvatures must equal the curvature of the term's full prior
+      log-likelihood. A prior this function failed to enumerate cannot hide.
+    * GAUSSIANITY -- each prior's curvature must be independent of where it is
+      evaluated, checked by re-evaluating at a point perturbed along that
+      prior's OWN parameters. A non-quadratic prior has no single width and is
+      refused rather than linearized.
+
+    Returns ``{parameter_name: {"sigma", "curvature", "count", "terms",
+    "packed_index"}}`` for the parameters whose prior appears in more than one
+    term. Raises :class:`SharedPriorError` on anything it cannot resolve.
+    """
+    names = _packed_names(layout)
+    theta_fid = np.asarray(theta_fid, dtype=np.float64)
+    per_key = {}
+
+    for term_name, likelihood in likelihoods.items():
+        entries = _enumerate_term_priors(
+            term_name, likelihood, layout=layout,
+            fixed_cmb_params=fixed_cmb_params)
+        total = np.zeros((theta_fid.size, theta_fid.size))
+        for key, fn in entries:
+            curv = _prior_curvature(fn, jnp.asarray(theta_fid))
+            key_names = key if isinstance(key, tuple) else (key,)
+            try:
+                idx = [names.index(n) for n in key_names]
+            except ValueError as exc:
+                raise SharedPriorError(
+                    f"{term_name}: prior parameter {key!r} is not in the "
+                    "packed layout, so its curvature cannot be located") from exc
+            # Gaussianity: perturb along this prior's OWN parameters and require
+            # the curvature to be unchanged.
+            probe = theta_fid.copy()
+            for i in idx:
+                probe[i] += 0.05 * max(abs(theta_fid[i]), 1.0)
+            curv_probe = _prior_curvature(fn, jnp.asarray(probe))
+            drift = float(np.abs(curv_probe - curv).max())
+            span = max(float(np.abs(curv).max()), 1.0)
+            if drift / span > rtol:
+                raise SharedPriorError(
+                    f"{term_name}: prior on {key!r} is not Gaussian -- its "
+                    f"curvature moves by {drift:.6g} (relative {drift / span:.3g}"
+                    f" > {rtol:.3g}) when its own parameters are perturbed. A "
+                    "non-quadratic prior has no single width to subtract.")
+            total += curv
+            per_key.setdefault(key, []).append((term_name, curv))
+
+        reference = _prior_curvature(
+            make_prior_loglike_fn(likelihood, layout=layout,
+                                  fixed_cmb_params=fixed_cmb_params),
+            jnp.asarray(theta_fid))
+        span = max(float(np.abs(reference).max()), 1.0)
+        gap = float(np.abs(total - reference).max())
+        if gap / span > atol:
+            raise SharedPriorError(
+                f"{term_name}: the enumerated per-prior curvatures do not sum "
+                f"to the term's total prior curvature (max gap {gap:.6g}, "
+                f"relative {gap / span:.3g} > {atol:.3g}). Some internal prior "
+                "was not located; refusing to deduplicate against an "
+                "incomplete inventory.")
+
+    inventory = {}
+    for key, hits in per_key.items():
+        if len(hits) < 2:
+            continue
+        if isinstance(key, tuple):
+            raise SharedPriorError(
+                f"joint prior {key!r} is shared by {len(hits)} terms "
+                f"({[t for t, _ in hits]}); a joint prior has no scalar width "
+                "and this inventory refuses to deduplicate it blindly.")
+        base = hits[0][1]
+        for term_name, curv in hits[1:]:
+            gap = float(np.abs(curv - base).max())
+            span = max(float(np.abs(base).max()), 1.0)
+            if gap / span > rtol:
+                raise SharedPriorError(
+                    f"prior on {key!r} differs between {hits[0][0]!r} and "
+                    f"{term_name!r} (max curvature gap {gap:.6g}, relative "
+                    f"{gap / span:.3g} > {rtol:.3g}). These are not the same "
+                    "prior; deduplicating them would delete real information.")
+        index = names.index(key)
+        support = base.copy()
+        support[index, index] = 0.0
+        if float(np.abs(support).max()) > 0.0:
+            raise SharedPriorError(
+                f"prior on {key!r} has curvature outside its own diagonal "
+                "entry; it couples parameters and cannot be subtracted as a "
+                "scalar width.")
+        curvature = float(base[index, index])
+        if not curvature > 0.0:
+            raise SharedPriorError(
+                f"prior on {key!r} has non-positive curvature {curvature!r}; "
+                "no width can be derived from it.")
+        inventory[key] = {
+            "sigma": float(1.0 / np.sqrt(curvature)),
+            "curvature": curvature,
+            "count": len(hits),
+            "terms": [t for t, _ in hits],
+            "packed_index": int(index),
+        }
+    return inventory
+
+
+def duplicate_prior_curvature(inventory, size):
+    """``sum_p (count_p - 1) * curvature_p * e_p e_p^T`` -- what to subtract.
+
+    Subtracting AFTER summation is exact, not an approximation: a Gaussian
+    prior's Hessian is a constant matrix, so each of the ``count`` copies
+    contributes exactly ``curvature * e_p e_p^T`` to the summed block --
+    explicitly for the Gauss-Newton terms (which add the prior Hessian by hand)
+    and identically for the observed-Hessian terms (whose Hessian contains that
+    same constant). Removing ``count - 1`` copies restores single counting with
+    no residual.
+    """
+    correction = np.zeros((int(size), int(size)))
+    for entry in inventory.values():
+        i = entry["packed_index"]
+        correction[i, i] += (entry["count"] - 1) * entry["curvature"]
+    return correction

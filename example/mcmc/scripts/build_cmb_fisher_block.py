@@ -15,7 +15,7 @@ nuLCDM}.ipynb``:
   6. HARD GATES (abort loudly, no fallback):
        G1 (E1): |grad of the lowl_EE term wrt tau| > 0 at the fiducial, AND
                 sigma_tau = sqrt(inv(F_shared)[tau, tau]) in [0.004, 0.02];
-       G2 (E2): min(eigvals(F_shared)) >= 0, with NO eigenvalue clipping;
+       G2 (E2): min(eigvals(F_shared)) > 0, with NO eigenvalue clipping;
        G3 (E3): the d(shared)/d(native) Jacobian has J[h_row, H0_col] == 0.01;
   7. save the npz + META (incl. gate results, the per-term method and the exact
      build command).
@@ -41,9 +41,21 @@ construction; per-term attribution (report section on the diagnostic) shows
 rest -- both Gauss-Newton-able -- while the two low-ell terms contribute NET
 POSITIVE curvature there, so the hybrid cures it.
 
+Shared internal priors
+----------------------
+All four Planck ``.clik`` terms are loaded with ``all_priors=True``, so each one
+folds the SAME Gaussian ``A_planck`` calibration prior into its own log-like and
+the summed block counts it four times. Step 3 therefore ends with a shared-prior
+INVENTORY (widths read programmatically from the likelihood objects) and a
+duplicate-curvature subtraction applied AFTER summation -- which leaves every
+per-term log-likelihood, and hence every Gauss-Newton validation reference,
+untouched. The build aborts if any shared prior's curvature cannot be located
+analytically.
+
 Usage: ``python3 build_cmb_fisher_block.py --cosmology {lcdm,nulcdm}
-[--dry-run]``. ``--dry-run`` runs steps 1-2 shapes-only (no Fisher), prints
-the layout, exits 0.
+[--dry-run] [--diagnose-negative-mode]``, or ``--summary`` to regenerate the
+comparison JSON from the two existing artifacts. ``--dry-run`` runs steps 1-2
+shapes-only (no Fisher), prints the layout, exits 0.
 
 The output artifact is a GAUSSIAN summary of the CMB posterior centered on the
 FIDUCIAL cosmology -- a forecast object, not a fit to the real Planck/ACT data
@@ -90,7 +102,6 @@ from jaxptpolypol.cmb import (  # noqa: E402
     load_candl_likelihood,
     make_candl_loglike_fn,
     make_candl_pars_to_theory_specs_fn,
-    make_joint_loglike_fn,
 )
 from jaxptpolypol.inference import (  # noqa: E402
     marginalized_fisher_block,
@@ -163,6 +174,24 @@ SIGMA_TAU_RANGE = (0.004, 0.02)
 
 #: G1's gradient floor. A dead clipy simall spline returns EXACTLY 0.0 here.
 TAU_GRAD_FLOOR = 1e-3
+
+#: Marginalized 1-sigma widths from the PFS-ONLY production runs, in the shared
+#: basis. Used ONLY by ``--summary`` to build a joint-proxy regularizer
+#: ``F_reg = diag(1/sigma^2)`` so the CMB block's marginal widths can be quoted
+#: in a setting where every direction is constrained -- the CMB block alone does
+#: not constrain the PFS-facing directions. ``sigma = 0`` means "PFS carries no
+#: information on this parameter" (tau) and maps to a ZERO regularizer entry,
+#: i.e. infinite prior width. These are inputs to a diagnostic summary only;
+#: nothing in the artifact depends on them.
+PFS_ONLY_SIGMAS = {
+    "lcdm": {"ombh2": 0.00047985, "omch2": 0.0032185, "logA": 0.060783,
+             "ns": 0.027632, "h": 0.0035686, "tau": 0.0},
+    "nulcdm": {"ombh2": 0.00048188, "omch2": 0.0032276, "logA": 0.078534,
+               "ns": 0.033284, "h": 0.0036311, "mnu": 0.095725, "tau": 0.0},
+}
+
+#: Where ``--summary`` writes. The ONLY output path of that mode.
+SUMMARY_PATH = stream_common.CACHE_DIR / "cmb_block_branchB_summary.json"
 
 NOTEBOOK_DIR = pathlib.Path(__file__).resolve().parents[2] / "fisher"
 
@@ -341,14 +370,10 @@ def assemble(cosmology):
         )
         for term_name, like in likelihoods.items()
     }
-    joint_cmb_loglike = make_joint_loglike_fn(
-        extra_loglike_fns=[term_loglikes[name] for name in term_loglikes],
-    )
     return {
         "layout": layout, "theta_fid": theta_fid_cmb,
         "sampled_nuisance": sampled_nuisance,
         "term_loglikes": term_loglikes,
-        "joint_loglike": joint_cmb_loglike,
         "fiducial_cosmo_cmb": fiducial_cosmo_cmb,
         "likelihoods": likelihoods,
         "pars_to_theory_specs": pars_to_theory_specs,
@@ -366,10 +391,12 @@ def build_cmb_fisher_full(pieces):
     candl/clipy log-likelihood in BOTH value and full Hessian, otherwise the
     build aborts.
 
-    Returns ``(F_full, method_per_term, validation_reports)``.
+    Returns ``{"per_term", "method", "sources", "reports"}`` -- the per-term
+    blocks are kept so the caller can deduplicate shared priors and attribute
+    the negative mode without recomputing anything.
     """
     theta = pieces["theta_fid"]
-    method, reports, blocks = {}, [], []
+    method, sources, reports, per_term = {}, {}, [], {}
     for term_name, likelihood in pieces["likelihoods"].items():
         gn = cmb_gn_fisher.make_gn_pieces(
             term_name, likelihood,
@@ -378,27 +405,131 @@ def build_cmb_fisher_full(pieces):
             fixed_cmb_params=pieces["fixed_cmb_params"],
         )
         if gn is None:
-            hess = np.asarray(jax.jit(jax.hessian(
-                pieces["term_loglikes"][term_name]))(theta))
-            blocks.append(-0.5 * (hess + hess.T))
+            per_term[term_name] = observed_hessian_fisher(pieces, term_name)
             method[term_name] = "hessian"
+            sources[term_name] = (
+                f"{type(likelihood._internal).__module__}."
+                f"{type(likelihood._internal).__name__}: non-Gaussian "
+                "likelihood, observed Hessian -0.5 (H + H^T)")
             print(f"[method] {term_name:16s} hessian  (non-Gaussian "
                   "likelihood: no J^T C^-1 J exists)", flush=True)
             continue
         try:
             report = cmb_gn_fisher.validate_gn_term(
                 term_name, gn, pieces["term_loglikes"][term_name], theta)
-        except AssertionError as exc:
+        except cmb_gn_fisher.GNValidationError as exc:
             sys.exit(f"ABORT: Gauss-Newton validation failed -- {exc}")
         reports.append(report)
-        blocks.append(cmb_gn_fisher.gn_fisher(gn, theta))
+        per_term[term_name] = cmb_gn_fisher.gn_fisher(gn, theta)
         method[term_name] = "GN"
+        sources[term_name] = gn["source"]
         print(f"[method] {term_name:16s} GN       n_data={report['n_data']:5d}  "
               f"logL rel err {report['value_rel_err']:.3g}  "
-              f"Hessian rel err {report['hessian_max_rel_err']:.3g}  "
+              f"Hessian abs err {report['hessian_max_abs_err']:.3g}  "
+              f"dir err {report['directional_abs_err']:.3g} < "
+              f"{report['directional_budget']:.3g}  "
               f"chi2_resid(fid) {report['chi2_residual_at_fiducial']:.6g}",
               flush=True)
-    return sum(blocks), method, reports
+    return {"per_term": per_term, "method": method, "sources": sources,
+            "reports": reports}
+
+
+def observed_hessian_fisher(pieces, term_name):
+    """``-0.5 (H + H^T)`` of one term's log-likelihood at the fiducial."""
+    hess = np.asarray(jax.jit(jax.hessian(
+        pieces["term_loglikes"][term_name]))(pieces["theta_fid"]))
+    return -0.5 * (hess + hess.T)
+
+
+def apply_shared_prior_dedupe(pieces, F_full):
+    """Remove the duplicate curvature of priors shared across likelihood terms.
+
+    All four Planck ``.clik`` likelihoods are loaded with ``all_priors=True``,
+    so each one folds the SAME Gaussian ``A_planck`` calibration prior into its
+    own ``log_like``; summing the five per-term blocks counts it four times.
+    The widths are read from the likelihood objects themselves (never
+    hardcoded), and the subtraction happens AFTER summation so no per-term
+    log-likelihood -- and therefore no Gauss-Newton validation reference -- is
+    disturbed.
+
+    Returns ``(F_deduped, prior_policy)``.
+    """
+    inventory = cmb_gn_fisher.inventory_shared_priors(
+        pieces["likelihoods"], layout=pieces["layout"],
+        theta_fid=pieces["theta_fid"],
+        fixed_cmb_params=pieces["fixed_cmb_params"])
+    correction = cmb_gn_fisher.duplicate_prior_curvature(
+        inventory, F_full.shape[0])
+    if not inventory:
+        print("[priors] no prior is shared across terms; nothing to "
+              "deduplicate", flush=True)
+    for name, entry in inventory.items():
+        print(f"[priors] {name!r} prior appears in {entry['count']} terms "
+              f"{entry['terms']}: sigma = {entry['sigma']:.6g}, curvature = "
+              f"{entry['curvature']:.10g} each; subtracting "
+              f"{entry['count'] - 1} x {entry['curvature']:.10g} = "
+              f"{(entry['count'] - 1) * entry['curvature']:.10g} at packed "
+              f"index {entry['packed_index']}", flush=True)
+    before = float(np.linalg.eigvalsh(F_full).min())
+    F_dedup = F_full - correction
+    after = float(np.linalg.eigvalsh(F_dedup).min())
+    print(f"[priors] full-block min eig {before:.6g} -> {after:.6g}",
+          flush=True)
+    policy = {
+        "shared_prior_inventory": {
+            name: {k: v for k, v in entry.items()}
+            for name, entry in inventory.items()},
+        "total_curvature_subtracted": {
+            name: (entry["count"] - 1) * entry["curvature"]
+            for name, entry in inventory.items()},
+        "applied": "after summation of the per-term blocks",
+        "exactness": (
+            "Exact, not approximate: a Gaussian prior's Hessian is a constant "
+            "matrix, so each duplicate copy contributes exactly "
+            "curvature * e_p e_p^T to the summed block -- explicitly for the "
+            "Gauss-Newton terms (which add the prior Hessian by hand) and "
+            "identically for the observed-Hessian terms (whose Hessian "
+            "contains that same constant). Removing count-1 copies restores "
+            "single counting with no residual."),
+        "widths_source": (
+            "read programmatically by differentiating each likelihood "
+            "object's own prior callable; never hardcoded"),
+        "full_block_min_eig_before": before,
+        "full_block_min_eig_after": after,
+    }
+    return F_dedup, policy
+
+
+def diagnose_negative_mode(pieces, per_term_observed, n_cosmo):
+    """Per-term attribution of the observed-Hessian near-null eigenvalue.
+
+    This recomputes -- rather than quotes -- the numbers that motivated the
+    hybrid Gauss-Newton method. The summed Fisher is exactly additive over the
+    five terms in the packed basis, so for the nuisance-profiled minimum
+    eigenvector ``u`` of the nuisance-marginalized cosmology block,
+    ``sum_t u^T F_t u`` reproduces that eigenvalue exactly and splits it by
+    term with no bookkeeping slack. Deliberately computed on the PRE-dedupe
+    observed-Hessian sum: that is the object whose eigenvalue is being
+    explained, and per-term additivity is exact there.
+
+    Returns a structured dict (no prose, no retyped numbers).
+    """
+    F_obs = sum(per_term_observed.values())
+    A_cc = F_obs[:n_cosmo, :n_cosmo]
+    A_cn = F_obs[:n_cosmo, n_cosmo:]
+    A_nn = F_obs[n_cosmo:, n_cosmo:]
+    F_marg = A_cc - A_cn @ np.linalg.solve(A_nn, A_cn.T)
+    eigvals, eigvecs = np.linalg.eigh(F_marg)
+    v_cosmo = eigvecs[:, 0]
+    u = np.concatenate([v_cosmo, -np.linalg.solve(A_nn, A_cn.T @ v_cosmo)])
+    attribution = {t: float(u @ F @ u) for t, F in per_term_observed.items()}
+    return {
+        "basis": "observed Hessian, pre-dedupe, packed (cosmo + nuisance)",
+        "marginalized_min_eig": float(eigvals[0]),
+        "attribution_sums_to": float(sum(attribution.values())),
+        "direction_cosmo_components": [float(x) for x in v_cosmo],
+        "per_term": attribution,
+    }
 
 
 def make_cmb_to_shared(cosmology):
@@ -462,23 +593,28 @@ def gate_g1_sigma_tau(F_shared, shared_keys):
 
 
 def gate_g2_positive_definite(F_shared):
-    """G2 (E2): the shared-basis CMB Fisher must be positive semi-definite.
+    """G2 (E2): the shared-basis CMB Fisher must be positive DEFINITE.
 
-    NO clipping, no regularization: the hybrid Gauss-Newton block is PSD by
-    construction wherever it applies, so a failure here means the two low-ell
-    observed-Hessian terms have overwhelmed it and the method itself has to be
-    revisited -- not patched over.
+    Strict ``> 0``, as in the pre-branch baseline. The hybrid Gauss-Newton block
+    is PSD by construction wherever it applies and clears this comfortably
+    (+52.2 nuLCDM, +4332 LCDM); relaxing the comparison to ``>= 0`` would have
+    weakened the gate relative to the baseline for no benefit.
+
+    NO clipping, no regularization: a failure here means the two low-ell
+    observed-Hessian terms have overwhelmed the Gauss-Newton part and the method
+    itself has to be revisited -- not patched over.
     """
     eigvals = np.linalg.eigvalsh(np.asarray(F_shared))
     min_eig = float(eigvals.min())
-    if not min_eig >= 0.0:
+    max_eig = float(eigvals.max())
+    if not min_eig > 0.0:
         sys.exit(f"ABORT G2 (E2): min eigenvalue of F_shared = {min_eig:.6g} "
-                 "< 0 -- the projected CMB Fisher is not positive "
-                 f"semi-definite. Full spectrum: {eigvals.tolist()!r}")
+                 "<= 0 -- the projected CMB Fisher is not positive definite. "
+                 f"Full spectrum: {eigvals.tolist()!r}")
+    cond = f"{max_eig / min_eig:.6g}" if min_eig > 0.0 else "inf"
     print(f"[G2]  PASS  min eig(F_shared) = {min_eig:.6g}  "
-          f"(max {float(eigvals.max()):.6g}, cond "
-          f"{float(eigvals.max() / min_eig):.6g})", flush=True)
-    return min_eig, float(eigvals.max())
+          f"(max {max_eig:.6g}, cond {cond})", flush=True)
+    return min_eig, max_eig
 
 
 def gate_g3_jacobian(jacobian, cosmology):
@@ -497,15 +633,89 @@ def gate_g3_jacobian(jacobian, cosmology):
 
 
 # ---------------------------------------------------------------------------
+# Summary mode.
+# ---------------------------------------------------------------------------
+
+def write_summary():
+    """Regenerate the branch-B comparison JSON from the two built artifacts.
+
+    Reads only; the ONLY thing it writes is :data:`SUMMARY_PATH`. Previously
+    this JSON was produced by an uncommitted scratch script, so the numbers in
+    it had no reproducible provenance.
+    """
+    out = {}
+    for cosmology in ("lcdm", "nulcdm"):
+        path = cmb_fisher_path(cosmology)
+        if not path.is_file():
+            sys.exit(f"ABORT --summary: missing artifact {path}; build both "
+                     "cosmologies first.")
+        with np.load(path, allow_pickle=False) as z:
+            fisher = np.asarray(z["F_cmb_shared"], dtype=np.float64)
+            keys = [str(k) for k in z["shared_keys"]]
+            sigma_tau = float(z["sigma_tau"])
+            meta = json.loads(str(z["meta_json"]))
+        sigmas = PFS_ONLY_SIGMAS[cosmology]
+        missing = [k for k in keys if k not in sigmas]
+        if missing:
+            sys.exit(f"ABORT --summary: no PFS-only sigma for {missing} "
+                     f"({cosmology}); refusing to guess a regularizer entry.")
+        reg = np.array([1.0 / sigmas[k] ** 2 if sigmas[k] > 0 else 0.0
+                        for k in keys])
+        cov = np.linalg.inv(fisher + np.diag(reg))
+        out[cosmology] = {
+            "shared_keys": keys,
+            "sigma_tau": sigma_tau,
+            "eigenvalues": sorted(
+                float(v) for v in np.linalg.eigvalsh(fisher)),
+            "method_per_term": meta["method"]["per_term"],
+            "negative_mode_attribution": meta["method"][
+                "negative_mode_attribution"],
+            "prior_policy": meta["prior_policy"],
+            "cmb_config_hash": meta.get("cmb_config_hash"),
+            "marginal_sigmas_when_regularized": {
+                k: float(np.sqrt(cov[i, i])) for i, k in enumerate(keys)},
+            "regularizer_sigmas_pfs_only": {k: sigmas[k] for k in keys},
+            "gates": meta["gates"],
+        }
+    out["_note"] = (
+        "Branch B (expt/cmb-expected-fisher): hybrid Gauss-Newton expected CMB "
+        "Fisher, with the shared-prior duplicate curvature removed. "
+        "marginal_sigmas_when_regularized = sqrt(diag(inv(F_shared + F_reg))) "
+        "with F_reg = diag(1/sigma^2) from the PFS-only production sigmas; "
+        "sigma = 0 (tau) means PFS carries no constraint -> zero regularizer "
+        "entry. No eigenvalue clipping was applied to F_shared. Regenerate "
+        "with: python3 example/mcmc/scripts/build_cmb_fisher_block.py --summary")
+    SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SUMMARY_PATH.write_text(json.dumps(out, indent=2) + "\n")
+    print(f"[summary] wrote {SUMMARY_PATH}", flush=True)
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Main.
 # ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--cosmology", required=True, choices=("lcdm", "nulcdm"))
+    parser.add_argument("--cosmology", choices=("lcdm", "nulcdm"),
+                        help="required unless --summary")
     parser.add_argument("--dry-run", action="store_true",
                         help="steps 1-2 only (no Fisher); print the layout")
+    parser.add_argument("--diagnose-negative-mode", action="store_true",
+                        help="additionally dump the full per-term negative-mode "
+                             "attribution as JSON (the attribution is computed "
+                             "and stored in META on EVERY build regardless)")
+    parser.add_argument("--summary", action="store_true",
+                        help="build no Fisher; regenerate the branch-B "
+                             "comparison JSON from the two existing artifacts")
     args = parser.parse_args()
+    if args.summary:
+        if args.cosmology:
+            sys.exit("ABORT: --summary reads BOTH artifacts; do not pass "
+                     "--cosmology with it.")
+        return write_summary()
+    if not args.cosmology:
+        parser.error("--cosmology is required unless --summary is given")
     cosmology = args.cosmology
     cfg = CONFIG[cosmology]
     build_command = ("python3 example/mcmc/scripts/build_cmb_fisher_block.py "
@@ -543,11 +753,31 @@ def main():
     print("Computing per-term CMB Fisher blocks (hybrid GN + low-ell "
           "Hessian)...", flush=True)
     t_fisher = time.time()
-    F_cmb_full, method_per_term, gn_reports = build_cmb_fisher_full(pieces)
+    built = build_cmb_fisher_full(pieces)
+    F_cmb_full = sum(built["per_term"].values())
     fisher_seconds = time.time() - t_fisher
     print(f"[fisher] {fisher_seconds:.1f} s  shape {F_cmb_full.shape}  "
           f"min eig {float(np.linalg.eigvalsh(F_cmb_full).min()):.6g}",
           flush=True)
+
+    F_cmb_full, prior_policy = apply_shared_prior_dedupe(pieces, F_cmb_full)
+
+    print("Diagnosing the observed-Hessian negative mode (per-term "
+          "attribution)...", flush=True)
+    per_term_observed = {
+        t: (built["per_term"][t] if built["method"][t] == "hessian"
+            else observed_hessian_fisher(pieces, t))
+        for t in built["per_term"]}
+    negative_mode = diagnose_negative_mode(
+        pieces, per_term_observed, len(cfg["cosmo_keys"]))
+    print(f"[diagnose] observed-Hessian marginalized min eig = "
+          f"{negative_mode['marginalized_min_eig']:.6g}", flush=True)
+    for term_name, value in negative_mode["per_term"].items():
+        print(f"[diagnose]   {term_name:16s} {value:+.6g}", flush=True)
+    print(f"[diagnose]   {'SUM':16s} "
+          f"{negative_mode['attribution_sums_to']:+.6g}", flush=True)
+    if args.diagnose_negative_mode:
+        print(json.dumps(negative_mode, indent=2), flush=True)
 
     cmb_cosmo_idx = list(range(len(cfg["cosmo_keys"])))
     F_cmb_cosmo = marginalized_fisher_block(F_cmb_full, cmb_cosmo_idx)
@@ -576,32 +806,32 @@ def main():
         "n_nuisance": len(pieces["sampled_nuisance"]),
         "nuisance_names": list(pieces["sampled_nuisance"]),
         "fisher_seconds": round(fisher_seconds, 1),
+        "prior_policy": prior_policy,
         "method": {
-            "per_term": method_per_term,
+            "per_term": built["method"],
+            "sources": built["sources"],
+            "gn_algorithm_version": cmb_gn_fisher.GN_ALGORITHM_VERSION,
             "rationale": (
                 "Hybrid expected-Fisher build. Terms whose data model is "
-                "Gaussian in band powers (planck_highl via clipy smica "
-                "_internal.siginv, planck_lensing via clik siginv/pp_hat, "
-                "act_dr6_lensing via candl covariance_chol_dec) contribute the "
-                "Gauss-Newton expected Fisher J^T C^-1 J plus their internal "
-                "nuisance-prior curvature; each reconstructed Gaussian form is "
-                "validated against the untouched candl/clipy log_like in both "
-                "value and full Hessian to ~1e-15 before use. The two low-ell "
-                "terms are non-Gaussian likelihoods (planck_lowl_tt = Gibbs / "
-                "Blackwell-Rao cl2x spline, planck_lowl_ee = simall tabulated "
-                "probability spline) for which J^T C^-1 J does not exist, so "
-                "they keep the observed Hessian -0.5 (H + H^T). Motivation: the "
-                "observed Hessian of a real-data likelihood evaluated away from "
-                "its own maximum carries an indefinite residual-curvature term "
-                "that dominates near-null directions; per-term attribution "
-                "along the nuLCDM near-null mode gives planck_highl -0.248403, "
-                "planck_lensing -0.0964809, planck_lowl_tt -0.0251028, "
-                "planck_lowl_ee +0.071592, act_dr6_lensing +0.0321369 (sum "
-                "-0.266258), i.e. both dominant negative contributors are "
-                "Gauss-Newton-able and the low-ell pair is net positive there. "
-                "No eigenvalue clipping or regularization is applied anywhere."
+                "Gaussian in band powers contribute the Gauss-Newton expected "
+                "Fisher J^T C^-1 J plus their internal nuisance-prior "
+                "curvature; each reconstructed Gaussian form is validated "
+                "against the untouched candl/clipy log_like in value, full "
+                "Hessian and along the reference minimum-eigenvalue direction "
+                "before use (see method.gn_validation for the measured "
+                "errors). The two low-ell terms are non-Gaussian likelihoods "
+                "(planck_lowl_tt = Gibbs / Blackwell-Rao cl2x spline, "
+                "planck_lowl_ee = simall tabulated probability spline) for "
+                "which J^T C^-1 J does not exist, so they keep the observed "
+                "Hessian -0.5 (H + H^T). Motivation: the observed Hessian of a "
+                "real-data likelihood evaluated away from its own maximum "
+                "carries an indefinite residual-curvature term that dominates "
+                "near-null directions; see method.negative_mode_attribution "
+                "for the per-term split MEASURED during this build. No "
+                "eigenvalue clipping or regularization is applied anywhere."
             ),
-            "gn_validation": gn_reports,
+            "negative_mode_attribution": negative_mode,
+            "gn_validation": built["reports"],
         },
         "gates": {
             "G1a_lowl_ee_dtau": g_tau,
