@@ -81,9 +81,11 @@ PFS-side (volume effects + the Σm_ν wall); the tau marginal is exactly Gaussia
 construction. **IMPLEMENTED 2026-08-07** in `example/mcmc/mcmc_joint_PFS_BAO_CMB_BBN_LCDM.ipynb`
 (commit `e1fb52b`, NUTS 4×5000, `log_post_joint(θ0) = −167.752302`) and
 `..._nuLCDM.ipynb` (`a71e949`/`e4d251a`, RWMH 4×200k seed 20260806,
-`−173.635756`): tau is sampled with no prior and no bound, σ(tau) = 0.0060 (LCDM,
-0.843× CMB-alone 0.007090) / 0.0069 (nuLCDM, 0.980× CMB-alone 0.007376 — m_ν
-absorbs the degeneracy-breaking), corr(logA,tau) = +0.900/+0.923 chain vs
+`−173.635756`): tau is sampled with no prior and no bound. σ(tau), Fisher =
+0.005975 (LCDM) = 0.843× CMB-alone 0.007090, and 0.007228 (nuLCDM) = 0.980×
+CMB-alone 0.007376 — m_ν absorbs the degeneracy-breaking; the corresponding
+chain σ(tau) are 0.006035 (LCDM) and 0.006928 (nuLCDM), i.e. MCMC/Fisher 1.01 /
+0.96. corr(logA,tau) = +0.900/+0.923 chain vs
 +0.898/+0.930 Fisher, and both profile checks PASS at 0.000 σ_F with
 chi2_prof(fid) ≈ 1.2e-23. Full numbers:
 `docs/design/perbin-compile-measurements.md` §"Joint PFS+BAO+CMB+BBN MCMC
