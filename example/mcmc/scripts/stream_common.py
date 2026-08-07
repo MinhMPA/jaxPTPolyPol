@@ -494,8 +494,8 @@ BBN_SIGMA_MOSSA = 0.00036
 #: loader refuses rather than falling back, so an unpinned build cannot be
 #: consumed by accident. Re-pin from the build's ``[fingerprint]`` line whenever
 #: the CMB inputs legitimately change.
-CMB_CONFIG_HASH_LCDM = None
-CMB_CONFIG_HASH_NULCDM = None
+CMB_CONFIG_HASH_LCDM = '97f8695acb8a05435fe5e7dc3ec9f923b5a453de78d74b27a3b137190f2d8417'
+CMB_CONFIG_HASH_NULCDM = 'e89efa399fe355907dcd3f85cec47e72c799c694dce6e9d8f35adc93bb94d421'
 
 
 def cmb_fisher_path(cosmology, cache_dir=None):
