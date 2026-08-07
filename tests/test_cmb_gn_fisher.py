@@ -350,3 +350,103 @@ def test_inventory_rejects_uninventoried_candl_priors():
         cmb_gn_fisher.inventory_shared_priors(
             {"act": _CandlStub()}, layout=_layout(),
             theta_fid=jnp.asarray(np.zeros(4)))
+
+
+# ---------------------------------------------------------------------------
+# CMB_CONFIG_HASH pin enforcement in the builder (review round 2).
+#
+# The loader protects CONSUMERS from a drifted artifact. These tests protect the
+# ARTIFACT ITSELF: a build run in a drifted environment must not overwrite a
+# good production block with one the loader would reject and then exit 0. That
+# was the live behaviour -- the pin comparison only warned, the npz was written,
+# and a message-matching bootstrap escape swallowed the loader's refusal.
+# ---------------------------------------------------------------------------
+
+import ast  # noqa: E402
+
+import build_cmb_fisher_block as _build  # noqa: E402
+
+
+def test_pin_none_is_the_bootstrap_case(capsys):
+    """A content-derived hash cannot be pinned before it is computed."""
+    assert _build.enforce_cmb_config_hash_pin(
+        "lcdm", "abc123", pinned=None) is True
+    assert "pins None" in capsys.readouterr().out
+
+
+def test_pin_match_is_a_normal_build(capsys):
+    assert _build.enforce_cmb_config_hash_pin(
+        "lcdm", "abc123", pinned="abc123") is False
+
+
+def test_pin_mismatch_exits_nonzero_with_an_action_line(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        _build.enforce_cmb_config_hash_pin(
+            "nulcdm", "computed-now", pinned="pinned-earlier")
+    # sys.exit("message") -> the message IS the code, and the process exit
+    # status is 1. Assert the non-zero status the way Python defines it.
+    assert excinfo.value.code != 0
+    assert excinfo.value.code is not None
+    out = capsys.readouterr().out
+    assert "MISMATCH" in out
+    assert "ACTION" in out
+    assert "CMB_CONFIG_HASH_NULCDM = 'computed-now'" in out
+
+
+def test_pin_mismatch_does_not_clobber_an_existing_artifact(tmp_path,
+                                                            monkeypatch):
+    """The pre-existing production artifact must survive a drifted build."""
+    monkeypatch.setattr(_build.stream_common, "CACHE_DIR", tmp_path)
+    artifact = _build.cmb_fisher_path("lcdm")
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_bytes(b"PREVIOUS-GOOD-ARTIFACT")
+
+    with pytest.raises(SystemExit):
+        _build.enforce_cmb_config_hash_pin(
+            "lcdm", "computed-now", pinned="pinned-earlier")
+
+    assert artifact.read_bytes() == b"PREVIOUS-GOOD-ARTIFACT"
+
+
+def test_pin_is_enforced_before_the_artifact_is_written():
+    """Ordering invariant: the guard is useless if it runs after ``np.savez``.
+
+    Checked on the parsed source of ``main`` rather than by running a build,
+    which would need the full Planck/ACT data. A refactor that moves the write
+    above the pin check re-opens the silent-overwrite hole and fails here.
+    """
+    source = pathlib.Path(_build.__file__).read_text()
+    main_fn = next(node for node in ast.walk(ast.parse(source))
+                   if isinstance(node, ast.FunctionDef) and node.name == "main")
+    pin_lines = [n.lineno for n in ast.walk(main_fn)
+                 if isinstance(n, ast.Call)
+                 and getattr(n.func, "id", None) == "enforce_cmb_config_hash_pin"]
+    save_lines = [n.lineno for n in ast.walk(main_fn)
+                  if isinstance(n, ast.Call)
+                  and getattr(n.func, "attr", None) == "savez"]
+    assert len(pin_lines) == 1, "main() must enforce the pin exactly once"
+    assert len(save_lines) == 1, "main() must write the artifact exactly once"
+    assert pin_lines[0] < save_lines[0], (
+        "enforce_cmb_config_hash_pin must run BEFORE np.savez, or a mismatched "
+        "pin overwrites the production artifact before aborting")
+
+
+def test_loader_selfcheck_escape_is_keyed_on_the_pin_state_not_the_message():
+    """The escape must not match on exception text.
+
+    Matching ``"cmb_config_hash" in str(exc)`` also matched the MISMATCH
+    refusal, which is exactly how a drifted build exited 0.
+    """
+    source = pathlib.Path(_build.__file__).read_text()
+    main_fn = next(node for node in ast.walk(ast.parse(source))
+                   if isinstance(node, ast.FunctionDef) and node.name == "main")
+    handlers = [h for h in ast.walk(main_fn) if isinstance(h, ast.ExceptHandler)]
+    guards = [ast.unparse(n.test) for h in handlers for n in ast.walk(h)
+              if isinstance(n, ast.If)]
+    assert "bootstrap_pin" in guards, (
+        f"expected the loader self-check escape to be guarded by the pin state; "
+        f"found guards {guards}")
+    for guard in guards:
+        assert "str(exc)" not in guard, (
+            f"escape guard {guard!r} matches on exception text, which swallows "
+            "the mismatch refusal too")

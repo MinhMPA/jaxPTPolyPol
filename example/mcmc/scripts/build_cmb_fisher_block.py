@@ -709,6 +709,49 @@ def compute_cmb_config_hash(cosmology, *, method_per_term, prior_policy,
     return hashlib.sha256(payload.encode()).hexdigest(), components
 
 
+def enforce_cmb_config_hash_pin(cosmology, cmb_config_hash, *, pinned):
+    """Compare the freshly computed fingerprint against the pin. Abort on drift.
+
+    MUST be called BEFORE the artifact is written. Three outcomes:
+
+    * ``pinned is None`` -> returns ``True`` (BOOTSTRAP). A content-derived hash
+      cannot be pinned before the build that computes it, so the first build --
+      and the first after the CMB inputs legitimately change -- has nothing to
+      compare against. The artifact is written and the post-build loader
+      self-check is allowed to report the refusal instead of failing.
+    * ``pinned == cmb_config_hash`` -> returns ``False``. Normal build.
+    * otherwise -> ``sys.exit(1)``, BEFORE anything is written.
+
+    The mismatch case used to print a warning and carry on: the artifact was
+    overwritten, the post-build loader refused it, and a too-broad bootstrap
+    escape swallowed that refusal and returned 0. A build in a drifted
+    environment therefore replaced a good production artifact with an unloadable
+    one and reported success -- this repo's known silent-overwrite failure mode
+    (CLAUDE.md, 2026-08-04). Aborting before the write leaves the previous
+    artifact intact, which is the only outcome that cannot lose work.
+    """
+    if pinned is None:
+        print(f"[fingerprint] stream_common pins None for {cosmology!r}: pin "
+              "this value before any consumer can load the artifact",
+              flush=True)
+        return True
+    if pinned == cmb_config_hash:
+        return False
+    print(f"[fingerprint] MISMATCH: stream_common pins {pinned!r} for "
+          f"{cosmology!r}, this build computes {cmb_config_hash!r}. The CMB "
+          "inputs (emulators, .clik data, candl/clipy/jax versions, per-term "
+          "method, Gauss-Newton algorithm version, shared-prior policy, "
+          "fiducial or basis) have drifted since the pin.", flush=True)
+    print(f"[fingerprint] ACTION: if this drift is INTENDED, set "
+          f"CMB_CONFIG_HASH_{cosmology.upper()} = {cmb_config_hash!r} in "
+          "example/mcmc/scripts/stream_common.py and re-run. Otherwise restore "
+          "the pinned environment.", flush=True)
+    sys.exit(
+        f"ABORT: CMB_CONFIG_HASH_{cosmology.upper()} mismatch -- refusing to "
+        f"overwrite {cmb_fisher_path(cosmology)} with an artifact the loader "
+        "would reject. The existing artifact is UNCHANGED.")
+
+
 # ---------------------------------------------------------------------------
 # Summary mode.
 # ---------------------------------------------------------------------------
@@ -878,14 +921,10 @@ def main():
     print(f"[fingerprint] cmb_config_hash = {cmb_config_hash}", flush=True)
     pinned = (stream_common.CMB_CONFIG_HASH_LCDM if cosmology == "lcdm"
               else stream_common.CMB_CONFIG_HASH_NULCDM)
-    if pinned is None:
-        print(f"[fingerprint] stream_common pins None for {cosmology!r}: pin "
-              "this value before any consumer can load the artifact",
-              flush=True)
-    elif pinned != cmb_config_hash:
-        print(f"[fingerprint] WARNING: stream_common pins {pinned}, which this "
-              "build does NOT match; the artifact will be REFUSED by the "
-              "loader until the pin is updated", flush=True)
+    # BEFORE the write: a mismatched pin exits non-zero here, so a drifted
+    # environment cannot replace a good artifact with an unloadable one.
+    bootstrap_pin = enforce_cmb_config_hash_pin(
+        cosmology, cmb_config_hash, pinned=pinned)
 
     meta = {
         "cosmology": cosmology,
@@ -953,16 +992,18 @@ def main():
     # Read-back through the production loader: the artifact must satisfy the
     # very guards its consumers apply (cosmology / shared_keys / hashes).
     #
-    # One BOOTSTRAP exception. The CMB fingerprint is content-derived, so it
-    # cannot be pinned before the build that computes it; on the very first
-    # build (or the first after the inputs legitimately change) the pin is
-    # necessarily stale and the loader is RIGHT to refuse. That single case is
-    # reported as an actionable instruction. Every other loader complaint is a
-    # structural defect in the artifact and still aborts.
+    # Exactly ONE escape, and only when ``pinned is None``: a content-derived
+    # hash cannot be pinned before the build that computes it, so on a bootstrap
+    # build the loader is RIGHT to refuse and the right response is an
+    # actionable instruction. The escape is keyed on the PIN STATE, not on the
+    # text of the exception -- matching on the message also swallowed the
+    # MISMATCH refusal, which is how a drifted build used to overwrite a good
+    # artifact and still exit 0. A mismatch can no longer reach this point: it
+    # exits before the write.
     try:
         loaded = stream_common.load_cmb_fisher_block(cosmology)
     except ValueError as exc:
-        if "cmb_config_hash" in str(exc) or "CMB_CONFIG_HASH" in str(exc):
+        if bootstrap_pin:
             print(f"[loader] artifact written but NOT yet loadable: {exc}",
                   flush=True)
             print(f"[loader] ACTION: set CMB_CONFIG_HASH_"
