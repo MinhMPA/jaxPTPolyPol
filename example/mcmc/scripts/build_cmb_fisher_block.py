@@ -752,6 +752,60 @@ def enforce_cmb_config_hash_pin(cosmology, cmb_config_hash, *, pinned):
         "would reject. The existing artifact is UNCHANGED.")
 
 
+#: Substring identifying the ONE loader refusal a bootstrap build may survive:
+#: ``stream_common.load_cmb_fisher_block`` raises "no CMB_CONFIG_HASH is pinned
+#: for ..." when the pin is ``None``. Pinned by a covering test, because the
+#: escape below silently stops working if that message is ever reworded.
+_MISSING_PIN_MARKER = "CMB_CONFIG_HASH"
+
+
+def verify_artifact_round_trip(cosmology, *, bootstrap_pin, cmb_config_hash):
+    """Read the artifact back through the production loader.
+
+    The artifact must satisfy the very guards its consumers apply. Exactly ONE
+    refusal is survivable, and only under BOTH conditions:
+
+    * ``bootstrap_pin`` -- the pin is ``None``, so a content-derived fingerprint
+      could not have been pinned before the build that computes it; AND
+    * the loader's complaint is specifically the missing-pin one.
+
+    The conjunction matters in both directions:
+
+    * keying on the message ALONE also matched the pin-MISMATCH refusal, which
+      is how a drifted build used to overwrite a good artifact and exit 0
+      (fixed in the previous round; a mismatch now exits before the write, so it
+      cannot reach here at all);
+    * keying on ``bootstrap_pin`` ALONE swallows every OTHER loader failure
+      during a bootstrap build. The loader checks cosmology -> shared_keys ->
+      theory_config_hash -> CMB hash IN THAT ORDER, so a STRUCTURAL defect fires
+      FIRST and would have been reported as "written but NOT yet loadable" and
+      exited 0. That is precisely the bootstrap scenario -- changing the shared
+      basis is a prime reason to ``None`` the pin and rebuild -- so the widened
+      guard would have hidden a genuinely broken artifact exactly when it was
+      most likely to occur.
+
+    Returns ``True`` if the artifact loaded, ``False`` on the tolerated
+    bootstrap refusal. Any other loader complaint is a structural defect and
+    exits non-zero.
+    """
+    try:
+        loaded = stream_common.load_cmb_fisher_block(cosmology)
+    except ValueError as exc:
+        if bootstrap_pin and _MISSING_PIN_MARKER in str(exc):
+            print(f"[loader] artifact written but NOT yet loadable: {exc}",
+                  flush=True)
+            print(f"[loader] ACTION: set CMB_CONFIG_HASH_"
+                  f"{cosmology.upper()} = {cmb_config_hash!r} in "
+                  "example/mcmc/scripts/stream_common.py, then re-run this "
+                  "build to confirm the round-trip.", flush=True)
+            return False
+        sys.exit(f"ABORT: the artifact just written fails the production "
+                 f"loader's guards -- {exc}")
+    print(f"[loader] round-trip OK: F_shared {tuple(loaded['F_shared'].shape)}, "
+          f"sigma_tau {loaded['sigma_tau']:.6g}", flush=True)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Summary mode.
 # ---------------------------------------------------------------------------
@@ -989,33 +1043,8 @@ def main():
              meta_json=json.dumps(meta))
     print(f"[saved] {out_path}", flush=True)
 
-    # Read-back through the production loader: the artifact must satisfy the
-    # very guards its consumers apply (cosmology / shared_keys / hashes).
-    #
-    # Exactly ONE escape, and only when ``pinned is None``: a content-derived
-    # hash cannot be pinned before the build that computes it, so on a bootstrap
-    # build the loader is RIGHT to refuse and the right response is an
-    # actionable instruction. The escape is keyed on the PIN STATE, not on the
-    # text of the exception -- matching on the message also swallowed the
-    # MISMATCH refusal, which is how a drifted build used to overwrite a good
-    # artifact and still exit 0. A mismatch can no longer reach this point: it
-    # exits before the write.
-    try:
-        loaded = stream_common.load_cmb_fisher_block(cosmology)
-    except ValueError as exc:
-        if bootstrap_pin:
-            print(f"[loader] artifact written but NOT yet loadable: {exc}",
-                  flush=True)
-            print(f"[loader] ACTION: set CMB_CONFIG_HASH_"
-                  f"{cosmology.upper()} = {cmb_config_hash!r} in "
-                  "example/mcmc/scripts/stream_common.py, then re-run this "
-                  "build to confirm the round-trip.", flush=True)
-            print(f"[total] {time.time() - t0:.1f} s", flush=True)
-            return 0
-        sys.exit(f"ABORT: the artifact just written fails the production "
-                 f"loader's guards -- {exc}")
-    print(f"[loader] round-trip OK: F_shared {tuple(loaded['F_shared'].shape)}, "
-          f"sigma_tau {loaded['sigma_tau']:.6g}", flush=True)
+    verify_artifact_round_trip(cosmology, bootstrap_pin=bootstrap_pin,
+                               cmb_config_hash=cmb_config_hash)
     print(f"[total] {time.time() - t0:.1f} s", flush=True)
     return 0
 

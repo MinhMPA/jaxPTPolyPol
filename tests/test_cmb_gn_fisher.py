@@ -363,6 +363,7 @@ def test_inventory_rejects_uninventoried_candl_priors():
 # ---------------------------------------------------------------------------
 
 import ast  # noqa: E402
+import json  # noqa: E402
 
 import build_cmb_fisher_block as _build  # noqa: E402
 
@@ -431,22 +432,150 @@ def test_pin_is_enforced_before_the_artifact_is_written():
         "pin overwrites the production artifact before aborting")
 
 
-def test_loader_selfcheck_escape_is_keyed_on_the_pin_state_not_the_message():
-    """The escape must not match on exception text.
+def test_loader_selfcheck_escape_requires_both_pin_state_and_the_pin_message():
+    """The escape guard must be a CONJUNCTION of pin state AND the pin error.
 
-    Matching ``"cmb_config_hash" in str(exc)`` also matched the MISMATCH
-    refusal, which is exactly how a drifted build exited 0.
+    Both single-condition forms are bugs, and each was live at some point:
+
+    * message ALONE (``"cmb_config_hash" in str(exc)``) also matched the pin
+      MISMATCH refusal -> a drifted build overwrote a good artifact, exit 0;
+    * pin state ALONE (``bootstrap_pin``) swallows every OTHER loader failure
+      during a bootstrap build -- and the loader checks cosmology / shared_keys
+      / theory_config_hash BEFORE the CMB hash, so a structural defect fires
+      first and would have exited 0.
     """
     source = pathlib.Path(_build.__file__).read_text()
-    main_fn = next(node for node in ast.walk(ast.parse(source))
-                   if isinstance(node, ast.FunctionDef) and node.name == "main")
-    handlers = [h for h in ast.walk(main_fn) if isinstance(h, ast.ExceptHandler)]
+    fn = next(node for node in ast.walk(ast.parse(source))
+              if isinstance(node, ast.FunctionDef)
+              and node.name == "verify_artifact_round_trip")
+    handlers = [h for h in ast.walk(fn) if isinstance(h, ast.ExceptHandler)]
     guards = [ast.unparse(n.test) for h in handlers for n in ast.walk(h)
               if isinstance(n, ast.If)]
-    assert "bootstrap_pin" in guards, (
-        f"expected the loader self-check escape to be guarded by the pin state; "
-        f"found guards {guards}")
-    for guard in guards:
-        assert "str(exc)" not in guard, (
-            f"escape guard {guard!r} matches on exception text, which swallows "
-            "the mismatch refusal too")
+    assert len(guards) == 1, (
+        f"expected exactly one escape guard in verify_artifact_round_trip; "
+        f"found {guards}")
+    guard = guards[0]
+    assert "bootstrap_pin" in guard, (
+        f"escape guard {guard!r} is not keyed on the PIN STATE. Keying on the "
+        "exception message alone also matches the pin-MISMATCH refusal, which "
+        "lets a drifted build overwrite a good artifact and exit 0.")
+    # The marker may appear as the literal or via the named constant; what must
+    # be true is that the guard inspects the exception message for it.
+    inspects_message = "str(exc)" in guard and (
+        _build._MISSING_PIN_MARKER in guard or "_MISSING_PIN_MARKER" in guard)
+    assert inspects_message, (
+        f"escape guard {guard!r} is not keyed on the missing-pin MESSAGE. "
+        "Keying on the pin state alone swallows every other loader failure "
+        "during a bootstrap build -- and the loader checks cosmology, "
+        "shared_keys and theory_config_hash BEFORE the CMB hash, so a "
+        "structural defect fires first and would exit 0.")
+
+
+# --- behaviour of the round-trip self-check (round 3) -----------------------
+
+class _LoaderRaises:
+    """Stub for ``stream_common.load_cmb_fisher_block`` that always refuses."""
+
+    def __init__(self, message):
+        self.message = message
+
+    def __call__(self, cosmology, cache_dir=None):
+        raise ValueError(self.message)
+
+
+def test_bootstrap_escapes_only_the_genuine_missing_pin_error(monkeypatch,
+                                                              capsys):
+    """Legitimate bootstrap: pin is None, loader says so -> build succeeds."""
+    monkeypatch.setattr(
+        _build.stream_common, "load_cmb_fisher_block",
+        _LoaderRaises("no CMB_CONFIG_HASH is pinned for 'lcdm' in "
+                      "stream_common, so no artifact of that cosmology may be "
+                      "loaded. Build it and pin the fingerprint it reports"))
+    assert _build.verify_artifact_round_trip(
+        "lcdm", bootstrap_pin=True, cmb_config_hash="abc123") is False
+    out = capsys.readouterr().out
+    assert "NOT yet loadable" in out and "ACTION" in out
+
+
+def test_bootstrap_still_aborts_on_a_structural_loader_failure(monkeypatch):
+    """The regression this round fixes.
+
+    A shared-basis change is a prime reason to ``None`` the pin and rebuild, so
+    a bootstrap build is exactly when a shared_keys defect is most likely --
+    and the loader raises on it BEFORE it ever reaches the pin check.
+    """
+    monkeypatch.setattr(
+        _build.stream_common, "load_cmb_fisher_block",
+        _LoaderRaises("artifact shared_keys ['ombh2', 'omch2', 'logA', 'ns', "
+                      "'tau', 'h'] != expected ('ombh2', 'omch2', 'logA', "
+                      "'ns', 'h', 'tau')"))
+    with pytest.raises(SystemExit) as excinfo:
+        _build.verify_artifact_round_trip(
+            "lcdm", bootstrap_pin=True, cmb_config_hash="abc123")
+    assert excinfo.value.code not in (0, None)
+    assert "fails the production loader's guards" in str(excinfo.value.code)
+
+
+def test_bootstrap_aborts_on_a_wrong_cosmology_artifact(monkeypatch):
+    """Same class of defect, the loader's very first check."""
+    monkeypatch.setattr(
+        _build.stream_common, "load_cmb_fisher_block",
+        _LoaderRaises("artifact cosmology 'nulcdm' != requested 'lcdm'"))
+    with pytest.raises(SystemExit):
+        _build.verify_artifact_round_trip(
+            "lcdm", bootstrap_pin=True, cmb_config_hash="abc123")
+
+
+def test_non_bootstrap_aborts_even_on_the_missing_pin_message(monkeypatch):
+    """With a pin in place, nothing is survivable."""
+    monkeypatch.setattr(
+        _build.stream_common, "load_cmb_fisher_block",
+        _LoaderRaises("no CMB_CONFIG_HASH is pinned for 'lcdm'"))
+    with pytest.raises(SystemExit):
+        _build.verify_artifact_round_trip(
+            "lcdm", bootstrap_pin=False, cmb_config_hash="abc123")
+
+
+def test_round_trip_reports_success_when_the_artifact_loads(monkeypatch,
+                                                            capsys):
+    monkeypatch.setattr(
+        _build.stream_common, "load_cmb_fisher_block",
+        lambda cosmology, cache_dir=None: {
+            "F_shared": np.eye(6), "sigma_tau": 0.007089623562})
+    assert _build.verify_artifact_round_trip(
+        "lcdm", bootstrap_pin=True, cmb_config_hash="abc123") is True
+    assert "round-trip OK" in capsys.readouterr().out
+
+
+def test_missing_pin_marker_matches_the_real_loader_message(tmp_path,
+                                                            monkeypatch):
+    """Pin the COUPLING between the loader's wording and the escape marker.
+
+    If ``load_cmb_fisher_block``'s missing-pin message is ever reworded so it no
+    longer contains ``_MISSING_PIN_MARKER``, the escape silently stops working
+    and every legitimate bootstrap build starts aborting. Verified against the
+    real loader with a synthetic artifact -- no candl, no Planck data.
+    """
+    monkeypatch.setattr(_build.stream_common, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(_build.stream_common, "CMB_CONFIG_HASH_LCDM", None)
+    keys = list(_build.stream_common.SHARED_KEYS_CMB_LCDM)
+    k = len(keys)
+    meta = {"cosmology": "lcdm", "shared_keys": keys,
+            "theory_config_hash": _build.stream_common.THEORY_CONFIG_HASH,
+            "cmb_config_hash": "whatever"}
+    np.savez(_build.cmb_fisher_path("lcdm"),
+             F_cmb_shared=np.eye(k), fid_shared=np.zeros(k),
+             shared_keys=np.array(keys), F_cmb_native=np.eye(k),
+             fid_native=np.zeros(k), native_keys=np.array(keys),
+             sigma_tau=np.float64(0.007), meta_json=json.dumps(meta))
+
+    with pytest.raises(ValueError) as excinfo:
+        _build.stream_common.load_cmb_fisher_block("lcdm")
+    assert _build._MISSING_PIN_MARKER in str(excinfo.value), (
+        f"the loader's missing-pin message no longer contains "
+        f"{_build._MISSING_PIN_MARKER!r}, so the bootstrap escape in "
+        "verify_artifact_round_trip can never fire and every first build will "
+        "abort")
+    # ...and the escape does fire against the REAL loader.
+    assert _build.verify_artifact_round_trip(
+        "lcdm", bootstrap_pin=True, cmb_config_hash="abc123") is False
