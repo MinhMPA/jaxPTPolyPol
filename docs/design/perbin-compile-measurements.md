@@ -1371,8 +1371,11 @@ python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
    `e4d251a` to preserve source/output provenance (a fix would require a ~31 min
    re-run); the flavor labels live in cell 28's markdown and cell 30's comment.
    Relabel the f-strings whenever the notebook is next executed.
+   **DONE 2026-08-08** in the derived-projection execution round — see
+   "Deferred items discharged in this execution round" below.
 3. **Rounding nit:** the wall-distance move 0.29 -> 1.58 sigma_F is 5.5x
    (1.5753/0.28841 = 5.46), not the 5.4x quoted in an intermediate report.
+   **DONE 2026-08-08** — cell 28's markdown now reads 5.5x.
 4. **E3 projection unit test for `make_cmb_to_shared` never landed.** The plan's
    E3 row asks for a unit test on the native->shared Jacobian (the H0<->h
    factor-100 landmine, `J[h_row, H0_col] == 0.01`) in addition to the build-time
@@ -1384,8 +1387,181 @@ python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
    regression would be silent in a headless re-run. Convert to post-print asserts
    at each notebook's next execution (deferred for the same output-provenance
    reason as item 2).
+   **DONE 2026-08-08** — both joint notebooks now assert `E7_OK` / `E8_OK`
+   immediately after their prints.
 6. **`inventory_shared_priors(..., atol=1e-8)` is misnamed.** The value is
    compared against the RELATIVE residual `gap / span`
    (`example/mcmc/scripts/cmb_gn_fisher.py`), not an absolute one, and the
    function already takes a separate `rtol`. Rename to something unambiguous
    (e.g. `sum_rtol`) when that signature is next touched.
+
+## Derived-parameter constraints (2026-08-08)
+
+All four production `mcmc_joint_*` notebooks gained one markdown + one code cell
+(ids `derivedmd01` / `derivedcode01`, appended after each notebook's cosmology
+corner cell) that projects the posterior onto the derived basis — $(\Omega_m,
+\sigma_8, H_0)$ for LCDM, $(\Sigma m_\nu, \Omega_m, \sigma_8, H_0)$ for nuLCDM —
+and were fully re-executed at fixed seeds. Every previously committed number
+reproduced **bit-identically** (see "Determinism" below).
+
+**One map for both sides.** The cell builds
+`jaxptpolypol.derived.make_lcdm_derived_params_fn(cosmo.param_keys,
+cosmo.param_sizes, pklin_emulator=..., mnu_fixed=MNU_FIXED,
+sigma8_redshift=0.0)` — the same helper the `fisher_joint_*` notebooks project
+with — and wraps it to (i) scatter the sampled cosmology into the notebook's own
+native `cosmo_dict` basis at `cosmo_varied_global`, (ii) reorder the library's
+`(Omega_m, H0, sigma8)` output into the reported axis order, and (iii) for
+nuLCDM prepend $\Sigma m_\nu$ read back out of the native vector. The chain is
+mapped through `chunked_map(..., chunk_size=20_000)` over `jax.jit(jax.vmap(...))`
+and the comparison Fisher through `project_fisher_to_derived` — the **same**
+wrapper — so the sample clouds and the projected ellipses cannot disagree by
+construction. Parameters absent from the map ($\tau$, the per-bin bias block,
+the analytically marginalized $\theta_{\rm lin}$) are marginalized simply by not
+entering it; their correlations still propagate through $C = F^{-1}$.
+
+Hard asserts in the cell: projected chain finite; Jacobian finite and full row
+rank (3 / 4); $H_0 = 100\,h$ and
+$\Omega_m = (\omega_b + \omega_c + \Sigma m_\nu/93.14)/h^2$ at the fiducial to
+$10^{-12}$; and for nuLCDM the projected $\Sigma m_\nu$ column bit-identical to
+the chain's (identity-coordinate check). $\sigma_8$ is emulator-derived and is
+printed, never asserted.
+
+### Derived fiducials
+
+| | LCDM notebooks | nuLCDM notebooks |
+|---|---|---|
+| $\Omega_m$ | 0.311049 | 0.311049 |
+| $\sigma_8$ ($z=0$) | 0.810384 | 0.810337 |
+| $H_0$ | 67.6600 | 67.6600 |
+
+$\Omega_m$ includes $\Omega_\nu = \Sigma m_\nu/93.14 h^2$ at $\Sigma m_\nu =
+0.06$ eV (0.31105, not the massless 0.30964). The two $\sigma_8$ values differ
+only because the LCDM and nuLCDM notebooks load different linear-$P_k$ emulator
+networks (`jense_2023_camb_lcdm` vs `jense_2023_camb_mnu`). The LCDM value
+0.810384 and the projected Fisher widths in the PFS-only LCDM table below
+reproduce the `fisher_joint_PFS_BAO_BBN_ns_LCDM.ipynb` "PFS P+B+BAO+BBN+ns"
+projected column (0.31105 / 0.0070463, 0.81038 / 0.023876, 67.66 / 0.36491)
+to all printed digits — an independent cross-check that the MCMC notebooks and
+the Fisher notebooks drive the same projection.
+
+### PFS $P_\ell + B_0$ + DESI DR2 BAO + BBN + $n_{s,10}$, LCDM
+
+`mcmc_joint_PFS_BAO_BBN_ns_LCDM.ipynb`, comparison Fisher `F_pfs_bao_prior_cosmo`,
+4 x 5000 NUTS-on-surrogate draws.
+
+```
+    param        fid    MCMC mean   Fisher sig     MCMC sig   ratio
+  Omega_m    0.31105      0.30726    0.0070463    0.0067088    0.95
+   sigma8    0.81038      0.81791     0.023876     0.024277    1.02
+       H0      67.66       67.368      0.36491      0.35686    0.98
+residual pulls (sigma_F units): Omega_m=-0.54  sigma8=+0.32  H0=-0.80
+```
+
+### PFS $P_\ell + B_0$ + DESI DR2 BAO + BBN + $n_{s,10}$, nuLCDM
+
+`mcmc_joint_PFS_BAO_BBN_ns_nuLCDM.ipynb`, comparison Fisher
+`F_pfs_bao_prior_cosmo`, 4 x 180000 RWMH-on-surrogate draws.
+
+```
+    param        fid    MCMC mean   Fisher sig     MCMC sig   ratio
+      mnu       0.06      0.14719      0.20804     0.095725    0.46
+  Omega_m    0.31105      0.30996    0.0081674     0.007448    0.91
+   sigma8    0.81034      0.82682     0.023949     0.024906    1.04
+       H0      67.66       67.293      0.43902      0.36311    0.83
+residual pulls (sigma_F units): mnu=+0.42  Omega_m=-0.13  sigma8=+0.69  H0=-0.84
+```
+
+### PFS $P_\ell + B_0$ + DESI DR2 BAO + CMB + BBN, LCDM
+
+`mcmc_joint_PFS_BAO_CMB_BBN_LCDM.ipynb`, comparison Fisher `F_cmp` (6-key shared
+basis incl. $\tau$; $\tau$ marginalized by the projection), 4 x 5000 NUTS.
+
+```
+    param        fid    MCMC mean   Fisher sig     MCMC sig   ratio
+  Omega_m    0.31105      0.31166     0.002999    0.0029701    0.99
+   sigma8    0.81038      0.81054    0.0049869    0.0050225    1.01
+       H0      67.66       67.607      0.22525      0.22193    0.99
+residual pulls (sigma_F units): Omega_m=+0.21  sigma8=+0.03  H0=-0.24
+```
+
+### PFS $P_\ell + B_0$ + DESI DR2 BAO + CMB + BBN, nuLCDM
+
+`mcmc_joint_PFS_BAO_CMB_BBN_nuLCDM.ipynb`, comparison Fisher `F_cmp` (7-key
+shared basis incl. $\tau$ and $m_\nu$), 4 x 180000 RWMH.
+
+```
+    param        fid    MCMC mean   Fisher sig     MCMC sig   ratio
+      mnu       0.06     0.065965     0.038089      0.03341    0.88
+  Omega_m    0.31105      0.31181    0.0032304    0.0031351    0.97
+   sigma8    0.81034      0.80952    0.0087874    0.0080155    0.91
+       H0      67.66       67.589      0.26304      0.25049    0.95
+residual pulls (sigma_F units): mnu=+0.16  Omega_m=+0.24  sigma8=-0.09  H0=-0.27
+```
+
+### Reading the tables
+
+CMB information tightens the derived basis by a large factor at fixed model:
+$\sigma(\Omega_m)$ 0.0067 -> 0.0030 and $\sigma(H_0)$ 0.357 -> 0.222 (LCDM),
+0.0074 -> 0.0031 and 0.363 -> 0.250 (nuLCDM). The MCMC/Fisher width ratios sit
+in 0.95-1.02 (LCDM) and 0.88-1.04 (nuLCDM), i.e. the derived basis inherits the
+Gaussianity of the native one; all residual pulls are below 0.9 $\sigma_F$ and
+are marginalization-volume effects (the profile-likelihood cells in the same
+notebooks show the likelihood peaks at the fiducial).
+
+**The $\Sigma m_\nu$ rows restate the truncated-marginal caveat verbatim, with
+its $\sigma_F$ flavors.** $\Sigma m_\nu$ is an identity coordinate of the map,
+so its derived row is numerically the native row: the ratio is
+Gauss-Newton-flavored ($\sigma_F$ from `F_pfs_bao_prior_cosmo` / `F_cmp`) against
+a chain width truncated by the $\Sigma m_\nu \ge 0$ wall — **0.46 PFS-only** and
+**0.88 joint** on matched GN denominators. The validation gate's
+Hessian-flavored $\sigma_F$ (0.120937 eV,
+`cache/nulcdm_gate_fiducial_means.json`) gives a *different* PFS-only ratio,
+0.791; the two must never be mixed. The projected $\sigma_8$/$\Omega_m$/$H_0$
+rows of the nuLCDM tables inherit that truncation only through correlations,
+which is why their ratios stay in the Gaussian band while $\Sigma m_\nu$'s does
+not. Never quote $\sigma(\Sigma m_\nu)$ as a bare Gaussian width.
+
+### Determinism
+
+Each notebook was re-executed with `jupyter nbconvert --execute --inplace` at its
+committed seed after a SMOKE-branch gate run. A cell-id-keyed diff of **every**
+text output against `a4a697f` (the pre-edit state), ignoring CPU/wall-time
+strings and tqdm bars, found **zero** differences in all pre-existing cells of
+all four notebooks, except the single intended `sigma_F`-flavor relabel in the
+nuLCDM joint E13 print (values unchanged). Spot gates, fresh vs expected:
+
+| gate | expected | fresh |
+|---|---|---|
+| PFS-only LCDM lp0 | -167.752302 | -167.752302 |
+| PFS-only LCDM ratios | 1.00/0.94/0.97/0.99/0.98 | 1.00/0.94/0.97/0.99/0.98 |
+| PFS-only LCDM pulls | -0.62/-0.77/+0.56/+0.43/-0.80 | -0.62/-0.77/+0.56/+0.43/-0.80 |
+| PFS-only LCDM profile | PASS 0.001 sigma_F | PASS 0.001 sigma_F |
+| PFS-only nuLCDM lp0 | -173.635756 | -173.635756 |
+| PFS-only nuLCDM ratios | 0.98/0.87/0.59/0.95/0.83/0.46 | 0.98/0.87/0.59/0.95/0.83/0.46 |
+| PFS-only nuLCDM acceptance | [0.281, 0.281, 0.280, 0.284] | [0.281, 0.281, 0.280, 0.284] |
+| PFS-only nuLCDM profile | PASS 0.010 sigma_F | PASS 0.010 sigma_F |
+| joint LCDM lp0 | -167.752302 | -167.752302 |
+| joint LCDM acceptance / R-hat max | 0.882 / 1.00002 | 0.882 / 1.00002 |
+| joint LCDM sigma(tau) / corr(logA,tau) | 0.0060354 / +0.900 | 0.0060354 / +0.900 |
+| joint LCDM profile | PASS 0.000 | PASS 0.000 |
+| joint nuLCDM lp0 | -173.635756 | -173.635756 |
+| joint nuLCDM acceptance / R-hat max | [0.351, 0.350, 0.351, 0.353] / 1.00034 | [0.351, 0.350, 0.351, 0.353] / 1.00034 |
+| joint nuLCDM sigma(mnu) / sigma(tau) | 0.033410 / 0.0069281 | 0.033410 / 0.0069281 |
+| joint nuLCDM wall-hit / profile | 3.24% / PASS 0.000 | 3.24% / PASS 0.000 |
+
+Execution logs: `example/mcmc/cache/derived_{pfs,joint}_{lcdm,nulcdm}_{SMOKE,PROD}_20260808.log`.
+Production wall times (end-to-end nbconvert, incl. the one-time exact-path
+compile): PFS-only LCDM 20m37s, PFS-only nuLCDM 32m29s, joint LCDM 18m23s, joint
+nuLCDM 29m57s.
+
+### Deferred items discharged in this execution round
+
+* Open item 2 (nuLCDM joint cell-30 print relabel) — **done**. Both
+  parentheticals now carry each flavor explicitly: `(PFS-only, Hessian-flavored:
+  ~0.5 sigma_F; matched-GN: 0.29 sigma_F)` and `(PFS-only, Hessian-flavored
+  sigma_F: 0.791; matched-GN: 0.46)`. The cell's SIGMA_F-FLAVORS comment no
+  longer instructs a future relabel.
+* Open item 3 (5.4x -> 5.5x rounding nit in the nuLCDM joint markdown) — **done**.
+* Open item 5 (E7/E8 prints, not asserts) — **done**. Both joint notebooks now
+  carry `assert E7_OK` immediately after the E7 print and `assert E8_OK` after
+  the E8 print; prints kept verbatim.
