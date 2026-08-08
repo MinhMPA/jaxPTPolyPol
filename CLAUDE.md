@@ -120,3 +120,12 @@ Fiducial distances are computed once (outside JIT) via `compute_fiducial_distanc
   the start point and looked healthy while the 200k chain escaped into an invalid
   extrapolation region and collapsed). For diagnostics that RELAX constraints, validate
   with a production-scale run before trusting the configuration.
+- **Use `command grep` for any completeness claim — the shell `grep` lies here.**
+  (2026-08-08) The default `grep` in this environment is a ugrep wrapper with
+  `--ignore-files`, which SILENTLY skips whole directories its ignore rules cover
+  (`.superpowers/` among them) and exits 0 with no output — during the fisher_joint
+  CMB port it produced a first, false-empty repo-wide sweep for stale σ(m_ν) upper
+  limits. Never conclude "no occurrences anywhere" from bare `grep`: use
+  `command grep -rIn` (bypasses the wrapper) or `rg --no-ignore --hidden`, and state
+  in the report WHICH tool the sweep used. Note zsh needs quoted globs
+  (`--include='*.py'`).
