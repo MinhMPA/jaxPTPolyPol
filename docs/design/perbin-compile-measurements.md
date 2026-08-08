@@ -1227,49 +1227,69 @@ imposed (`min(tau) > 0` is a hard physicality assert, not a prior).
 
 **Why nuLCDM's ratio is so much closer to 1 (0.980 vs 0.843): mnu absorbs the
 degeneracy-breaking.** With mnu free, the direction along which PFS+BAO would
-otherwise donate information to tau is partly spent on mnu instead. The Task-4
-review confirmed this numerically rather than by assertion: refitting with mnu
-FIXED recovers ratio **0.927**, and the PFS+BAO-only sigma(logA) — the parameter
-tau is degenerate with — degrades by **3.4x** when mnu is freed
-(0.065085 -> 0.22439 in the two cell-29 gain tables, 3.45x).
+otherwise donate information to tau is partly spent on mnu instead. A ratio of
+**0.927** from an mnu-fixed refit has been quoted for this since the Task-4
+review — **do not cite it**; see the correction below. The reproducible
+evidence for the same claim is the artifact key `sigma_tau_mnu_fixed_refit` and
+the PFS+BAO-only sigma(logA) — the parameter tau is degenerate with — which
+degrades by **3.4x** when mnu is freed (0.065085 -> 0.22439 in the two cell-29
+gain tables, 3.45x).
 
-**What 0.927 IS, exactly** (added 2026-08-08 — the number was previously quoted
-with no definition, and is easy to confuse with a second, different mnu-fixed
-ratio):
+**Correction (2026-08-08): 0.927 is an unverified historical estimate, not a
+citable result.** Its numerator, `0.006579`, is an **uncommitted review-time
+quantity**: it exists nowhere in this repository outside prose quoting the ratio
+itself, and it does not reproduce from the committed artifact under any
+documented recipe.
 
+* An earlier version of this section asserted the numerator was "the mnu-dropped
+  CMB block plus a PFS-only diagonal-proxy regularizer". Computing exactly that
+  from `cmb_fisher_nulcdm.npz` and the summary JSON's own
+  `regularizer_sigmas_pfs_only` gives **sigma(tau) = 0.0062329**, ratio
+  **0.8781** — not 0.006579 / 0.927. An exhaustive search over all 31 non-empty
+  subsets of that regularizer set, the LCDM regularizer set, and the notebooks'
+  PFS+BBN+ns10 (0.9189) and PFS+BAO+BBN (0.8993) sigmas found nothing within
+  `2e-5` of 0.006579.
+* Second inconsistency: the same section called 0.927 "the mnu-fixed analogue of
+  the 0.980 row" above. The mnu-FREE counterpart of the proxy construction is
+  **0.948**, while 0.980's numerator (0.007228) is the comparison Fisher — the
+  two characterizations cannot both hold.
+* The arithmetic `0.927 x 0.0070984 = 0.00658` is real but **circular**: it says
+  only that the three quoted numbers are mutually consistent, not that the
+  numerator was built any particular way. No construction should be inferred
+  from it.
+
+**What IS committed and exactly reproducible**: the artifact key
+`sigma_tau_mnu_fixed_refit = 0.007098416627279937`, written by
+`python3 example/mcmc/scripts/build_cmb_fisher_block.py --summary` into
+`example/mcmc/cache/cmb_block_branchB_summary.json` (nuLCDM only; added in
+`c4c7d86`). It is **CMB-block-alone** — the mnu row/column is dropped and
+NOTHING else is changed, no external information of any kind is added — and it
+recomputes to all 18 digits straight from the artifact:
+
+```python
+F = np.load("example/mcmc/cache/cmb_fisher_nulcdm.npz")["F_cmb_shared"]
+keep = [i for i, k in enumerate(keys) if k != "mnu"]          # keys = shared_keys
+np.sqrt(np.linalg.inv(F[np.ix_(keep, keep)])[i_tau, i_tau])   # 0.007098416627279937
 ```
-0.927 = 0.006579 / 0.0070984 = 0.9268
-```
 
-It is a **joint-over-CMB-alone tau-width ratio with mnu held FIXED on both
-sides** — the mnu-fixed analogue of the 0.980 row in the table above, not a
-fixed-vs-marginalized ratio.
+**The physics, on numbers that reproduce.** Holding mnu FIXED brings nuLCDM's
+sigma(tau) from 0.0073765 to **0.0070984**, i.e. essentially the LCDM value
+**0.0070896** — the two are **0.124%** apart. Freeing the neutrino mass is
+therefore almost the whole of nuLCDM's weaker tau constraint, which supports
+"mnu absorbs the degeneracy-breaking" more directly, and far more verifiably,
+than 0.927 ever did.
 
-* **Denominator** `0.0070984` is exactly the artifact key
-  `sigma_tau_mnu_fixed_refit = 0.007098416627279937`, written by
-  `python3 example/mcmc/scripts/build_cmb_fisher_block.py --summary` into
-  `example/mcmc/cache/cmb_block_branchB_summary.json` (nuLCDM only; added in
-  `c4c7d86`). It is `sqrt(inv(F_shared with the mnu row/column DELETED)[tau,
-  tau])` — **CMB-block-alone**: the mnu row/col is dropped and NOTHING else is
-  changed, no external information of any kind is added.
-* **Numerator** `0.006579` adds a PFS-only diagonal-proxy regularizer to that
-  SAME mnu-dropped block. So the two are consistent BY CONSTRUCTION — the
-  artifact key is an input to the ratio, not a competing measurement — and
-  `0.927 x 0.007098416627279937 = 0.00658` recovers the numerator.
-
-**Do not confuse 0.927 with 0.962.** The ratio of the same artifact key to the
-mnu-MARGINALIZED `sigma_tau`,
+**Do not confuse the refit key with 0.962 either.** The ratio of that same key to
+the mnu-MARGINALIZED `sigma_tau`,
 
 ```
 0.007098416627279937 / 0.007376499170236379 = 0.9623
 ```
 
-is a **different quantity**: it is CMB-alone on both sides and measures how much
-of nuLCDM's weaker tau constraint is mnu absorbing the degeneracy-breaking
-(holding mnu fixed brings nuLCDM's sigma(tau) down to essentially the LCDM value
-0.0070896, 0.12% apart). 0.927 involves PFS-side information; 0.962 does not.
-The artifact's own `_note` states the distinction so the two cannot be conflated
-from inside the JSON.
+is a **different quantity** from any joint-over-CMB-alone ratio: it is CMB-alone
+on both sides, and it is the ratio form of the 0.124% statement above. The
+artifact's own `_note` carries the same definition and the same warning about
+0.927, so neither can be conflated from inside the JSON.
 
 corr(logA, tau), the CMB degeneracy the joint target must transport correctly:
 
@@ -1934,8 +1954,11 @@ The decomposition that explains them: each observed shift is the dedupe effect
 **+3.00%** LCDM, **+3.809%** nuLCDM) composed multiplicatively with the
 observed-Hessian -> hybrid-GN **method** swap.
 
-* LCDM CMB-alone logA: dedupe +3.00%, method -0.16%, product +2.84%. The net
-  move is the plan's dedupe number partly offset by the method swap.
+* LCDM CMB-alone logA: dedupe +2.998%, method **-0.149%**, product +2.84%. The
+  net move is the plan's dedupe number partly offset by the method swap. Only
+  the product is directly measured (0.013183 -> 0.013558 in the notebook); the
+  method figure is that product divided by the artifact-recorded dedupe, and the
+  five-significant-digit printed inputs bracket it within +/- 0.01 pp.
 * nuLCDM CMB-alone logA: dedupe +3.809%, method +27.85%, product +32.72%. The
   dedupe is the SMALLER half. Nothing here is a 3.8% story.
 
@@ -1987,11 +2010,21 @@ summed block along the `mnu` direction; removing it tightens those columns. This
 is the opposite sign from the dedupe (which can only loosen) and the two are
 independent effects.
 
-A repo-wide sweep (`command grep -rIn` over the working tree, excluding `.git`)
-for `0.1457`, `0.1275`, `0.0986`, `0.0788` found **no stale quotation of the old
-values** in any tracked document, notebook or source file — the only hits are
-inside the port's own untracked `.superpowers/` working notes. No further
-updates are outstanding.
+A repo-wide sweep found **no stale quotation of the old values** in any tracked
+document, notebook or source file — the only *relevant* hits are inside the
+port's own untracked `.superpowers/` working notes. Two caveats on how to read
+that claim:
+
+* The search was for the **prefixed** forms `0.1457`, `0.0986`, `< 0.1275`,
+  `< 0.0788`. The bare strings `0.1275`, `0.0788` and `0.0986` also occur in
+  unrelated tracked files (a `b1` sigma in `fisher_multibin_nuLCDM_AP.ipynb`, the
+  `nulcdm_gate_spec_means*.json` chain summaries, `.remember` logs) — coincidental
+  substrings, none of them a stale upper limit.
+* The tool was **`command grep -rIn`** over the working tree with `.git`
+  excluded, NOT the shell's `grep`. The default `grep` in this environment is a
+  ugrep wrapper with `--ignore-files`, which silently skips directories its
+  ignore rules cover — it is what produced a first, false-empty sweep here. Any
+  completeness claim of this kind in this repo should name the tool it used.
 
 ### The nuLCDM CMB-alone h and m_nu "improvements" are NOT like-for-like
 
