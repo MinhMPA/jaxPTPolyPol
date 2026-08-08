@@ -1566,6 +1566,20 @@ nuLCDM joint E13 print (values unchanged). Spot gates, fresh vs expected:
 | joint nuLCDM wall-hit / profile | 3.24% / PASS 0.000 | 3.24% / PASS 0.000 |
 
 Execution logs: `example/mcmc/cache/derived_{pfs,joint}_{lcdm,nulcdm}_{SMOKE,PROD}_20260808.log`.
+
+**Second execution round, same day (library extraction).** The ~120-line
+projection wrapper each of the four notebooks carried privately moved into
+`jaxptpolypol.derived.make_derived_projection_fn` +
+`format_derived_comparison_rows` (plotting stayed in the notebooks); only the
+`derivedcode01` cell changed, in each notebook. Bitwise equivalence of the old
+inline wrapper and the library one was proved BEFORE any notebook was touched --
+values and Jacobian, both cosmologies, real emulator, 64 draws. All four
+notebooks were then re-executed serially at their committed seeds and the
+cell-id-keyed text-output diff against the pre-edit state is **zero differences
+in all 32 / 36 / 32 / 36 cells**, so every number in the tables above still
+holds. Logs:
+`example/mcmc/cache/derived2_{pfs,joint}_{lcdm,nulcdm}_{SMOKE,PROD}_20260808.log`
+(smokes for one LCDM and one nuLCDM notebook; productions for all four).
 Production wall times (end-to-end nbconvert, incl. the one-time exact-path
 compile): PFS-only LCDM 20m37s, PFS-only nuLCDM 32m29s, joint LCDM 18m23s, joint
 nuLCDM 29m57s.
