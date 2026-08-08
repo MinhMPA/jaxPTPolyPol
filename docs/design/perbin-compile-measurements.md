@@ -2061,3 +2061,58 @@ writing):
 python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology lcdm
 python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
 ```
+
+### Scope: two sibling candl notebooks remain UN-PORTED and defective
+
+The port above, and every claim in this section, covers **only** the two
+`example/fisher/fisher_joint_PFS_BAO_CMB_*.ipynb` notebooks. Their siblings
+`example/fisher/fisher_cmb_candl_LCDM.ipynb` and
+`example/fisher/fisher_cmb_candl_nuLCDM.ipynb` were **not** ported and still
+carry, at HEAD, all three defects the port retired plus a fourth. They still
+build the CMB Fisher inline (`jax.hessian` of a `make_joint_loglike_fn` sum over
+the same five candl/clipy terms, cell 4 `compute_fisher_from_hessian`), so
+(i) the **A_planck 4x overcount is present and uncorrected** — `ordered_union`
+collapses the four Planck terms' calibration scalar into ONE packed slot
+(`planck_highl: 21` + `planck_lowl_tt: 1` + `planck_lowl_ee: 1` +
+`planck_lensing: 1` = 24 per-term scalars, `Sampled CMB nuisance count: 21`,
+`Full packed order length: 27` = 6 cosmo + 21 nuisance) while each of the four
+`.clik` terms is loaded with `all_priors=True` and folds that same Gaussian prior
+into its own log-like; there is no `apply_shared_prior_dedupe` anywhere in either
+notebook. The cached artifact's own META names the offender:
+`"A_planck": {"sigma": 0.0025, "curvature": 160000.0, "count": 4, "terms":
+["planck_highl","planck_lowl_tt","planck_lowl_ee","planck_lensing"],
+"packed_index": 26}` (27 for nuLCDM) — the same packed index the candl layout
+produces. (ii) The **committed Fishers are indefinite**: LCDM prints
+`rank=23/27, weak_modes=4, cond=inf, ... smallest eigenvalues: -7.410e-03,
+1.007e-03, 5.435e-03`; nuLCDM prints `rank=23/28, weak_modes=5, ... smallest
+eigenvalues: -3.525e-01, -7.146e-03, 1.023e-03` with
+`mode 0 [weak] eig=-3.525e-01: H0 (-0.988), mnu (+0.085), ...`, i.e. the
+negative direction is essentially `H0`, and the nuLCDM sigma table carries the
+same `RuntimeWarning: invalid value encountered in sqrt` signature of negative
+marginal variances documented above. (iii) The **committed outputs are stale
+against their own source**: cell 6's output prints
+`Tau prior sigma: 0.0073; diagonal-only tau sigma: 0.0005552` (LCDM) /
+`0.0005551` (nuLCDM), but `command grep` over both files finds `Tau prior sigma`
+**only inside outputs** and finds **zero** occurrences of `tau_prior` or
+`TAU_PRIOR` anywhere in the current cell sources — that print was removed when
+the tau-prior workaround was retired (simall became differentiable) and the
+notebooks were never re-executed. Their last content commit is `628a75d`
+("chore: snapshot user WIP on fisher/mcmc notebooks"), a WIP snapshot.
+
+**Re-executing them is explicitly NOT recommended.** Doing so would reintroduce
+exactly the runtime `candl` / `clipy` / `.clik` dependency (~2 GB of pinned
+Planck likelihood data, plus the cosmopower pickle-fallback path) that the port
+just removed from the two `fisher_joint_*` notebooks, and would still produce
+pre-dedupe, observed-Hessian numbers unless the dedupe and the hybrid-GN build
+were ported into them as well. They are kept as **reference material only** —
+the readable record of how the CMB block was originally constructed from the
+candl/clipy terms.
+
+**What to use instead:** `stream_common.load_cmb_fisher_block(cosmology)`, which
+returns the cached, A_planck-deduped, hybrid-GN, positive-definite,
+fingerprint-guarded block (`F_shared`, `fid_shared`, `shared_keys`, `sigma_tau`,
+`meta`) from `example/mcmc/cache/cmb_fisher_{lcdm,nulcdm}.npz`. Every current
+consumer — the two ported Fisher notebooks and the two joint MCMC notebooks —
+goes through it. A `SUPERSEDED / stale outputs` banner naming these defects was
+added as the first markdown cell of each candl notebook (markdown insert only;
+no cell was re-executed).
