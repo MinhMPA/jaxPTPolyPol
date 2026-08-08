@@ -1437,7 +1437,14 @@ printed, never asserted.
 $\Omega_m$ includes $\Omega_\nu = \Sigma m_\nu/93.14 h^2$ at $\Sigma m_\nu =
 0.06$ eV (0.31105, not the massless 0.30964). The two $\sigma_8$ values differ
 only because the LCDM and nuLCDM notebooks load different linear-$P_k$ emulator
-networks (`jense_2023_camb_lcdm` vs `jense_2023_camb_mnu`). The LCDM value
+networks (`jense_2023_camb_lcdm` vs `jense_2023_camb_mnu`). **Both networks are
+at $\Sigma m_\nu = 0.06$ eV for this comparison** (verified 2026-08-08 from the
+training configs: the LCDM YAML sets no neutrino parameters, so training used
+CAMB 1.5.2 defaults = one massive neutrino at 0.06 eV; the mnu variant merely
+promotes `mnu` to a varied input over [0, 0.5]). The 6e-5 relative $\sigma_8$
+gap is emulator interpolation noise at identical physics — there is NO
+massless-vs-massive fiducial asymmetry between $\Omega_m$ and $\sigma_8$; do
+not "correct" one against the other. The LCDM value
 0.810384 and the projected Fisher widths in the PFS-only LCDM table below
 reproduce the `fisher_joint_PFS_BAO_BBN_ns_LCDM.ipynb` "PFS P+B+BAO+BBN+ns"
 projected column (0.31105 / 0.0070463, 0.81038 / 0.023876, 67.66 / 0.36491)
