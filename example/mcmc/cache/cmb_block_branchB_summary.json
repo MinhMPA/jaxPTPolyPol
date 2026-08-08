@@ -66,7 +66,42 @@
       "exactness": "Exact, not approximate: a Gaussian prior's Hessian is a constant matrix, so each duplicate copy contributes exactly curvature * e_p e_p^T to the summed block -- explicitly for the Gauss-Newton terms (which add the prior Hessian by hand) and identically for the observed-Hessian terms (whose Hessian contains that same constant). Removing count-1 copies restores single counting with no residual.",
       "widths_source": "read programmatically by differentiating each likelihood object's own prior callable; never hardcoded",
       "full_block_min_eig_before": 0.00015430662200147937,
-      "full_block_min_eig_after": 0.0001542988705503211
+      "full_block_min_eig_after": 0.0001542988705503211,
+      "dedupe_width_effect": {
+        "basis": [
+          "ombh2",
+          "omch2",
+          "logA",
+          "ns",
+          "h",
+          "tau"
+        ],
+        "pre_dedupe_marginal_sigmas": [
+          0.0001433056550950979,
+          0.0010641533994170708,
+          0.013163324973379327,
+          0.004218952654215812,
+          0.004858126000486283,
+          0.007080703602905915
+        ],
+        "post_dedupe_marginal_sigmas": [
+          0.00014373561264438233,
+          0.0010727434236735948,
+          0.013557981059440376,
+          0.004235438729805287,
+          0.00489648277164264,
+          0.007089623562031232
+        ],
+        "shift_pct": [
+          0.30002831988669154,
+          0.8072167284556508,
+          2.9981489240687775,
+          0.39076228013605885,
+          0.7895384177462272,
+          0.12597560391676144
+        ],
+        "definition": "sqrt(diag(inv(F_shared))) of the nuisance-marginalized, shared-basis block built from the summed per-term Fisher BEFORE and AFTER the duplicate shared-prior curvature is subtracted, in `basis` order; shift_pct = 100 * (post/pre - 1), i.e. how much WIDER each marginal gets once the A_planck prior is counted once instead of four times."
+      }
     },
     "cmb_config_hash": "97f8695acb8a05435fe5e7dc3ec9f923b5a453de78d74b27a3b137190f2d8417",
     "marginal_sigmas_when_regularized": {
@@ -167,7 +202,46 @@
       "exactness": "Exact, not approximate: a Gaussian prior's Hessian is a constant matrix, so each duplicate copy contributes exactly curvature * e_p e_p^T to the summed block -- explicitly for the Gauss-Newton terms (which add the prior Hessian by hand) and identically for the observed-Hessian terms (whose Hessian contains that same constant). Removing count-1 copies restores single counting with no residual.",
       "widths_source": "read programmatically by differentiating each likelihood object's own prior callable; never hardcoded",
       "full_block_min_eig_before": 0.0001543029865066646,
-      "full_block_min_eig_after": 0.00015429304037990074
+      "full_block_min_eig_after": 0.00015429304037990074,
+      "dedupe_width_effect": {
+        "basis": [
+          "ombh2",
+          "omch2",
+          "logA",
+          "ns",
+          "h",
+          "tau",
+          "mnu"
+        ],
+        "pre_dedupe_marginal_sigmas": [
+          0.00018493107300081969,
+          0.0016177627742193143,
+          0.014757414799930266,
+          0.005389302033424929,
+          0.018970867085338173,
+          0.007375788257782554,
+          0.13696802303796857
+        ],
+        "post_dedupe_marginal_sigmas": [
+          0.00018496705316611224,
+          0.0016178668074785486,
+          0.01531955761909844,
+          0.005389543636847209,
+          0.019048027028622214,
+          0.007376499170236379,
+          0.138069232753783
+        ],
+        "shift_pct": [
+          0.01945598687593808,
+          0.006430686927161311,
+          3.809222867211348,
+          0.004483018780199188,
+          0.40672860621997486,
+          0.009638460717398267,
+          0.8039903704452067
+        ],
+        "definition": "sqrt(diag(inv(F_shared))) of the nuisance-marginalized, shared-basis block built from the summed per-term Fisher BEFORE and AFTER the duplicate shared-prior curvature is subtracted, in `basis` order; shift_pct = 100 * (post/pre - 1), i.e. how much WIDER each marginal gets once the A_planck prior is counted once instead of four times."
+      }
     },
     "cmb_config_hash": "e89efa399fe355907dcd3f85cec47e72c799c694dce6e9d8f35adc93bb94d421",
     "marginal_sigmas_when_regularized": {
@@ -198,7 +272,8 @@
       "G2_min_eig": 51.361320820136235,
       "G2_max_eig": 183335519.1133448,
       "G3_dh_dH0": 0.01
-    }
+    },
+    "sigma_tau_mnu_fixed_refit": 0.007098416627279937
   },
-  "_note": "Branch B (expt/cmb-expected-fisher): hybrid Gauss-Newton expected CMB Fisher, with the shared-prior duplicate curvature removed. marginal_sigmas_when_regularized = sqrt(diag(inv(F_shared + F_reg))) with F_reg = diag(1/sigma^2) from the PFS-only production sigmas; sigma = 0 (tau) means PFS carries no constraint -> zero regularizer entry. No eigenvalue clipping was applied to F_shared. Regenerate with: python3 example/mcmc/scripts/build_cmb_fisher_block.py --summary"
+  "_note": "Branch B (expt/cmb-expected-fisher): hybrid Gauss-Newton expected CMB Fisher, with the shared-prior duplicate curvature removed. marginal_sigmas_when_regularized = sqrt(diag(inv(F_shared + F_reg))) with F_reg = diag(1/sigma^2) from the PFS-only production sigmas; sigma = 0 (tau) means PFS carries no constraint -> zero regularizer entry. sigma_tau_mnu_fixed_refit (nuLCDM only) = sqrt(inv(F_shared with the mnu row/column DELETED)[tau, tau]), i.e. sigma(tau) with mnu held fixed rather than marginalized. It is a CMB-BLOCK-ALONE number: the mnu row/column is dropped and NOTHING else is changed, no external information of any kind is added. It is also the DENOMINATOR of the mnu-fixed joint-over-CMB-alone tau-width ratio (~0.927) reported elsewhere in this analysis, whose numerator adds a PFS-only diagonal-proxy regularizer to this same mnu-dropped block -- so the two are consistent BY CONSTRUCTION rather than competing measurements, and multiplying this value by that ratio recovers the numerator. No eigenvalue clipping was applied to F_shared. Regenerate with: python3 example/mcmc/scripts/build_cmb_fisher_block.py --summary"
 }

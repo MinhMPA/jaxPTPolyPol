@@ -589,6 +589,33 @@ def make_cmb_to_shared(cosmology):
     return cmb_to_shared
 
 
+def shared_basis_marginal_sigmas(F_full, cosmology, fiducial_cosmo_cmb):
+    """Shared-basis 1-sigma marginal widths of a packed (cosmo + nuisance) block.
+
+    Runs the SAME chain as the main build path -- Schur-marginalize the
+    nuisances away, project native -> shared -- and returns
+    ``sqrt(diag(inv(F_shared)))`` in ``shared_keys`` order.
+
+    Called TWICE per build, on the pre- and post-dedupe full blocks. The
+    duplication is deliberate: routing both through one function makes the two
+    vectors traverse byte-identical code, so their ratio isolates the
+    shared-prior deduplication and nothing else. (Reusing the main path's
+    already-projected ``F_cmb_shared`` for the post vector would have been
+    cheaper but would compare two differently-computed quantities.) That turns
+    the dedupe's effect on the widths into a measured, artifact-stored number
+    instead of a prose claim. Cost is one extra marginalize + invert;
+    milliseconds.
+    """
+    cfg = CONFIG[cosmology]
+    F_cosmo = marginalized_fisher_block(
+        F_full, list(range(len(cfg["cosmo_keys"]))))
+    fid = jnp.array([fiducial_cosmo_cmb[k] for k in cfg["cosmo_keys"]],
+                    dtype=jnp.float64)
+    F_shared, _fid, _jac, _cov = project_fisher_to_derived(
+        F_cosmo, fid, make_cmb_to_shared(cosmology))
+    return np.sqrt(np.diag(np.linalg.inv(np.asarray(F_shared))))
+
+
 # ---------------------------------------------------------------------------
 # Gates -- each aborts loudly; there is no fallback path.
 # ---------------------------------------------------------------------------
@@ -888,13 +915,32 @@ def write_summary():
             "regularizer_sigmas_pfs_only": {k: sigmas[k] for k in keys},
             "gates": meta["gates"],
         }
+        # sigma(tau) with mnu held fixed, to quantify how much of nuLCDM's
+        # weaker tau sharpening is mnu absorbing the degeneracy-breaking.
+        if cosmology == "nulcdm":
+            keep = [i for i, k in enumerate(keys) if k != "mnu"]
+            F_fixed = np.asarray(fisher)[np.ix_(keep, keep)]
+            i_tau = [k for k in keys if k != "mnu"].index("tau")
+            out[cosmology]["sigma_tau_mnu_fixed_refit"] = float(
+                np.sqrt(np.linalg.inv(F_fixed)[i_tau, i_tau]))
     out["_note"] = (
         "Branch B (expt/cmb-expected-fisher): hybrid Gauss-Newton expected CMB "
         "Fisher, with the shared-prior duplicate curvature removed. "
         "marginal_sigmas_when_regularized = sqrt(diag(inv(F_shared + F_reg))) "
         "with F_reg = diag(1/sigma^2) from the PFS-only production sigmas; "
         "sigma = 0 (tau) means PFS carries no constraint -> zero regularizer "
-        "entry. No eigenvalue clipping was applied to F_shared. Regenerate "
+        "entry. sigma_tau_mnu_fixed_refit (nuLCDM only) = sqrt(inv(F_shared "
+        "with the mnu row/column DELETED)[tau, tau]), i.e. sigma(tau) with mnu "
+        "held fixed rather than marginalized. It is a CMB-BLOCK-ALONE number: "
+        "the mnu row/column is dropped and NOTHING else is changed, no external "
+        "information of any kind is added. It is also the DENOMINATOR of the "
+        "mnu-fixed joint-over-CMB-alone tau-width ratio (~0.927) reported "
+        "elsewhere in this analysis, whose numerator adds a PFS-only "
+        "diagonal-proxy regularizer to this same mnu-dropped block -- so the "
+        "two are consistent BY CONSTRUCTION rather than competing "
+        "measurements, and multiplying this value by that ratio recovers the "
+        "numerator. "
+        "No eigenvalue clipping was applied to F_shared. Regenerate "
         "with: python3 example/mcmc/scripts/build_cmb_fisher_block.py --summary")
     SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
     SUMMARY_PATH.write_text(json.dumps(out, indent=2) + "\n")
@@ -971,6 +1017,9 @@ def main():
           f"min eig {float(np.linalg.eigvalsh(F_cmb_full).min()):.6g}",
           flush=True)
 
+    # Keep the PRE-dedupe block alive so the dedupe's effect on the shared-basis
+    # widths can be MEASURED below rather than asserted in prose.
+    F_cmb_full_pre_dedupe = F_cmb_full
     F_cmb_full, prior_policy = apply_shared_prior_dedupe(pieces, F_cmb_full)
 
     print("Diagnosing the observed-Hessian negative mode (per-term "
@@ -1005,6 +1054,32 @@ def main():
     min_eig, max_eig = gate_g2_positive_definite(F_cmb_shared)
     jac_entry = gate_g3_jacobian(jacobian, cosmology)
 
+    # How much of the shared-basis widths the shared-prior dedupe accounts for.
+    # Removing count-1 duplicate copies of a Gaussian prior REMOVES curvature,
+    # so every post-dedupe width is >= its pre-dedupe value and shift_pct >= 0.
+    sig_pre = shared_basis_marginal_sigmas(
+        F_cmb_full_pre_dedupe, cosmology, pieces["fiducial_cosmo_cmb"])
+    sig_post = shared_basis_marginal_sigmas(
+        F_cmb_full, cosmology, pieces["fiducial_cosmo_cmb"])
+    dedupe_width_effect = {
+        "basis": list(shared_keys),
+        "pre_dedupe_marginal_sigmas": [float(v) for v in sig_pre],
+        "post_dedupe_marginal_sigmas": [float(v) for v in sig_post],
+        "shift_pct": [float(100.0 * (post / pre - 1.0))
+                      for pre, post in zip(sig_pre, sig_post)],
+        "definition": (
+            "sqrt(diag(inv(F_shared))) of the nuisance-marginalized, "
+            "shared-basis block built from the summed per-term Fisher BEFORE "
+            "and AFTER the duplicate shared-prior curvature is subtracted, in "
+            "`basis` order; shift_pct = 100 * (post/pre - 1), i.e. how much "
+            "WIDER each marginal gets once the A_planck prior is counted once "
+            "instead of four times."),
+    }
+    for key, pre, post, shift in zip(shared_keys, sig_pre, sig_post,
+                                     dedupe_width_effect["shift_pct"]):
+        print(f"[dedupe-width] {key:6s} sigma {pre:.6g} -> {post:.6g}  "
+              f"({shift:+.3f}%)", flush=True)
+
     cmb_config_hash, hash_components = compute_cmb_config_hash(
         cosmology, method_per_term=built["method"], prior_policy=prior_policy,
         fiducial_native=pieces["fiducial_cosmo_cmb"], shared_keys=shared_keys,
@@ -1016,6 +1091,12 @@ def main():
     # environment cannot replace a good artifact with an unloadable one.
     bootstrap_pin = enforce_cmb_config_hash_pin(
         cosmology, cmb_config_hash, pinned=pinned)
+
+    # Attached AFTER the fingerprint is computed, deliberately: these widths are
+    # an OUTPUT of the block, never an input that determines it, and must not
+    # perturb cmb_config_hash (which reads only prior_policy's inventory
+    # fields). Ordering it this way makes that impossible by construction.
+    prior_policy["dedupe_width_effect"] = dedupe_width_effect
 
     meta = {
         "cosmology": cosmology,
