@@ -1572,3 +1572,154 @@ nuLCDM 29m57s.
 * Open item 5 (E7/E8 prints, not asserts) — **done**. Both joint notebooks now
   carry `assert E7_OK` immediately after the E7 print and `assert E8_OK` after
   the E8 print; prints kept verbatim.
+
+## Standing caveats of the CMB Fisher block (2026-08-08)
+
+Three properties of the shipped CMB block are *standing* — they are not bugs to
+be fixed, they are conditions that hold today and could stop holding. Each is
+recorded here with the guard that would catch the change and the exact place to
+look.
+
+### A4. The hybrid GN block is PSD *in practice*, not *by theorem*
+
+`GN = J^T C^-1 J` is PSD by construction, but only the three Gaussian-bandpower
+terms use it (`planck_highl` plik TTTEEE, `planck_lensing`, `act_dr6_lensing`).
+The two non-Gaussian low-ell terms (`planck_lowl_tt` Gibbs/Blackwell-Rao,
+`planck_lowl_ee` simall) have no `J^T C^-1 J` at all and keep their OBSERVED
+Hessians, which are **individually indefinite** — the per-term conditional
+minimum eigenvalues measured during the branch-B experiment were
+**`lowl_tt` -1418.6** and **`lowl_ee` -92.0**. (That diagnostic was transient
+and is not stored in the artifact; the durable per-build evidence is
+`method.negative_mode_attribution`, which shows the same qualitative picture
+along the near-null direction.) The summed block is positive definite only
+because the GN terms dominate them, which is what the G2 margins measure:
+
+| | LCDM | nuLCDM |
+|---|---|---|
+| G2 min eig, production (post-dedupe) | **+4188.53** | **+51.3613** |
+| baseline observed-Hessian min eig | 4317.77 | -46.2436 (ABORT) |
+
+So the positivity is an empirical margin, not a guarantee. A changed fiducial
+cosmology, a new emulator generation, or a different likelihood set can shrink
+or re-flip it — the nuLCDM margin of ~51 against a max eigenvalue of 1.83e8 is
+nine orders of magnitude of headroom in the *conditioning*, i.e. essentially
+none.
+
+**Containment.** (i) G2 (`gate_g2_positive_definite` in
+`example/mcmc/scripts/build_cmb_fisher_block.py`) is a hard abort with strict
+`> 0` that prints the FULL eigenvalue spectrum and NEVER clips or regularizes —
+the clipping branch `expt/cmb-psd-clip` stays unmerged precisely so that a
+failure here forces a method decision rather than a silent patch. (ii) The
+per-build negative-mode attribution now runs **unconditionally** (not only under
+`--diagnose-negative-mode`) and is stored in the artifact META, so drift shows
+up as a trend across builds rather than as a surprise abort.
+
+**Where to look:** `meta["method"]["negative_mode_attribution"]` in
+`example/mcmc/cache/cmb_fisher_{lcdm,nulcdm}.npz` (key `meta_json`), and the
+`gate_g2_positive_definite` block in `build_cmb_fisher_block.py`. Note the G2
+docstring in that function still quotes the PRE-dedupe margins
+(`+52.2 nuLCDM, +4332 LCDM`); the production post-dedupe values are the table
+above.
+
+### A5. `cmb_gn_fisher.py` mirrors clipy/candl PRIVATE internals
+
+`example/mcmc/scripts/cmb_gn_fisher.py` reconstructs each Gaussian term's model
+vector and inverse covariance by reaching into attributes that are not public
+API and carry no compatibility promise:
+
+| term | private symbols used |
+|---|---|
+| `planck_highl` | `like._internal.siginv`, `like._internal.rqh_f`, `like._internal.oo` |
+| `planck_lensing` | `clik.siginv`, `clik.pp_hat`, `clik.bins`, `clik.cors`, `clik.cl_fid`, `clik.renorm`, `clik.ren1`, `clik._m_llp1_2` |
+| `act_dr6_lensing` | candl `covariance_chol_dec`, `_data_bandpowers` |
+
+(The public route is closed, not merely unused: `clik_candl.covariance`,
+`window_functions`, `effective_ells` and `bins_*` all raise
+`NotImplementedError` on the four clipy terms, and
+`make_candl_theory_vector_fn` works only for the native-candl ACT term.)
+
+**This is a standing maintenance coupling: every clipy/candl upgrade requires an
+artifact rebuild.** It is safe rather than fragile only because of three guards:
+
+1. **Per-build validation against the UNTOUCHED likelihood.**
+   `validate_gn_term` checks the reconstruction against the same
+   `jaxptpolypol` `log_like` closure the observed-Hessian build uses, in
+   (a) VALUE at the fiducial, (b) the FULL packed HESSIAN at `hess_rtol=1e-12`,
+   and (c) DIRECTIONALLY along the reference minimum-eigenvalue direction
+   (budget `0.01 * |lambda_min_ref|`) — check (c) exists because (b) is
+   normalized by `max|H_ref| ~ 2e8` and is blind to the ~1e-1 eigenvalue the
+   module exists to get right. Measured on the shipped nuLCDM artifact:
+   `value_rel_err` 1.9e-15 / 1.9e-16 / 1.2e-16 and `hessian_max_rel_err`
+   1.5e-15 / 2.7e-16 / 3.7e-16 for highl / Planck lensing / ACT.
+2. **`GNValidationError`, never `assert`.** Assertions are stripped under
+   `python -O` / `PYTHONOPTIMIZE=1`, which would turn the gate into a no-op
+   exactly when someone runs the build "for speed". `-O`-proofness is itself
+   pinned by `test_validate_gn_term_still_raises_under_pythonoptimize` in
+   `tests/test_cmb_gn_fisher.py`.
+3. **Library versions are hash inputs.** `compute_cmb_config_hash` folds
+   `candl.__version__` and `clipy.__version__` (with `jax.__version__`) into
+   `CMB_CONFIG_HASH`, and `load_cmb_fisher_block` HARD-REQUIRES the pin. A
+   version change therefore forces a rebuild + repin instead of silently
+   reusing a stale artifact.
+
+**Manual bump point:** `GN_ALGORITHM_VERSION` (currently `"1.0"`, in
+`cmb_gn_fisher.py`) is also a hash input, but nothing detects a change to the
+reconstruction logic itself — bump it BY HAND whenever the reconstruction
+changes, or the fingerprint will not move.
+
+### A6. E14 landed weaker than its plan row promised
+
+`make_forecast_joint_log_post(pfs_log_post, *, n_pfs, extra_loglike_fns=())` in
+`src/jaxptpolypol/joint_forecast.py` validates only `n_pfs > 0`:
+
+```python
+if n_pfs <= 0:
+    raise ValueError(f"n_pfs must be positive, got {n_pfs}")
+```
+
+The plan's E14 row asked for a **probe call at build time** — construct-time
+evidence that `pfs_log_post` actually accepts `theta[:n_pfs]`. That did not
+land. Consequence: a wrong but POSITIVE `n_pfs` passes construction and surfaces
+later as a downstream shape error inside the first likelihood evaluation, not as
+a construction-time raise.
+
+**Compensating guards actually in place** (per joint notebook, at every map
+construction):
+
+* `assert n_nl == N_NL` — the surrogate's nonlinear-parameter count;
+* `assert theta0.shape == (N_TOT,)` — the packed sampled-vector length;
+* `assert np.allclose(np.asarray(theta0)[SHARED_IDX_MAP],
+  np.asarray(CMB_BLOCK["fid_shared"]))` (E10) — the CMB block's shared basis
+  really lands on the right slots of `theta0`;
+* `assert max(SHARED_IDX_MAP) < N_TOT` — every embedded index is in range
+  (JAX clamps/drops out-of-bounds indices silently), asserted at every map
+  construction.
+
+Between them a mis-sized `n_pfs` cannot reach a production chain silently; it
+just fails later and less legibly than the plan intended. Cross-reference the
+supersession banner in
+`docs/superpowers/plans/2026-08-06-joint-pfs-cmb-bbn-mcmc.md`, which records the
+other three places that plan was overtaken by what landed.
+
+### A7 (B11). RWMH acceptance 0.351 is at the top edge of the band — DO NOT re-tune
+
+The joint nuLCDM production RWMH runs at acceptance `[0.351, 0.350, 0.351,
+0.353]`, at the top edge of the usual 0.2-0.35 target band (RWMH optimal ~0.234
+for a high-dimensional Gaussian). Nothing was tuned to get there: the
+CMB-dominated joint target is simply **more Gaussian** than the PFS-only one, so
+a step size inherited from the PFS-only regime accepts more often.
+
+The health evidence says mixing is fine and the acceptance is cosmetic:
+
+* R-hat <= **1.00034** across all seven cosmology parameters (max at `h`);
+* ESS **9974-12973** out of 180000 x 4 post-burn-in draws, including `tau` and
+  `mnu`;
+* MCMC/Fisher sigma ratios **0.95-0.99** on six of the seven parameters
+  (`mnu` at 0.88 is the `mnu >= 0` wall, not convergence).
+
+**Decision: do not re-tune.** Re-tuning changes the proposal, hence the chain,
+hence every committed number in the "Derived-parameter constraints" and "Joint
+PFS+BAO+CMB+BBN MCMC forecasts" sections above — all of which are protected by
+exact determinism gates. The trade is a modest ESS gain for a ~30 min production
+re-run plus a full re-verification of every gated number. Revisit only if a
+future change forces that re-run for an independent reason.
