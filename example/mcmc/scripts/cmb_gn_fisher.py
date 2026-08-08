@@ -534,7 +534,8 @@ def _prior_curvature(prior_loglike_fn, theta):
 
 
 def inventory_shared_priors(likelihoods, *, layout, theta_fid,
-                            fixed_cmb_params=None, atol=1e-8, rtol=1e-10):
+                            fixed_cmb_params=None, prior_gap_rtol=1e-8,
+                            rtol=1e-10):
     """Locate every internal prior and flag the ones counted more than once.
 
     Each of the four Planck ``.clik`` likelihoods is loaded with
@@ -555,6 +556,13 @@ def inventory_shared_priors(likelihoods, *, layout, theta_fid,
       evaluated, checked by re-evaluating at a point perturbed along that
       prior's OWN parameters. A non-quadratic prior has no single width and is
       refused rather than linearized.
+
+    Both tolerances are RELATIVE, keyword-only, and scale-free: each measured
+    gap is divided by the corresponding curvature span before comparison.
+    ``prior_gap_rtol`` bounds the COMPLETENESS residual (enumerated sum vs the
+    term's total prior curvature); ``rtol`` bounds the GAUSSIANITY drift and the
+    term-to-term width agreement. ``prior_gap_rtol`` was called ``atol`` until
+    2026-08-08, which misdescribed it -- nothing has ever passed it explicitly.
 
     Returns ``{parameter_name: {"sigma", "curvature", "count", "terms",
     "packed_index"}}`` for the parameters whose prior appears in more than one
@@ -601,13 +609,13 @@ def inventory_shared_priors(likelihoods, *, layout, theta_fid,
             jnp.asarray(theta_fid))
         span = max(float(np.abs(reference).max()), 1.0)
         gap = float(np.abs(total - reference).max())
-        if gap / span > atol:
+        if gap / span > prior_gap_rtol:
             raise SharedPriorError(
                 f"{term_name}: the enumerated per-prior curvatures do not sum "
                 f"to the term's total prior curvature (max gap {gap:.6g}, "
-                f"relative {gap / span:.3g} > {atol:.3g}). Some internal prior "
-                "was not located; refusing to deduplicate against an "
-                "incomplete inventory.")
+                f"relative {gap / span:.3g} > {prior_gap_rtol:.3g}). Some "
+                "internal prior was not located; refusing to deduplicate "
+                "against an incomplete inventory.")
 
     inventory = {}
     for key, hits in per_key.items():

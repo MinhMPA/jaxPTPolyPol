@@ -20,12 +20,37 @@ dependencies = [
 [project.optional-dependencies]
 full = [
     "candl-like",
+    # clipy (distribution name "clipy-like", import name "clipy"): the pure-python
+    # clik reimplementation with jax support. Required by the CMB Fisher block
+    # build path (example/mcmc/scripts/{build_cmb_fisher_block,cmb_gn_fisher}.py),
+    # which reads the Planck .clik likelihoods through it.
+    "clipy-like",
     "cosmopower-jax",
     "ps_1loop_jax",
     "quadax",
     "matplotlib",
     "numdifftools",
 ]
+# NOT declarable here, but REQUIRED by the same CMB build path:
+#
+#   * candl_data (import name "candl_data", version 2.0.0 here) -- the candl
+#     dataset package that provides `candl_data.ACT_DR6_lens`. It is NOT on PyPI
+#     (https://pypi.org/pypi/candl_data/json -> 404); it ships INSIDE the candl
+#     source tree and is installed from there, e.g.
+#         git clone https://github.com/Lbalkenhol/candl
+#         pip install -e candl -e candl/candl_data
+#     Declaring a PyPI name for it would resolve to nothing (or, worse, to an
+#     unrelated project), so it is documented rather than declared.
+#   * the Planck .clik likelihood data trees (plik high-l TTTEEE, commander low-l
+#     TT, simall low-l EE, Planck lensing) -- ~2 GB of DATA, not a package;
+#     their paths are constants in build_cmb_fisher_block.py and their CONTENT is
+#     hashed into CMB_CONFIG_HASH.
+#
+# All three are imported LAZILY -- candl/clipy inside
+# `jaxptpolypol.cmb.load_candl_likelihood`, candl_data inside the build script's
+# `act_dr6_lens()` -- which is why they are optional rather than core, and why
+# the notebooks (which consume only the cached npz artifact) need none of them.
+# See build_cmb_fisher_block.py's module docstring.
 
 [tool.setuptools.packages.find]
 where = ["src"]

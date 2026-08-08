@@ -52,6 +52,31 @@ per-term log-likelihood, and hence every Gauss-Newton validation reference,
 untouched. The build aborts if any shared prior's curvature cannot be located
 analytically.
 
+Dependencies of THIS script (not of the notebooks)
+--------------------------------------------------
+Three distributions beyond ``pip install -e ".[full]"``'s core set, all imported
+lazily so the rest of the repo never pays for them:
+
+==============  ==============  =============================================
+import name     distribution    where it comes from
+==============  ==============  =============================================
+``candl``       ``candl-like``  PyPI (also github.com/Lbalkenhol/candl)
+``clipy``       ``clipy-like``  PyPI (also github.com/benabed/clipy)
+``candl_data``  ``candl_data``  **NOT on PyPI** -- ships inside the candl
+                                source tree, ``pip install -e candl/candl_data``
+==============  ==============  =============================================
+
+``candl-like`` and ``clipy-like`` are declared in ``pyproject.toml``'s ``full``
+extra; ``candl_data`` cannot be, and is documented there instead. On top of
+those, the four Planck ``.clik`` likelihood trees (~2 GB of DATA, paths pinned
+in the constants below) and the CMB emulator networks must be present; their
+CONTENT is hashed into ``CMB_CONFIG_HASH``, as are the ``candl`` / ``clipy`` /
+``jax`` versions -- so a library upgrade forces a rebuild and a repin rather
+than a silent reuse of a stale artifact.
+
+The consuming notebooks need NONE of this: they load
+``example/mcmc/cache/cmb_fisher_{lcdm,nulcdm}.npz``.
+
 Usage: ``python3 build_cmb_fisher_block.py --cosmology {lcdm,nulcdm}
 [--dry-run] [--diagnose-negative-mode]``, or ``--summary`` to regenerate the
 comparison JSON from the two existing artifacts. ``--dry-run`` runs steps 1-2

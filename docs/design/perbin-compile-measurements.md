@@ -1382,6 +1382,12 @@ python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
    gate. Only the gate exists; the function lives in
    `example/mcmc/scripts/build_cmb_fisher_block.py` and is data-free, so the test
    is cheap.
+   **DONE 2026-08-08** — `tests/test_cmb_gn_fisher.py` gained four data-free
+   `jax.jacfwd` tests (8 parametrized cases) pinning `J[h_row, H0_col] == 0.01`
+   exactly, the identity behavior of every passthrough parameter, the output
+   order for both cosmologies (mnu last in nuLCDM), and that an H0 step moves
+   only the h slot. Red-proof: mutating `H0 / 100.0` to `H0 / 1.0` fails 6 of
+   the 8.
 5. **E7/E8 are prints, not asserts, in both joint MCMC notebooks.** `E7_OK` /
    `E8_OK` are computed and printed as `PASS`/`WARN` but never asserted, so a
    regression would be silent in a headless re-run. Convert to post-print asserts
@@ -1394,6 +1400,9 @@ python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
    (`example/mcmc/scripts/cmb_gn_fisher.py`), not an absolute one, and the
    function already takes a separate `rtol`. Rename to something unambiguous
    (e.g. `sum_rtol`) when that signature is next touched.
+   **DONE 2026-08-08** — renamed to `prior_gap_rtol` (keyword-only; no caller
+   ever passed it), with the error message and docstring updated to say which
+   relative residual each of the two tolerances bounds.
 
 ## Derived-parameter constraints (2026-08-08)
 

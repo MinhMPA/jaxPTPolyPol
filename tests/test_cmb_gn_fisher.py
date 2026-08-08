@@ -579,3 +579,108 @@ def test_missing_pin_marker_matches_the_real_loader_message(tmp_path,
     # ...and the escape does fire against the REAL loader.
     assert _build.verify_artifact_round_trip(
         "lcdm", bootstrap_pin=True, cmb_config_hash="abc123") is False
+
+
+# ---------------------------------------------------------------------------
+# E3: the native -> shared projection (``make_cmb_to_shared``).
+#
+# Gate G3 checks ONE Jacobian entry at build time, against ~2 GB of Planck/ACT
+# data. ``make_cmb_to_shared`` is pure and data-free, so the whole map can be
+# pinned here: the H0 -> h factor-100 landmine, the identity behaviour of every
+# passthrough parameter, the output ORDER for both cosmologies, and the fact
+# that an H0 perturbation moves the h slot and nothing else.
+# ---------------------------------------------------------------------------
+
+def _shared_jacobian(cosmology):
+    """``d(shared)/d(native)`` of ``make_cmb_to_shared`` at an arbitrary point.
+
+    The map is linear, so the Jacobian does not depend on the expansion point;
+    a non-fiducial point is used deliberately so a hidden dependence on the
+    fiducial would show up.
+    """
+    cosmo_keys = _build.CONFIG[cosmology]["cosmo_keys"]
+    theta = jnp.asarray(
+        [67.66, 0.02242, 0.11933, 3.047, 0.9665, 0.0561, 0.06][:len(cosmo_keys)],
+        dtype=jnp.float64)
+    fn = _build.make_cmb_to_shared(cosmology)
+    return np.asarray(jax.jacfwd(fn)(theta)), theta, fn
+
+
+@pytest.mark.parametrize("cosmology", ["lcdm", "nulcdm"])
+def test_cmb_to_shared_h0_to_h_entry_is_exactly_one_hundredth(cosmology):
+    """The factor-100 landmine: ``J[h_row, H0_col]`` must be EXACTLY 0.01.
+
+    Not ``approx``: a units slip here (1.0, or 100.0) rescales the whole CMB
+    Fisher block's h row/column and would still produce a plausible-looking
+    positive-definite matrix.
+    """
+    jac, _theta, _fn = _shared_jacobian(cosmology)
+    h_row = _build.CONFIG[cosmology]["shared_keys"].index('h')
+    h0_col = _build.CONFIG[cosmology]["cosmo_keys"].index('H0')
+    assert jac[h_row, h0_col] == 0.01
+
+
+@pytest.mark.parametrize("cosmology", ["lcdm", "nulcdm"])
+def test_cmb_to_shared_passthrough_parameters_are_the_identity(cosmology):
+    """ombh2, omch2, logA, ns, tau (and mnu in nuLCDM) pass through UNCHANGED.
+
+    Exactly 1.0 on their own (row, column) and exactly 0.0 everywhere else in
+    that row -- so no passthrough parameter can pick up a stray dependence on
+    H0 or on another passthrough.
+    """
+    jac, theta, fn = _shared_jacobian(cosmology)
+    cosmo_keys = _build.CONFIG[cosmology]["cosmo_keys"]
+    shared_keys = _build.CONFIG[cosmology]["shared_keys"]
+    passthrough = [k for k in shared_keys if k != 'h']
+    assert passthrough == (['ombh2', 'omch2', 'logA', 'ns', 'tau']
+                           + (['mnu'] if cosmology == "nulcdm" else []))
+
+    out = np.asarray(fn(theta))
+    for name in passthrough:
+        row = shared_keys.index(name)
+        col = cosmo_keys.index(name)
+        for j in range(jac.shape[1]):
+            expected = 1.0 if j == col else 0.0
+            assert jac[row, j] == expected, (
+                f"{cosmology}: d({name})/d({cosmo_keys[j]}) = {jac[row, j]!r}, "
+                f"expected {expected!r}")
+        assert out[row] == float(theta[col])
+
+
+@pytest.mark.parametrize("cosmology,expected", [
+    ("lcdm", ('ombh2', 'omch2', 'logA', 'ns', 'h', 'tau')),
+    ("nulcdm", ('ombh2', 'omch2', 'logA', 'ns', 'h', 'tau', 'mnu')),
+])
+def test_cmb_to_shared_output_order(cosmology, expected):
+    """The output ORDER is the shared basis, with mnu LAST in nuLCDM.
+
+    A permuted output would silently mislabel the whole CMB block, since the
+    consumers index it by position through ``SHARED_IDX_MAP``.
+    """
+    assert _build.CONFIG[cosmology]["shared_keys"] == expected
+    jac, theta, fn = _shared_jacobian(cosmology)
+    out = np.asarray(fn(theta))
+    assert out.shape == (len(expected),)
+    cosmo_keys = _build.CONFIG[cosmology]["cosmo_keys"]
+    native = {k: float(theta[i]) for i, k in enumerate(cosmo_keys)}
+    want = [native['H0'] / 100.0 if k == 'h' else native[k] for k in expected]
+    assert out.tolist() == want
+
+
+@pytest.mark.parametrize("cosmology", ["lcdm", "nulcdm"])
+def test_cmb_to_shared_h0_perturbation_moves_only_the_h_slot(cosmology):
+    """A nonzero H0 step changes h by step/100 and leaves every other slot."""
+    _jac, theta, fn = _shared_jacobian(cosmology)
+    shared_keys = _build.CONFIG[cosmology]["shared_keys"]
+    h_row = shared_keys.index('h')
+    h0_col = _build.CONFIG[cosmology]["cosmo_keys"].index('H0')
+
+    step = 1.5
+    base = np.asarray(fn(theta))
+    moved = np.asarray(fn(theta.at[h0_col].add(step)))
+    delta = moved - base
+    assert delta[h_row] == pytest.approx(step / 100.0, rel=0, abs=1e-15)
+    other = np.delete(delta, h_row)
+    assert np.all(other == 0.0), (
+        f"{cosmology}: an H0 step leaked into "
+        f"{[k for i, k in enumerate(shared_keys) if i != h_row and delta[i] != 0.0]}")
