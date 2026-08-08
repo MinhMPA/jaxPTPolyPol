@@ -1027,6 +1027,18 @@ amplitude direction look tighter than it is:
 
 All widths LOOSEN, as an over-confidence fix must.
 
+**Artifact-backed since 2026-08-08 (`c4c7d86`).** The table above was report-
+attested only. Both artifacts now carry the same numbers as data, in META
+`prior_policy.dedupe_width_effect` (`pre_dedupe_marginal_sigmas`,
+`post_dedupe_marginal_sigmas`, `shift_pct`, `basis`, plus a `definition` string
+fixing the sign convention). The recorded `shift_pct` for logA is **+2.9981 %**
+(LCDM) and **+3.8092 %** (nuLCDM). Two self-consistency checks hold in the
+artifacts: the stored `post_dedupe_marginal_sigmas[tau]` is bit-identical to the
+artifact's own `sigma_tau`, and every `shift_pct >= 0`. Adding the field could
+not move `cmb_config_hash` (it is assigned after the fingerprint is computed, and
+the fingerprint reads only `shared_prior_inventory`); both artifacts rebuilt
+byte-identical on every stored array.
+
 ### Production numbers (post-dedupe, both artifacts)
 
 | | LCDM | nuLCDM |
@@ -1038,12 +1050,18 @@ All widths LOOSEN, as an over-confidence fix must.
 
 No eigenvalue clipping or regularization anywhere. Gate G2 is strict `> 0`.
 
-### Follow-up (DEFERRED, not this plan)
+### Follow-up (DEFERRED, not this plan) — DISCHARGED 2026-08-08
 
 The committed `example/fisher/fisher_joint_PFS_BAO_CMB_{LCDM,nuLCDM}.ipynb`
 notebooks carry the SAME 4x `A_planck` overcount and the same observed-Hessian
 indefiniteness. Their CMB-column numbers are therefore ~3-4% over-confident on
 logA. Not corrected here; the scripts are the production path.
+
+**Both notebooks were ported to the cached artifact on 2026-08-08** — `ea69bf4`
+(LCDM) and `3b02cbb` (nuLCDM). The measured shifts are NOT ~3-4% everywhere; see
+"fisher_joint CMB port (2026-08-08)" at the end of this document for the
+measured before/after tables and why the two notebooks moved by such different
+amounts.
 
 Adoption rationale and the decisions of record are in CONTEXT.md (2026-08-07).
 
@@ -1215,6 +1233,44 @@ FIXED recovers ratio **0.927**, and the PFS+BAO-only sigma(logA) — the paramet
 tau is degenerate with — degrades by **3.4x** when mnu is freed
 (0.065085 -> 0.22439 in the two cell-29 gain tables, 3.45x).
 
+**What 0.927 IS, exactly** (added 2026-08-08 — the number was previously quoted
+with no definition, and is easy to confuse with a second, different mnu-fixed
+ratio):
+
+```
+0.927 = 0.006579 / 0.0070984 = 0.9268
+```
+
+It is a **joint-over-CMB-alone tau-width ratio with mnu held FIXED on both
+sides** — the mnu-fixed analogue of the 0.980 row in the table above, not a
+fixed-vs-marginalized ratio.
+
+* **Denominator** `0.0070984` is exactly the artifact key
+  `sigma_tau_mnu_fixed_refit = 0.007098416627279937`, written by
+  `python3 example/mcmc/scripts/build_cmb_fisher_block.py --summary` into
+  `example/mcmc/cache/cmb_block_branchB_summary.json` (nuLCDM only; added in
+  `c4c7d86`). It is `sqrt(inv(F_shared with the mnu row/column DELETED)[tau,
+  tau])` — **CMB-block-alone**: the mnu row/col is dropped and NOTHING else is
+  changed, no external information of any kind is added.
+* **Numerator** `0.006579` adds a PFS-only diagonal-proxy regularizer to that
+  SAME mnu-dropped block. So the two are consistent BY CONSTRUCTION — the
+  artifact key is an input to the ratio, not a competing measurement — and
+  `0.927 x 0.007098416627279937 = 0.00658` recovers the numerator.
+
+**Do not confuse 0.927 with 0.962.** The ratio of the same artifact key to the
+mnu-MARGINALIZED `sigma_tau`,
+
+```
+0.007098416627279937 / 0.007376499170236379 = 0.9623
+```
+
+is a **different quantity**: it is CMB-alone on both sides and measures how much
+of nuLCDM's weaker tau constraint is mnu absorbing the degeneracy-breaking
+(holding mnu fixed brings nuLCDM's sigma(tau) down to essentially the LCDM value
+0.0070896, 0.12% apart). 0.927 involves PFS-side information; 0.962 does not.
+The artifact's own `_note` states the distinction so the two cannot be conflated
+from inside the JSON.
+
 corr(logA, tau), the CMB degeneracy the joint target must transport correctly:
 
 ```
@@ -1364,6 +1420,12 @@ python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
    `A_planck` overcount** (and the observed-Hessian indefiniteness). Their
    CMB-column logA widths are ~3-4% over-confident. DEFERRED — the scripts are
    the production path; the MCMC notebooks here use the deduped artifacts.
+   **DONE 2026-08-08** — `ea69bf4` (LCDM) and `3b02cbb` (nuLCDM) replace each
+   notebook's inline `jax.hessian` CMB build with `load_cmb_fisher_block`, so
+   both now consume the same deduped hybrid-GN artifact as the MCMC notebooks.
+   The measured shifts are recorded in "fisher_joint CMB port (2026-08-08)" at
+   the end of this document — and they are NOT ~3-4% everywhere, which is the
+   point of that section.
 2. **nuLCDM notebook cell-30 print relabel, at the next execution.** The two
    parentheticals `(PFS-only: 0.791)` and `~0.5 sigma_F` in the printed E13 lines
    are Hessian-Fisher-flavored and are NOT like-for-like baselines for the
@@ -1746,3 +1808,223 @@ PFS+BAO+CMB+BBN MCMC forecasts" sections above — all of which are protected by
 exact determinism gates. The trade is a modest ESS gain for a ~30 min production
 re-run plus a full re-verification of every gated number. Revisit only if a
 future change forces that re-run for an independent reason.
+
+## fisher_joint CMB port (2026-08-08)
+
+`example/fisher/fisher_joint_PFS_BAO_CMB_LCDM.ipynb` (`ea69bf4`) and
+`example/fisher/fisher_joint_PFS_BAO_CMB_nuLCDM.ipynb` (`3b02cbb`) no longer
+build their own CMB Fisher inline. Each now calls
+`load_cmb_fisher_block(cosmology)` from `example/mcmc/scripts/stream_common.py`
+and consumes the SAME cached artifact the joint MCMC notebooks consume. The seam
+variable `F_cmb_shared` kept its name, so every downstream cell in both
+notebooks is at zero source diff.
+
+### What this retires
+
+| defect | before | after |
+|---|---|---|
+| 4x `A_planck` overcount | the same Gaussian calibration prior folded in by all four Planck `.clik` terms and summed four times | deduped once, `3 x 160000` subtracted after summation (`count: 4` is printed by the loader, stated by the artifact itself) |
+| observed-Hessian indefiniteness (nuLCDM) | `min eigvalsh(F_cmb_shared) = -46.2436`; three CMB-alone marginals came out NEGATIVE | hybrid GN build, `+51.3613`, guarded by an in-notebook `assert min eig > 0` on every future execution |
+| inverted `sigma(tau)` (nuLCDM) | `0.0069061`, obtained by inverting an indefinite matrix | `0.0073765`, equal to the artifact's own `sigma_tau` field to all printed digits |
+
+Both notebooks also lost their runtime candl/clipy/`.clik` dependency: a token
+scan of the committed post-port notebooks finds **zero** occurrences of `candl`,
+`clipy` or `jaxptpolypol.cmb` in any code cell, and the ~2500 characters of
+`.clik` self-test banners and cosmopower pickle-fallback warnings are gone from
+the executed outputs, replaced by the loader's 3-4 line print. Only the CMB
+emulators used by `CosmoEmulator` for the PFS side remain.
+
+### LCDM: shared-basis marginal sigmas, before -> after
+
+Cell `e5ede41d`, committed outputs at `c4c7d86` vs `ea69bf4`.
+
+| param | PFS+BBN+ns10 | PFS+BAO+BBN+ns10 | CMB | BAO+CMB | PFS P+B+BAO+CMB |
+|---|---|---|---|---|---|
+| ombh2 | 0.00054471 (0.00%) | 0.00048212 (0.00%) | 0.0001426 -> 0.00014374 (+0.80%) | 0.00012687 -> 0.00012768 (+0.64%) | 0.00012042 -> 0.00012109 (+0.56%) |
+| omch2 | 0.0055763 (0.00%) | 0.003423 (0.00%) | 0.0010744 -> 0.0010727 (-0.16%) | 0.00063331 -> 0.00063261 (-0.11%) | 0.00053874 -> 0.00053765 (-0.20%) |
+| logA | 0.072216 (0.00%) | 0.062489 (0.00%) | 0.013183 -> 0.013558 (**+2.84%**) | 0.012219 -> 0.01248 (+2.14%) | 0.011693 -> 0.011912 (+1.87%) |
+| ns | 0.032223 (0.00%) | 0.028022 (0.00%) | 0.0041966 -> 0.0042354 (+0.92%) | 0.0035866 -> 0.0036243 (+1.05%) | 0.0034728 -> 0.0035086 (+1.03%) |
+| h | 0.0040126 (0.00%) | 0.0036491 (0.00%) | 0.0048958 -> 0.0048965 (+0.01%) | 0.00284 -> 0.002844 (+0.14%) | 0.002286 -> 0.0022879 (+0.08%) |
+| tau | --- (unchanged) | --- (unchanged) | 0.007103 -> 0.0070896 (-0.19%) | 0.0062556 -> 0.0062687 (+0.21%) | 0.005948 -> 0.0059787 (+0.52%) |
+
+Derived table (cells `2169cd03`, `105fd065`): `Omega_m` CMB
+0.0065787 -> 0.0065734, `H0` 0.48958 -> 0.48965, `sigma8` 0.0050516 -> 0.0051163
+(+1.28%); the two non-CMB columns are 0.00%.
+
+### nuLCDM: shared-basis marginal sigmas, before -> after
+
+Cell `33fa653b`, committed outputs at `f578ba5` vs `3b02cbb`.
+
+| param | PFS+BBN+ns10 | PFS+BAO+BBN+ns10 | CMB | BAO+CMB | PFS P+B+BAO+CMB |
+|---|---|---|---|---|---|
+| ombh2 | 0.00054537 (0.00%) | 0.00049008 (0.00%) | 5.9406e-05 -> 0.00018497 (**+211.4%**) | 0.00012903 -> 0.00012968 (+0.50%) | 0.00012577 -> 0.00012612 (+0.28%) |
+| omch2 | 0.0058844 (0.00%) | 0.0037253 (0.00%) | `---` -> 0.0016179 | 0.00076436 -> 0.00075202 (-1.61%) | 0.00072066 -> 0.00071023 (-1.45%) |
+| logA | 0.18172 (0.00%) | 0.13389 (0.00%) | 0.011543 -> 0.01532 (**+32.7%**) | 0.014352 -> 0.014509 (+1.09%) | 0.014127 -> 0.014343 (+1.53%) |
+| ns | 0.039257 (0.00%) | 0.035289 (0.00%) | 0.0017388 -> 0.0053895 (**+210.0%**) | 0.0037176 -> 0.0037435 (+0.70%) | 0.0036842 -> 0.0037087 (+0.67%) |
+| h | 0.0053452 (0.00%) | 0.0043917 (0.00%) | `---` -> 0.019048 | 0.0039096 -> 0.0037299 (-4.60%) | 0.0026943 -> 0.0026448 (-1.84%) |
+| tau | --- (unchanged) | --- (unchanged) | 0.0069061 -> 0.0073765 (+6.81%) | 0.0075318 -> 0.0073354 (-2.61%) | 0.0074018 -> 0.0072517 (-2.03%) |
+| mnu | 0.3749 (0.00%) | 0.2083 (0.00%) | `---` -> 0.13807 | 0.050282 -> 0.046178 (-8.16%) | 0.040191 -> 0.038254 (-4.82%) |
+
+The `---` entries in the PFS-only and PFS+BAO `tau` rows are the legitimate
+tau-null direction of those probes and correctly stay `---`.
+
+### Non-CMB columns are untouched — verified, not asserted
+
+In both notebooks the check was a cell-id-keyed diff of EVERY text output
+between the pre-edit committed revision and the freshly executed notebook
+(CPU/wall-time strings normalised). Result: the `Fiducial`, `PFS+BBN+ns10` and
+`PFS+BAO+BBN+ns10` columns are character-identical in every row of the marginal
+tables and of the derived tables in both notebooks (21/21 cells in nuLCDM,
+6+3+3 rows in LCDM); the PFS-only and BAO-only construction cells are
+byte-identical; the `PFS+BAO+BBN+ns10 Fisher diagnostics` block is byte-identical
+in both; all six shared-basis `rank = ...` lines are byte-identical. The only
+non-numeric output diffs are the deliberately removed `CMB fiducial: {...}` and
+`CMB Fisher projected to shared basis.` prints, the vanished clipy banners, and
+`%time` / matplotlib-repr noise.
+
+### What the nuLCDM `---` entries actually were
+
+**Not missing values — negative marginal variances.** The printer is
+`np.where(d > 0, np.sqrt(d), np.inf)`, so a negative `d` renders as `inf`, i.e.
+`---`. Reconstructing the retired inline block verbatim from the pre-edit cell
+sources reproduced the committed table to all printed digits and exposed the
+three offenders:
+
+| param | old `diag(inv(F_old))` | printed as |
+|---|---|---|
+| omch2 | `-8.174946468283377e-07` | `---` |
+| h | `-0.00037331650647835784` | `---` |
+| mnu | `-0.021167193753198026` | `---` |
+
+Two independent corroborations, both checkable from committed artifacts without
+re-running anything:
+
+1. **The pre-edit output's own warning.** The committed outputs of cell
+   `33fa653b` carry `RuntimeWarning: invalid value encountered in sqrt` pointing
+   at that very `np.where` line. `np.where` evaluates BOTH branches, so
+   `np.sqrt` sees the whole array; `sqrt` of a negative warns, `sqrt` of a NaN
+   does not. The warning is therefore positive evidence that `d < 0` — it could
+   not have been produced by merely missing/NaN entries.
+2. **Eigenvector arithmetic against the committed `-46.24` diagnostic.** The
+   pre-edit cell `dc845005` prints, for the CMB-only block,
+   `mode 0 [weak] eig=-4.624e+01: mnu (+0.989), h (-0.135), logA (+0.044), ns (-0.026)`.
+   That single mode's contribution to `inv(F)` is `v v^T / lambda`, so it alone
+   predicts `var(mnu) = 0.989^2 / (-46.24) = -2.1153e-02` against the measured
+   `-2.1167e-02` (**0.07%**, three significant digits) and
+   `var(h) = 0.135^2 / (-46.24) = -3.9414e-04` against `-3.7332e-04` (+5.6%, the
+   residual being the positive modes the printed top-4 truncation cannot
+   resolve). omch2's `-8.175e-07` needs only `|v_omch2| = 0.00615`, comfortably
+   below the 0.026 cutoff of that print — consistent with it not appearing in
+   the top four at all.
+
+### Quote the MEASURED numbers, not the plan's estimate
+
+The plan predicted "~3-4% looser logA in CMB-containing columns". That estimate
+is the DEDUPE effect alone, and it is not what either notebook measured:
+
+| | measured logA shift |
+|---|---|
+| LCDM, CMB-alone | **+2.84%** |
+| LCDM, BAO+CMB / joint | +2.14% / +1.87% |
+| nuLCDM, CMB-alone | **+32.7%** |
+| nuLCDM, BAO+CMB / joint | +1.09% / +1.53% |
+
+The decomposition that explains them: each observed shift is the dedupe effect
+(artifact-backed, META `prior_policy.dedupe_width_effect.shift_pct`: logA
+**+3.00%** LCDM, **+3.809%** nuLCDM) composed multiplicatively with the
+observed-Hessian -> hybrid-GN **method** swap.
+
+* LCDM CMB-alone logA: dedupe +3.00%, method -0.16%, product +2.84%. The net
+  move is the plan's dedupe number partly offset by the method swap.
+* nuLCDM CMB-alone logA: dedupe +3.809%, method +27.85%, product +32.72%. The
+  dedupe is the SMALLER half. Nothing here is a 3.8% story.
+
+The full seven-parameter reconciliation of nuLCDM (method x dedupe = observed)
+closes to <= 3e-14 percentage points on all seven. That closure is an identity
+once the pre-dedupe midpoint is taken, so it is arithmetic, not an independent
+test; the load-bearing checks are the two endpoints, and both hold exactly — the
+re-executed CMB column equals META's `post_dedupe_marginal_sigmas` to every
+printed digit, and the reconstructed `|old|` reproduces the committed pre-edit
+table exactly.
+
+### Why the two notebooks' tables look so different
+
+**LCDM's CMB block was already positive-definite; nuLCDM's was not.** That single
+fact is the whole asymmetry:
+
+* LCDM: the pre-edit notebook's own `CMB-only Fisher diagnostics` reports
+  `rank=6/6, weak_modes=0`, smallest eigenvalue `4.318e+03` (the script's
+  baseline observed-Hessian min eig `4317.77`). Only the dedupe acted, so every
+  shift is <= 3% everywhere, in every column.
+* nuLCDM: the same cell reports `rank=6/7, weak_modes=1`, smallest eigenvalue
+  `-4.624e+01` (`-46.2436`). A negative eigenvalue contaminates
+  `inv(F_old)` along EVERY direction with a nonzero projection onto its
+  eigenvector — so **all seven** CMB-alone marginals were wrong, not only the
+  three that happened to cross zero. Hence CMB-alone shifts up to **+211%**
+  (ombh2, ns), while the combined columns move by at most **8.2%** (`mnu` in
+  BAO+CMB), because adding PFS+BAO regularizes the sum and swamps the single
+  small negative direction.
+
+Read the two tables with that in mind: the nuLCDM CMB-alone column is a
+correction of numbers that were never trustworthy, while its combined columns —
+and everything in LCDM — are ordinary few-percent moves.
+
+### Sigma m_nu upper limits changed
+
+nuLCDM derived table (cell `9b2f2cac`), 95% CL upper limits in eV:
+
+| | BAO+CMB | PFS P+B+BAO+CMB |
+|---|---|---|
+| fid = 0.06 | `< 0.1457` -> **`< 0.1382`** | `< 0.1275` -> **`< 0.1240`** |
+| fid = 0 | `< 0.0986` -> **`< 0.0905`** | `< 0.0788` -> **`< 0.0750`** |
+
+The CMB-alone column of that table also went from `---` to finite
+(`sigma(m_nu) = 0.13807`, `< 0.3131` / `< 0.2706`).
+
+**The tightening is legitimate.** A spurious NEGATIVE eigenvalue in the CMB
+block was being added into `F_BAO+CMB` and `F_joint`, artificially widening the
+summed block along the `mnu` direction; removing it tightens those columns. This
+is the opposite sign from the dedupe (which can only loosen) and the two are
+independent effects.
+
+A repo-wide sweep (`command grep -rIn` over the working tree, excluding `.git`)
+for `0.1457`, `0.1275`, `0.0986`, `0.0788` found **no stale quotation of the old
+values** in any tracked document, notebook or source file — the only hits are
+inside the port's own untracked `.superpowers/` working notes. No further
+updates are outstanding.
+
+### The nuLCDM CMB-alone h and m_nu "improvements" are NOT like-for-like
+
+nuLCDM `h` CMB-alone reads -1.4% and `mnu` CMB-alone reads -5.1% against the
+pre-edit table. **Do not present these as tightenings.** The "before" number in both cases
+is `sqrt(|negative variance|)`, which is not an error bar at all — there was no
+1-sigma width to tighten. The percentage is a magnitude comparison between a
+meaningful width and a meaningless one, and is reported only so the arithmetic of
+the decomposition table is complete.
+
+The `mnu` moves that ARE meaningful tightenings are in the combined columns
+(`0.050282 -> 0.046178`, `0.040191 -> 0.038254`), where both the before and after
+values are genuine marginal widths of positive-definite blocks.
+
+### Artifact provenance
+
+Both notebooks consume the same two artifacts documented under "Artifact
+provenance" in the "Joint PFS+BAO+CMB+BBN MCMC forecasts (2026-08-07)" section
+above — same `CMB_CONFIG_HASH` pins, same hybrid GN/Hessian `method.per_term`,
+same `A_planck` dedupe. `load_cmb_fisher_block` raises by design if an artifact
+is missing or its hash does not match the `stream_common` pin; there is no
+fallback path.
+
+**Both artifacts are now TRACKED in git** (added 2026-08-08). They were
+untracked and not gitignored while four notebooks — the two ported Fisher
+notebooks and the two joint MCMC notebooks — hard-depended on them, so a fresh
+clone could not execute any of them. They are small (`cmb_fisher_lcdm.npz`
+38054 bytes, `cmb_fisher_nulcdm.npz` 38998 bytes) and the same directory already
+tracks comparable evidence artifacts. Regeneration, from the repo root (META
+`build_command`; the pinned hash must match or the build aborts nonzero before
+writing):
+
+```bash
+python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology lcdm
+python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
+```
