@@ -48,9 +48,10 @@ matrices, priors, and posteriors.
 
 ## A first forecast
 
-The smallest end-to-end pipeline — one redshift bin, power-spectrum multipoles, AP on —
-is a theory closure, its Jacobian, a Gaussian covariance, and the contraction of the two.
-`...` marks values you supply; {doc}`usage` gives this walkthrough in full.
+The smallest end-to-end pipeline — one redshift bin, power-spectrum multipoles, AP on — is
+a theory closure, its Jacobian, a Gaussian covariance, the contraction of the two, and a
+marginalization that drops the entries you are not constraining. `...` marks values you
+supply; {doc}`usage` gives this walkthrough in full.
 
 ```python
 import jax
@@ -58,7 +59,7 @@ jax.config.update("jax_enable_x64", True)      # required: every entry point ass
 
 import jax.numpy as jnp
 from jaxptpolypol.covariance import gaussian_covariance
-from jaxptpolypol.inference import fisher_matrix, sigma_from_fisher
+from jaxptpolypol.inference import fisher_matrix, marginalize_fisher, sigma_from_fisher
 from jaxptpolypol.model import CosmoEmulator, PS1LoopModel
 from jaxptpolypol.params import CosmoParams, FullShapeSurveyParams, pack_pk_params
 from jaxptpolypol.theory import compute_fiducial_distances, make_pk_ell_fn
@@ -91,8 +92,22 @@ k = jnp.linspace(5e-3, 0.25, 50)
 pk_ell = jitted_pk_fn(packed, k=k).reshape(3, k.shape[0])
 jac = jax.jacfwd(jitted_pk_fn, argnums=0)(packed, k=k)    # differentiable end to end
 cov = gaussian_covariance(V_survey, k, float(k[1] - k[0]), *pk_ell)
+fisher = fisher_matrix(cov, jac)
 
-print(sigma_from_fisher(fisher_matrix(cov, jac)))         # 1-sigma forecast per parameter
+# Drop the entries that are not being constrained BEFORE inverting: `k_nl` and `ndens` are
+# survey configuration, and `z`, `A_b`, `eta_b`, `logT_AGN` are held fixed here. Leaving
+# them in leaves the Fisher matrix singular and every sigma comes back `nan`.
+fixed_cosmo_names = {"z", "A_b", "eta_b", "logT_AGN"}
+fixed_survey_keys = {("shared", "k_nl", None), ("shared", "ndens", None)}
+fixed_idx = [i for i, name in enumerate(cosmo.param_keys) if name in fixed_cosmo_names]
+fixed_idx += [
+    len(cosmo.param_keys) + i
+    for i, key in enumerate(survey.pk_param_keys) if key in fixed_survey_keys
+]
+varied_idx = [i for i in range(fisher.shape[0]) if i not in fixed_idx]
+
+F_marg = marginalize_fisher(fisher, varied_idx)
+print(sigma_from_fisher(F_marg))                          # 1-sigma forecast, varied parameters
 ```
 
 {doc}`usage` develops this into four complete workflows, up to a joint PFS + BAO + CMB +
