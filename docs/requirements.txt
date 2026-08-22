@@ -1,0 +1,12 @@
+# Documentation-only dependencies.
+sphinx>=7.2
+sphinx-rtd-theme>=2.0
+myst-parser>=2.0
+
+# Light scientific deps: imported for real so autodoc can execute module-level
+# constants. The heavy / non-PyPI stack (ps_1loop_jax, candl, clipy, candl_data,
+# cosmopower_jax, blackjax, quadax) is mocked in conf.py instead.
+numpy
+scipy
+jax
+matplotlib
