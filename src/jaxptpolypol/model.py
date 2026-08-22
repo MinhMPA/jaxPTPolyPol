@@ -177,12 +177,12 @@ class CosmoEmulator:
         Parameters
         ----------
         cosmo_dict : dict[str, jnp.ndarray]
-            Parameter dictionary matching :pyattr:`parameters`.
+            Parameter dictionary matching :py:attr:`parameters`.
 
         Returns
         -------
         prediction : jnp.ndarray
-            Emulated quantity on the :pyattr:`modes` grid.
+            Emulated quantity on the :py:attr:`modes` grid.
         """
         return self.emulator.predict(cosmo_dict)
 

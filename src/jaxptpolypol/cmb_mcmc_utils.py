@@ -1,3 +1,18 @@
+"""Shared configuration and helpers for the CMB + BAO + BBN MCMC runs.
+
+Holds the run registry consumed by the ``example/mcmc`` notebooks and scripts:
+the named probe combinations (which ``candl`` terms, whether BAO is included,
+which cosmological parameters are sampled), the Planck 2018 fiducial point the
+Fisher and MCMC analyses expand around, and the plotting order, colours, and
+published reference values used when comparing chains.
+
+Alongside the registry it provides the small utilities those runs need: JSON
+save/load of a run artifact, the ``100theta -> H0`` solve that maps the sampled
+basis onto the native ``candl`` cosmology, conversions from a sampled vector to
+native :class:`~jaxptpolypol.params.CosmoParams` arrays, and a chunked map for
+evaluating a derived quantity over a long chain without exhausting memory.
+"""
+
 from __future__ import annotations
 
 import json
@@ -132,10 +147,12 @@ PAPER_REFERENCE_POINTS = {
 
 
 def scalar_value(value: Any) -> float:
+    """Coerce a 0-d array, JAX scalar, or Python number to a plain ``float``."""
     return float(np.asarray(value).reshape(()))
 
 
 def ordered_union(name_lists: Sequence[Sequence[str]]) -> tuple[str, ...]:
+    """Concatenate the name lists, dropping duplicates and preserving first-seen order."""
     ordered: list[str] = []
     seen: set[str] = set()
     for names in name_lists:
@@ -147,6 +164,7 @@ def ordered_union(name_lists: Sequence[Sequence[str]]) -> tuple[str, ...]:
 
 
 def summarize_scalar(samples: Sequence[float]) -> dict[str, float]:
+    """Return median, 16/84 percentiles, one-sided errors, mean, and std of a 1-d sample."""
     arr = np.asarray(samples)
     q16, q50, q84 = np.percentile(arr, [16.0, 50.0, 84.0])
     return {
@@ -161,18 +179,21 @@ def summarize_scalar(samples: Sequence[float]) -> dict[str, float]:
 
 
 def get_cache_dir(repo_root: str | Path) -> Path:
+    """Return (creating if needed) the run-artifact cache directory under ``repo_root``."""
     cache_dir = Path(repo_root) / CACHE_SUBDIR
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
 
 def artifact_path_for_selector(selector: str, cache_dir: str | Path) -> Path:
+    """Return the ``.npz`` artifact path for a registered combination selector."""
     if selector not in COMBINATION_CONFIGS:
         raise KeyError(f"unknown selector {selector!r}")
     return Path(cache_dir) / f"{ARTIFACT_STEM}_{selector}.npz"
 
 
 def selector_to_label(selector: str) -> str:
+    """Return the human-readable label registered for a combination selector."""
     return str(COMBINATION_CONFIGS[selector]["label"])
 
 
@@ -206,6 +227,7 @@ def save_run_artifact(
     num_integration_steps: Any,
     is_divergent: Any,
 ) -> Path:
+    """Write one chain (samples, log-posterior, whitening, diagnostics) to a compressed ``.npz``."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     metadata_json = json.dumps(_jsonable(dict(metadata)), sort_keys=True)
@@ -224,6 +246,7 @@ def save_run_artifact(
 
 
 def load_run_artifact(path: str | Path) -> dict[str, Any]:
+    """Read back an artifact written by :func:`save_run_artifact` as a plain dict."""
     path = Path(path)
     with np.load(path, allow_pickle=False) as data:
         metadata = json.loads(str(data["metadata_json"]))
@@ -244,6 +267,7 @@ def load_available_artifacts(
     cache_dir: str | Path,
     selectors: Sequence[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
+    """Load every artifact that exists in ``cache_dir``, keyed by selector, skipping missing ones."""
     chosen = tuple(selectors or DEFAULT_PLOT_ORDER)
     loaded: dict[str, dict[str, Any]] = {}
     for selector in chosen:
@@ -263,6 +287,7 @@ def solve_h_from_100theta(
     neff: float,
     n_iter: int = 8,
 ) -> jnp.ndarray:
+    """Newton-solve ``h`` from the sampled ``100*theta_star``, differentiably (fixed-iteration ``lax.scan``)."""
     target = jnp.asarray(theta100, dtype=jnp.float64) / 100.0
     ombh2 = jnp.asarray(ombh2, dtype=jnp.float64)
     omch2 = jnp.asarray(omch2, dtype=jnp.float64)
@@ -296,6 +321,7 @@ def native_cosmo_dict_from_sampled(
     mnu_fixed: float,
     neff_fixed: float,
 ) -> dict[str, jnp.ndarray]:
+    """Map a sampled cosmology vector onto the native ``candl`` parameter dict, solving for ``H0`` when ``100theta`` is sampled."""
     theta_cosmo = jnp.asarray(theta_cosmo, dtype=jnp.float64)
     sampled = {key: theta_cosmo[i] for i, key in enumerate(sampled_keys)}
     native = {
@@ -332,6 +358,7 @@ def native_cosmo_array_from_sampled(
     mnu_fixed: float,
     neff_fixed: float,
 ) -> jnp.ndarray:
+    """Same as :func:`native_cosmo_dict_from_sampled`, returned as a packed :class:`~jaxptpolypol.params.CosmoParams` array."""
     native = native_cosmo_dict_from_sampled(
         theta_cosmo,
         sampled_keys,
@@ -344,12 +371,14 @@ def native_cosmo_array_from_sampled(
 
 
 def omega_m_from_native(native_theta: Any, *, mnu_fixed: float) -> jnp.ndarray:
+    """Compute ``Omega_m`` (including the fixed neutrino density) from a native cosmology array."""
     native_theta = jnp.asarray(native_theta, dtype=jnp.float64)
     h = native_theta[0] / 100.0
     return (native_theta[1] + native_theta[2] + mnu_fixed / 93.14) / h**2
 
 
 def chunked_map(values: Any, fn: Any, *, chunk_size: int) -> np.ndarray:
+    """Apply ``fn`` over a long array in fixed-size chunks and concatenate the NumPy results."""
     values = np.asarray(values)
     outputs = []
     for start in range(0, len(values), chunk_size):

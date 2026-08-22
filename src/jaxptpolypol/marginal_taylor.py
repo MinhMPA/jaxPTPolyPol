@@ -23,7 +23,7 @@ Options review (recorded in the plan):
   F5-b expansion; downstream tasks consume it.
 
 Why ``M(theta_NL)`` must be expanded too (the logdet tilt)
----------------------------------------------------------
+----------------------------------------------------------
 The Gaussian marginal ``-2 ln L`` carries a ``ln det(A Sigma_p)`` term with
 ``A = M^T Cinv M + Sigma_p^{-1}``. That log-determinant "tilt" of the posterior
 is entirely a function of how the template matrix ``M(theta_NL)`` *varies* with
@@ -39,7 +39,7 @@ Expansion carried, per bin ``b`` (``n_b`` data points, ``p_b`` linear params,
     M(theta0 + u)  ~= M0 + dM @ u
 
 Differentiation strategy (forward-over-forward, chunked, never reverse)
-----------------------------------------------------------------------
+-----------------------------------------------------------------------
 ``make_marginal_templates`` computes ``M`` with an inner ``jax.linearize``
 (forward mode). Every outer derivative below is taken with ``jax.jacfwd`` on top
 of that, so the whole build is forward-over-forward and **no reverse-mode tape
@@ -695,18 +695,24 @@ def importance_reweight(samples, log_p_exact_fn, log_p_surrogate_fn, *,
 
     Returns
     -------
-    dict with keys
-        ``weights`` : ``(m,)`` normalized weights summing to 1 (``m = subsample``
-            or ``n``).
-        ``log_w_raw`` : ``(m,)`` UNSHIFTED log-weights
-            ``log_p_exact - log_p_surrogate`` on the evaluated set (before the
-            log-sum-exp stabilization).
-        ``ess`` : Kish effective sample size ``1 / sum_i weights_i**2``.
-        ``ess_frac`` : ``ess / m`` in ``(0, 1]``.
-        ``max_weight`` : the largest single normalized weight.
-        ``idx`` : ``(m,)`` int indices of the evaluated samples into the
-            FLATTENED ``(chains*n, d)`` sample stack (``arange(n)`` when not
-            subsampling).
+    dict
+        With keys:
+
+        ``weights``
+            ``(m,)`` normalized weights summing to 1 (``m = subsample`` or
+            ``n``).
+        ``log_w_raw``
+            ``(m,)`` UNSHIFTED log-weights ``log_p_exact - log_p_surrogate`` on
+            the evaluated set (before the log-sum-exp stabilization).
+        ``ess``
+            Kish effective sample size ``1 / sum_i weights_i**2``.
+        ``ess_frac``
+            ``ess / m`` in ``(0, 1]``.
+        ``max_weight``
+            The largest single normalized weight.
+        ``idx``
+            ``(m,)`` int indices of the evaluated samples into the FLATTENED
+            ``(chains*n, d)`` sample stack (``arange(n)`` when not subsampling).
 
     Interpretation contract (READ THIS)
     -----------------------------------

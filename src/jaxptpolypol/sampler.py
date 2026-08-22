@@ -946,7 +946,7 @@ def run_rwmh_python(rng_key, log_posterior_fn, initial_position, num_samples,
     accumulating.
 
     Differences from :func:`run_rwmh` (which are the whole point)
-    ------------------------------------------------------------
+    -------------------------------------------------------------
     - **No ``lax.scan`` / ``fori_loop``.**  ``log_posterior_fn`` is called
       once per step from Python.  It is expected to be **already
       jit-compiled** by the caller; this driver never wraps it.
@@ -1138,7 +1138,7 @@ def run_damh_python(rng_key, log_post_exact, log_post_surrogate,
     ``s(x)`` for the current state are cached and reused across steps.
 
     Shared conventions (identical to :func:`run_rwmh_python`)
-    --------------------------------------------------------
+    ---------------------------------------------------------
     ``proposal_sigma`` resolution (``None`` -> ``(2.38 / sqrt(d)) * ones(d)``;
     scalar -> broadcast; vector -> as-is); the ``0.1 * sigma * normal``
     per-chain start jitter drawn with **JAX** random from a distinct key per

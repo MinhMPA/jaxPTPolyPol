@@ -352,7 +352,7 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
       via the per-bin path of the perbin/Taylor builders.
 
     ``lin_keys`` / ``sampled_marginal_priors`` (Tier-3 c1-sampled support)
-    --------------------------------------------------------------------
+    ----------------------------------------------------------------------
     ``lin_keys`` (default :data:`LIN_SURVEY_KEYS`, the 11 marginalized rows)
     selects WHICH marginalized rows the prior_mean_fn / prior_sigma_fn cover. The
     c1-sampled analysis passes the 10-key variant ``LIN_SURVEY_KEYS`` minus
@@ -379,7 +379,7 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
     marginalized-c1 chain carry an equivalent c1 prior.
 
     ``marginal_means`` / ``fiducial_lin_means`` (fiducial-centered policy)
-    ---------------------------------------------------------------------
+    ----------------------------------------------------------------------
     Policy 2026-08-04 (user decision, CONTEXT.md): in forecast runs the
     marginalized-nuisance (theta_lin) prior MEANS default to the per-bin
     FIDUCIAL values rather than the spec's Table-I means. This keyword selects
