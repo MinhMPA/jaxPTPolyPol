@@ -6,10 +6,12 @@ which cosmological parameters are sampled), the Planck 2018 fiducial point the
 Fisher and MCMC analyses expand around, and the plotting order, colours, and
 published reference values used when comparing chains.
 
-Alongside the registry it provides the small utilities those runs need: JSON
-save/load of a run artifact, the ``100theta -> H0`` solve that maps the sampled
-basis onto the native ``candl`` cosmology, conversions from a sampled vector to
-native :class:`~jaxptpolypol.params.CosmoParams` arrays, and a chunked map for
+Alongside the registry it provides the small utilities those runs need:
+save/load of a run artifact -- a compressed ``.npz`` whose arrays are stored
+natively and whose only JSON member is the ``metadata_json`` stamp -- the
+``100theta -> H0`` solve that maps the sampled basis onto the native ``candl``
+cosmology, conversions from a sampled vector to native
+:class:`~jaxptpolypol.params.CosmoParams` arrays, and a chunked map for
 evaluating a derived quantity over a long chain without exhausting memory.
 """
 
@@ -227,7 +229,13 @@ def save_run_artifact(
     num_integration_steps: Any,
     is_divergent: Any,
 ) -> Path:
-    """Write one chain (samples, log-posterior, whitening, diagnostics) to a compressed ``.npz``."""
+    """Write one run to a compressed ``.npz`` and return the path written.
+
+    The samples are the run's chains already pooled into a single flat array
+    (``samples.reshape(-1, n_params)``), not a single chain; ``flat_log_post``
+    is pooled to match. Metadata travels as a single JSON string under
+    ``metadata_json``; every other member is stored as a native array.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     metadata_json = json.dumps(_jsonable(dict(metadata)), sort_keys=True)
@@ -321,7 +329,13 @@ def native_cosmo_dict_from_sampled(
     mnu_fixed: float,
     neff_fixed: float,
 ) -> dict[str, jnp.ndarray]:
-    """Map a sampled cosmology vector onto the native ``candl`` parameter dict, solving for ``H0`` when ``100theta`` is sampled."""
+    """Map a sampled cosmology vector onto the native ``candl`` parameter dict.
+
+    ``H0`` is taken straight from the sampled vector when it is sampled.
+    Otherwise it is solved for from ``100theta`` -- using the sampled
+    ``100theta`` if present, and the fiducial ``100theta`` if not -- so a basis
+    that samples neither still yields the fiducial ``H0``.
+    """
     theta_cosmo = jnp.asarray(theta_cosmo, dtype=jnp.float64)
     sampled = {key: theta_cosmo[i] for i, key in enumerate(sampled_keys)}
     native = {

@@ -140,7 +140,13 @@ found by review during the experiment (fix required before artifacts are consume
 the shared A_planck internal prior is counted once per Planck term (4×) in ANY
 sum-of-terms Fisher/Hessian with all_priors=True — this also afflicts the committed
 `fisher_joint_PFS_BAO_CMB_*` notebooks (~3–4% overconfident logA widths; separate
-follow-up). Fix mechanism (DECIDED 2026-08-07): automated shared-prior inventory
+follow-up). [FORWARD POINTER, added 2026-08-22: the clause naming the
+`fisher_joint_PFS_BAO_CMB_*` notebooks is superseded ~15 lines below. Those two were
+PORTED 2026-08-08 and no longer carry the overcount, and the measured logA shifts were
++2.84%/+1.87% (LCDM) and +32.7%/+1.53% (nuLCDM) — NOT the ~3–4% estimated here. The
+only notebooks still affected are the SUPERSEDED candl pair. Left in place as the
+2026-08-07 record; read the PORTED paragraph for the current state.]
+Fix mechanism (DECIDED 2026-08-07): automated shared-prior inventory
 across terms + duplicate-curvature subtraction after summation, prior widths read
 programmatically from the likelihood objects (per-term log_likes and their
 validation references stay untouched); hard abort if a shared prior's curvature
