@@ -117,4 +117,3 @@ that fail loudly if the pipeline drifts.
   benchmarks, validation gates, forecast results, and the evidence behind each decision.
 - **`docs/design/desi-convention-map.md`** — the parameter-convention map between this
   code and the DESI DR1-reanalysis EFT prior specification.
-
