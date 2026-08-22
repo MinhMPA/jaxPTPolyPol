@@ -25,7 +25,16 @@ pip install -e .
 
 ## Running tests
 
-Only ps_1loop_jax has unit tests:
+This repo has its own unit-test suite:
+
+```bash
+cd /Users/nguyenmn/jaxPTPolyPol
+pytest tests/ -q              # expect: 255 passed, 15 deselected
+pytest tests/ --run-heavy     # opt into the 4 memory-heavy modules (~85 GB together)
+```
+
+The 15 deselected tests are the `heavy`-marked modules gated in `tests/conftest.py`; run
+those one file at a time. ps_1loop_jax carries its own suite for the model layer:
 
 ```bash
 cd /Users/nguyenmn/ps_1loop_jax-for-pfs
@@ -34,7 +43,17 @@ pytest tests/test_ps_1loop.py # single file
 pytest tests/ -k "test_name"  # single test
 ```
 
-jaxPTPolyPol uses Jupyter notebooks in `example/fisher/` as integration tests. Run them manually to verify end-to-end.
+jaxPTPolyPol also uses Jupyter notebooks in `example/fisher/` and `example/mcmc/` as integration tests. Run them manually to verify end-to-end.
+
+## Building the docs
+
+The docs build is a CI gate (`.github/workflows/docs.yml`), with warnings promoted to errors:
+
+```bash
+python -m pip install -r docs/requirements.txt
+rm -rf docs/_build                                        # -W only re-reports what it re-reads
+python -m sphinx -W -b html docs/source docs/_build/html
+```
 
 ## Architecture
 
@@ -89,12 +108,25 @@ Fiducial distances are computed once (outside JIT) via `compute_fiducial_distanc
 
 ## Module map (jaxptpolypol)
 
+18 modules, one published API page each under `docs/source/api/`.
+
 - `params.py` — CosmoParams, SurveyParams pytrees, pack/unpack utilities
-- `model.py` — CosmoEmulator (wraps cosmopower-jax), PS1LoopModel (wraps ps_1loop_jax)
-- `theory.py` — `make_pk_ell_fn` factory, `compute_fiducial_distances`
-- `covariance.py` — Gaussian covariance for P_ℓ multipoles
+- `model.py` — CosmoEmulator (wraps cosmopower-jax), PS1LoopModel, BispectrumTreeModel
+- `theory.py` — `make_pk_ell_fn` factory, joint P+B closures, `compute_fiducial_distances`
+- `covariance.py` — Gaussian covariance blocks for P, B, and joint P+B
 - `inference.py` — `fisher_matrix`, `marginalize_fisher`, `gaussian_prior_fisher`, `build_prior_sigmas`
+- `marginalization.py` — marginalization and projection helpers for Fisher corner plots
+- `marginal_likelihood.py` — analytic Gaussian marginalization of the linear EFT/stoch block
+- `marginal_taylor.py` — cached Taylor expansions of the per-bin marginal templates
+- `derived.py` — projection to derived parameters (Ω_m, σ_8, H_0)
+- `priors.py` — packaged Gaussian prior specifications for full-shape analyses
+- `desi_priors.py` — DESI DR1-reanalysis (arXiv:2511.20757 Table I) prior spec machinery
 - `bao.py` — BAO observables and Fisher forecast
+- `cmb.py` — `candl`-based CMB likelihood adapters
+- `cmb_mcmc_utils.py` — run registry and helpers for the CMB + BAO + BBN MCMC runs
+- `joint_forecast.py` — joint forecast log-posterior helpers (`embed_fisher`, …)
+- `sampler.py` — BlackJAX NUTS / RWMH with parameter whitening
+- `chain_analysis.py` — chain analysis utilities for packed parameter vectors
 - `plotting.py` — `plot_contours`, `plot_Gaussian`, `triangle_plot`
 
 ## Key conventions
