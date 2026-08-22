@@ -1,6 +1,6 @@
 # DESI (2511.20757) ↔ ps_1loop_jax convention map — Derivation A (independent)
 
-**Purpose.** First of two *independent* derivations (Stream-B decision 1, CONTEXT.md
+**Purpose.** First of two *independent* derivations (Stream-B decision 1, theory.md: Priors
 "grill session 2026-07-30") of the layer-1 prior-convention map between the
 `ps_1loop_jax` EFT/stochastic coefficient conventions and those of the DESI DR1
 reanalysis **arXiv:2511.20757** (Table I) and its companion **Paper 1,
@@ -10,7 +10,7 @@ Derivation B is produced independently; the controller diffs the two.
 **Scope.** This is a *derivation/documentation* deliverable only — no code, no tests.
 The map is consumed by Task 3 (the `desi_dr1_reanalysis_2511_20757` spec).
 
-**Two-layer structure (CONTEXT.md).**
+**Two-layer structure (theory.md: Priors).**
 - *Layer 1* (this document): a per-parameter conversion `ours = paper × factor + offset`
   in matching units, derived by equating operators at identical `(k, μ, z)`.
 - *Layer 2* (runtime, θ_NL-dependent): the `A_AP` / `A_amp` rescaling from the Table-I
@@ -279,7 +279,12 @@ b2·σ8²(z)` ⇒ prior on raw `b2` is `𝒩(0, (5/σ8²(z))²)`. Factor `1/σ8�
 **Overall:** all four primary sources reached and read at the equation/table level
 (DESI-2 Table I and Paper 1 Eqs 58/59 + Table III read from rendered page images; CLASS-PT
 Eqs 2.15–2.23 from rendered page 12). Every prior value in Table I is reproduced. Agreement
-with CONTEXT.md on the checked values (below). Confidence is **high** except items A and C.
+with the recorded decisions on the checked values (below). Confidence is **high** except items A and C.
+
+> *`CONTEXT.md` is this project's internal decision record: it is kept local and is
+> not distributed with the repository. The cross-check below was performed against
+> it and is recorded verbatim; the published summary of the same decisions is
+> `docs/source/theory.md`.*
 
 **Cross-check vs CONTEXT.md (no silent deference):**
 - ✅ `c2` mean `30` — matches Table I `𝒩(30,30²)`.
@@ -302,7 +307,7 @@ diagonal (`factor=1, offset=0`); the true map is the triangular `f`-dependent in
 Eq (2.23) (§4), which turns the paper's diagonal prior into a **correlated, f-shifted**
 prior on our coefficients — notably a ≈`−(f/3)·30 ≈ −8 [Mpc/h]²` mean shift on `c0` and a
 ≈20% width inflation on `c2`. **This contradicts the framework's per-parameter-factor
-assumption** (CONTEXT.md "Two-layer convention map": "a per-parameter factor converting
+assumption** (theory.md: Priors, "Two-layer convention map": "a per-parameter factor converting
 our raw coefficient definition (e.g. counterterm −2k²c0·P) to the paper's"). Task 3 must
 decide: (i) accept the basis mismatch and place the paper's diagonal priors directly on
 our `c̃` (a documented O(f) approximation, tolerable because these are wide-prior,

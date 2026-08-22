@@ -126,7 +126,7 @@ identical (k,μ): `c1^o (k/0.45)² = c1^p k²` ⇒ **c1^o = c1^p · 0.45² = 0.2
 factor 0.45² = 0.2025, offset 0.** (Factor uses production `k_nl_rsd = 0.45`, NOT
 the `bs_tree.py:31` default 0.3.) Extra-factor check: our c1 enters Z1 *additively
 with no f or b1 prefactor* — identical to the verified D'Amico form (2502.14758
-eq 3.14, per CONTEXT.md); assumed identical to the Ivanov/[160] form (see open
+eq 3.14, per theory.md: Why $c_1$ sits in the linear block); assumed identical to the Ivanov/[160] form (see open
 issue #2).
 
 **B_shot, A_shot** — Paper 1 eq (59) is linear-homogeneous in (P_shot, B_shot,
@@ -149,7 +149,7 @@ b1σ8. Our fiducial `bGamma3z = 23/42(b1z−1)` equals the prior mean by constru
 `b_G2σ8²(z)` ~ N[0,5²]. Our sampled variables are **raw** b2, bG2. Map
 `b2σ8²(z) = b2^o · σ8²(z)` ⇒ `b2^o = (b2σ8²)/σ8²(z)`: **factor 1/σ8²(z), offset 0**,
 so `σ_ours = 5/σ8²(z)` (θ_NL-dependent — *not* a scalar constant). Same for bG2.
-(b1 is sampled as raw b1, flat/unbounded per CONTEXT.md; paper's b1σ8 ~ U[0,3];
+(b1 is sampled as raw b1, flat/unbounded per theory.md: The $b_1\sigma_8$ measure; paper's b1σ8 ~ U[0,3];
 no numeric row required.)
 
 ---
@@ -222,9 +222,9 @@ Config symbols: `knl_b` = per-bin `knl_bins`; `σ8(z)` = growth-scaled σ8 at bi
    [160] (Ivanov), whose explicit equation I could not fetch. I assumed the
    **additive, bare-Z1** form `Z1 − c1 μ²(k/knl)²` (no f, no b1 prefactor),
    matching (a) our `bs_tree.py:169` and (b) the D'Amico form verified in
-   CONTEXT.md (2502.14758 eq 3.14). A *multiplicative* form `Z1(1 − c1 k²μ²)`
+   theory.md (2502.14758 eq 3.14). A *multiplicative* form `Z1(1 − c1 k²μ²)`
    would introduce an extra `(b1+fμ²)` factor and change the map. Factor
-   **0.45² = 0.2025** holds only under the additive assumption. CONTEXT.md itself
+   **0.45² = 0.2025** holds only under the additive assumption. The decision record itself
    flags this exact residual ("possible extra f/b1 factors still to be derived").
    **Recommend the CLASS-PT numerical cross-check here if A and B agree elsewhere.**
 
@@ -245,13 +245,18 @@ Config symbols: `knl_b` = per-bin `knl_bins`; `σ8(z)` = growth-scaled σ8 at bi
    The Paper 1 rendering scrambled the superscripts. **Layer-2 flags in the table
    above follow Paper 2's verbatim Table I** (my reference chain).
 
+> *`CONTEXT.md` is this project's internal decision record: it is kept local and is
+> not distributed with the repository. The cross-check below was performed against
+> it and is recorded verbatim; the published summary of the same decisions is
+> `docs/source/theory.md`.*
+
 **CONTEXT.md contradictions:** none. Every CONTEXT.md-recorded paper value was
 *confirmed* against the PDF-verbatim Table I: c2 mean 30 ✓, c̃ N(400,400²) ✓,
 c1 N(0,5²) [Mpc/h]² ✓, c0 σ=30 ✓, bΓ3 mean 23/42(b1−1) width 1 ✓, P_shot
 mean-1↔mean-0 shift ✓, a0/a2 factor `(knl_b/0.45)²` ✓, c1 factor `0.45²` (not the
 0.3 default) ✓. One transcription note: the **ar5iv HTML** of 2511.20757
 mislabeled b2σ8²/bG2σ8² as "analytically marginalized"; the **PDF-verbatim**
-Table I (and its caption) lists them under **(sampled)** — matching CONTEXT.md's
+Table I (and its caption) lists them under **(sampled)** — matching theory.md's
 resolution that b2/bG2 are directly sampled. PDF is authoritative.
 
 **Layer-2 (runtime, not in `our mean/sigma`):** priors are imposed on

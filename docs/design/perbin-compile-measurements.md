@@ -472,7 +472,7 @@ non-Gaussianity documented in the tier2-era logdet-tilt work (with constant
 legacy priors, the logA mean already sat ~0.3–0.45 σ_F beyond the first-order
 tilt) — i.e. marginalization volume through the θ-dependence of A(θ) = MᵀC⁻¹M +
 Σ_p⁻¹ plus model curvature, amplified here by the wider DESI ctr priors. The
-mean-vs-mode methodology rule (CONTEXT.md) is unaffected: the tilted center
+mean-vs-mode methodology rule (theory.md: Mean versus mode) is unaffected: the tilted center
 remains the mode-level comparison target; the mean offset is genuine, now
 decomposed into a width-volume part (~0.4 σ_F on logA, all of ns) and an
 intrinsic-curvature part (~0.8 σ_F on logA). Evidence:
@@ -504,7 +504,7 @@ plus the noLD corroboration JSON on the rotation branch.
 
 ## Tier-3: sampled-c1 vs marginalized-c1 validation (2026-08-01) — PASS
 
-The last open validation from CONTEXT.md's c1 section. Route A marginalizes c1
+The last open validation from theory.md: Why $c_1$ sits in the linear block. Route A marginalizes c1
 analytically by linearizing the theory in it, which drops the `Z1_fog·Z1_fog`
 c1² cross-term. This test asks whether that omission is
 visible in the cosmology posterior.
@@ -669,7 +669,7 @@ Widths/correlations compare the chain against the surrogate's own
 Hessian-Fisher `F = −hess logpost(0)` on the **6-parameter cosmology block
 (incl. mnu)**; the mean check uses the AD-tilted center
 `μ_tilt = fid + F⁻¹∇logpost(fid)`. Run TWICE at production scale under the two
-marginal-mean modes (CONTEXT.md policy 2026-08-04). Artifacts:
+marginal-mean modes (theory.md: Fiducial-centered prior means; policy 2026-08-04). Artifacts:
 `cache/nulcdm_gate_{spec,fiducial}_means.json` (+ `…_chain_w.npy`).
 
 **spec-means mode** (paper-fidelity means; seed 20260807; acc 0.275; chain wall
@@ -866,7 +866,7 @@ Reader note on differing defaults: the validation gate
 (`desi_prior_validation.py`) defaults to `--marginal-means spec`, preserving the
 LCDM `log_post(x0) = -172.996046` tripwire and the recorded Stream-B artifacts,
 while the production notebooks default to `PRIOR_VARIANT = "fiducial_centered"`
-(the CONTEXT.md policy). This is deliberate — gate JSONs and notebook outputs
+(the fiducial-centered policy). This is deliberate — gate JSONs and notebook outputs
 therefore use different prior means and are not directly comparable on lp0 or
 AD-tilted centers unless the modes are matched.
 
@@ -1063,7 +1063,7 @@ logA. Not corrected here; the scripts are the production path.
 measured before/after tables and why the two notebooks moved by such different
 amounts.
 
-Adoption rationale and the decisions of record are in CONTEXT.md (2026-08-07).
+Adoption rationale and the decisions of record are in theory.md: CMB (2026-08-07).
 
 ## Joint PFS+BAO+CMB+BBN MCMC forecasts (2026-08-07)
 
@@ -1082,7 +1082,7 @@ outputs:
 | `cond(cov_joint)` | 2.045e+08 | 2.046e+08 (`cond(cov_nl_prior)` 1.209e+07) |
 
 The probe set and the CMB-as-Gaussian treatment are the decisions of record in
-CONTEXT.md (2026-08-06 / 2026-08-07); the CMB block itself and the two-branch
+theory.md: CMB (2026-08-06 / 2026-08-07); the CMB block itself and the two-branch
 experiment that produced it are documented above under
 "CMB Fisher block: two-branch experiment (2026-08-06/07)" and are not repeated
 here.

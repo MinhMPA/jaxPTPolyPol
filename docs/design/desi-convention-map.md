@@ -19,7 +19,7 @@ layer-1 + layer-2 prior-convention map. Produced by Stream-B Task 3.
 
 ---
 
-## Two-layer structure (CONTEXT.md)
+## Two-layer structure (theory.md: Priors)
 
 - **Layer 1** (this document): a per-parameter conversion `ours = paper × factor +
   offset` in matching units, derived by equating operators at identical `(k, μ, z)`.
@@ -219,7 +219,7 @@ key applied uniformly to all bins, (ii) no `f`-token in `factor_formula`/`mean_f
 - **(B) Full triangular rotation (recommended for correctness):** add a per-bin
   counterterm-rotation to `make_desi_prior_fns` that builds `μ_p` and the **off-diagonal**
   `Σ_p` block from `f(z)` via `L(f)`. The marginal-likelihood API already accepts a full
-  `Σ_p(θ_NL)` (CONTEXT.md "API requirement (firm)"), so no likelihood change is needed —
+  `Σ_p(θ_NL)` (theory.md: The marginal likelihood, "API requirement (firm)"), so no likelihood change is needed —
   only a new spec token (e.g. `mean_formula:/factor_formula: ctr_multipole_rotation`) and
   the per-bin block assembly. Matches A's recommendation.
 - **(C) Rotate the templates:** apply `L(f)⁻¹` to the `c0/c2/c4` template columns so the
@@ -244,7 +244,7 @@ and the bispectrum uses `Z1^FoG` on each leg:
 This is **additive** (`Z1 − c1 μ² (k/k_NL)²`), with **no extra `(b1+fμ²)` or `f` factor** —
 character-identical to `ps_1loop_jax` `bs_tree.py:169`
 (`Z1_fog = (b1 + f μ²) − c1·μ²·(k/k_nl_rsd)²`) and to the D'Amico form (2502.14758 Eq 3.14,
-per CONTEXT.md). The **multiplicative** hypothesis (`Z1(1 − c1 k²μ²)`, which would inject
+per theory.md). The **multiplicative** hypothesis (`Z1(1 − c1 k²μ²)`, which would inject
 an extra `b1 + fμ²`) is **excluded**. This closes the sole MED-confidence concern shared
 by A and B.
 
@@ -319,6 +319,11 @@ layer-1-mapped, **pre-layer-2**. Config symbols: `knl_b` = per-bin `knl_bins`; `
 ---
 
 ## 5. Cross-check against CONTEXT.md (Step 4)
+
+> *`CONTEXT.md` is this project's internal decision record: it is kept local and is
+> not distributed with the repository. The cross-check below was performed against
+> it and is recorded verbatim; the published summary of the same decisions is
+> `docs/source/theory.md`.*
 
 All recorded CONTEXT.md values are **confirmed** against the primary PDFs — no numeric
 contradiction:
