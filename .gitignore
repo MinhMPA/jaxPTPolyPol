@@ -173,3 +173,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Working documentation (plans, design notes, measurement records).
+# NOTE: gitignore does NOT untrack already-tracked files. The 11 files under
+# docs/ that were tracked as of 2026-08-09 (incl. docs/design/perbin-compile-
+# measurements.md and the committed plan docs) remain versioned and will keep
+# being committed when edited. This rule only stops NEW docs/ files from being
+# added. To add one deliberately: git add -f docs/<path>
+docs/

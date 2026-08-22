@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Refuse accidentally-staged large files.
+#
+# Why not nbstripout: this repo treats committed notebook OUTPUTS as evidence —
+# reviews verify numbers with `git show <rev>:<notebook>`, determinism gates
+# compare committed outputs across runs, and at least one real defect (negative
+# marginal variances behind a `---`) was found by reading a committed
+# RuntimeWarning. Stripping outputs would delete that audit trail. Executed
+# notebooks (~5-6 MB) are therefore expected and allowed; what this hook stops
+# is regenerable bulk (Taylor templates ~21 MB, MCMC chains) reaching history.
+#
+# Install:  ln -sf ../../scripts/git-hooks/pre-commit .git/hooks/pre-commit
+# Bypass:   git commit --no-verify
+set -euo pipefail
+
+BLOCK_MB=10
+WARN_MB=5
+
+files=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$files" ] && exit 0
+
+fail=0
+total=0
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    size=$(git cat-file -s ":$f" 2>/dev/null) || continue
+    total=$((total + size))
+    mb=$(awk "BEGIN{printf \"%.2f\", $size/1048576}")
+    if awk "BEGIN{exit !($size > $BLOCK_MB * 1048576)}"; then
+        echo "BLOCKED: $f is ${mb} MB (limit ${BLOCK_MB} MB)"
+        fail=1
+    elif awk "BEGIN{exit !($size > $WARN_MB * 1048576)}"; then
+        echo "large:   $f is ${mb} MB"
+    fi
+done <<< "$files"
+
+tot_mb=$(awk "BEGIN{printf \"%.1f\", $total/1048576}")
+awk "BEGIN{exit !($total > 25 * 1048576)}" && echo "note:    staged total is ${tot_mb} MB"
+
+if [ "$fail" = "1" ]; then
+    cat >&2 <<'MSG'
+
+Commit refused. Regenerable bulk (taylor_*.npz, *_chain_w.npy) belongs in
+example/mcmc/cache/ untracked — rebuild it from the build scripts instead.
+If this file genuinely must be committed: git commit --no-verify
+MSG
+    exit 1
+fi
+exit 0
