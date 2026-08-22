@@ -48,7 +48,6 @@ autodoc_mock_imports = [
     "quadax",
     "numdifftools",
     "corner",
-    "getdist",
 ]
 
 autodoc_default_options = {
