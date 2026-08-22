@@ -141,7 +141,7 @@ def make_full_params_fn(fiducial_params, varied_idx):
 
     Parameters
     ----------
-    fiducial_params : array_like, shape (n_total,)
+    fiducial_params : array_like, shape ``(n_total,)``
         Full fiducial parameter vector.
     varied_idx : sequence of int
         Indices of the varied parameters.

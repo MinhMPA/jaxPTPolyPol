@@ -305,7 +305,7 @@ def bao_fisher_matrix(
     ----------
     bao_data : BAOData
         Loaded BAO dataset.
-    fiducial_params : array, shape (n_cosmo,)
+    fiducial_params : array, shape ``(n_cosmo,)``
         Fiducial cosmological parameter values (packed array).
     cosmo_keys : tuple of str
         Cosmological parameter names.
@@ -319,7 +319,7 @@ def bao_fisher_matrix(
 
     Returns
     -------
-    F_bao : array, shape (n_cosmo, n_cosmo)
+    F_bao : array, shape ``(n_cosmo, n_cosmo)``
         BAO Fisher matrix.  Can be added to a full-shape Fisher matrix
         (after ensuring consistent parameter ordering) for a joint
         analysis.
@@ -382,16 +382,16 @@ def add_bao_to_fullshape_fisher(
 
     Parameters
     ----------
-    F_fullshape : array, shape (n_total, n_total)
+    F_fullshape : array, shape ``(n_total, n_total)``
         Full-shape Fisher matrix.
-    F_bao : array, shape (n_cosmo, n_cosmo)
+    F_bao : array, shape ``(n_cosmo, n_cosmo)``
         BAO-only Fisher matrix (cosmological parameters only).
     n_cosmo : int
         Number of cosmological parameters.
 
     Returns
     -------
-    F_joint : array, shape (n_total, n_total)
+    F_joint : array, shape ``(n_total, n_total)``
         Combined Fisher matrix.
     """
     n_total = F_fullshape.shape[0]

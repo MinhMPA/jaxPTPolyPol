@@ -442,13 +442,13 @@ def marginalize_fisher(
 
     Parameters
     ----------
-    fisher : array, shape (n_total, n_total)
+    fisher : array, shape ``(n_total, n_total)``
     varied_idx : sequence of int
         Indices of the parameters to *keep*.
 
     Returns
     -------
-    F_marg : array, shape (n_varied, n_varied)
+    F_marg : array, shape ``(n_varied, n_varied)``
     """
     idx = jnp.array(varied_idx)
     return fisher[jnp.ix_(idx, idx)]
