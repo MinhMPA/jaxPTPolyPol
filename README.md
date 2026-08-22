@@ -1,5 +1,7 @@
 # jaxPTPolyPol
 
+[![Documentation Status](https://readthedocs.org/projects/jaxptpolypol/badge/?version=latest)](https://jaxptpolypol.readthedocs.io/en/latest/)
+
 Fisher forecasts and Bayesian inference for the **galaxy power spectrum and bispectrum
 multipoles** in perturbation theory, written in JAX — end-to-end differentiable, from the
 linear-$P(k)$ emulator through the EFT model to the posterior.
