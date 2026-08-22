@@ -11,9 +11,11 @@ The module also carries the run **registry** as module-level constants —
 ``COMBINATION_CONFIGS`` (which ``candl`` terms each named probe combination uses, whether
 BAO is included, which cosmological parameters are sampled), ``DEFAULT_FIDUCIAL_NATIVE``
 (the Planck 2018 expansion point), and the plotting order, colours, and published
-reference points. Autodoc does not render module-level data for a module without an
-``__all__``, so those values are not reproduced below; read them from the source, linked
-from each function via ``[source]``.
+reference points. Autodoc renders module-level data only when the assignment
+carries an attribute docstring -- a ``#:`` comment above it or a string literal below it.
+``:undoc-members:`` does not override that, and ``__all__`` has no bearing on it either.
+These constants are plain assignments, so they are not reproduced below; read them from
+the source, linked from each function via ``[source]``.
 
 ```{eval-rst}
 .. automodule:: jaxptpolypol.cmb_mcmc_utils
