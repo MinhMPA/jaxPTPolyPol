@@ -135,8 +135,10 @@ $$
 
 where $m_0$ is the theory evaluated at $\theta_{\rm lin} = 0$ and $M = \partial t /
 \partial \theta_{\rm lin}$ is a matrix of *templates* — one column per linear parameter.
-This decomposition is not an approximation: it has been verified empirically to the
-float64 floor. Note that the template columns may themselves depend on
+For all but one of the linear-block parameters below, this decomposition is not an
+approximation — it has been verified empirically to the float64 floor. The exception is
+$c_1$, where the linearity is imposed rather than found; the next section explains why
+that is safe. Note that the template columns may themselves depend on
 $\theta_{\rm NL}$ (the $c_{\rm fog}$ column carries a factor $(b_1 + f\mu^2)^2$, for
 instance); that is perfectly compatible with linearity in $\theta_{\rm lin}$.
 
@@ -229,7 +231,8 @@ $b$
 : the data's pull on $\theta_{\rm lin}$, so $A^{-1}b$ is the conditional best fit and
   $b^{\mathsf T}A^{-1}b$ is the $\chi^2$ that fitting the linear block buys back.
 
-The parameter-independent constant $-\tfrac12 \ln \det C$ is dropped throughout.
+A parameter-independent constant — $\ln \det C$ in the $-2\ln L$ convention
+used here — is dropped throughout.
 
 ### The log-determinant term
 
@@ -284,8 +287,12 @@ instead of seconds — which is what turns a multi-day chain into a run of minut
 Three things about this are worth understanding.
 
 **$M$ must be expanded too.** It would be tempting to freeze $M$ at $M(\theta_0)$ and
-expand only $m_0$. That would silently delete the log-determinant tilt, since
-$\ln\det(A\Sigma_p)$ depends on $\theta_{\rm NL}$ *only* through how $M$ varies. So $M$
+expand only $m_0$. That would silently delete part of the log-determinant tilt: the only
+route by which the *templates* reach $\ln\det(A\Sigma_p)$ is through how $M$ varies with
+$\theta_{\rm NL}$, so a frozen $M$ would make that contribution vanish. (The prior
+covariance $\Sigma_p(\theta_{\rm NL})$ carries its own $\theta_{\rm NL}$ dependence, but it
+is supplied at runtime rather than expanded — which is what keeps the templates
+prior-independent.) So $M$
 carries its first-order variation $\mathrm{d}M$, while $m_0$ — which enters the residual
 quadratically — is carried to second order.
 
@@ -453,10 +460,15 @@ the directions it retains.
 
 One consequence is worth flagging. An internal prior that the `candl` implementation
 shares across four Planck likelihood terms gets counted once per term in any naive
-sum-of-terms Fisher matrix. The
-cached MCMC artifacts subtract the duplicate curvature after summation; the committed
-`fisher_joint_PFS_BAO_CMB_*` notebooks do not yet, and are correspondingly a few per cent
-overconfident in $\log A$.
+sum-of-terms Fisher matrix. The cached block subtracts that duplicate curvature after
+summation, so every notebook that loads the artifact inherits the correction — the joint
+MCMC notebooks and the `fisher_joint_PFS_BAO_CMB_*` Fisher notebooks alike. Two older
+notebooks, `example/fisher/fisher_cmb_candl_LCDM.ipynb` and
+`example/fisher/fisher_cmb_candl_nuLCDM.ipynb`, build the CMB Fisher matrix inline from
+the likelihoods instead, and therefore still carry the overcount. They are kept as
+**superseded reference material** — a readable record of how the block was originally
+constructed — and carry banners saying not to cite their numbers and not to re-execute
+them.
 
 Because $\tau$ is constrained by the CMB curvature and by nothing else in the combination,
 it becomes a genuinely sampled dimension with no separate prior, and its marginal is

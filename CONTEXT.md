@@ -154,7 +154,12 @@ fingerprint fails; no enforce-if-present grace (no legacy CMB artifacts exist).
 nulcdm}.npz` (hashes pinned `97f8695a…` / `e89efa39…`, G2 min eig 4188.53 /
 51.3613 strict > 0, A_planck dedupe 3×160000 subtracted after summation) are
 loaded by both joint MCMC notebooks. The deferred `fisher_joint_PFS_BAO_CMB_*`
-A_planck overcount remains OPEN (~3–4% overconfident logA there). Measured
+A_planck overcount was PORTED 2026-08-08 (`ea69bf4` LCDM / `3b02cbb` nuLCDM — both
+notebooks now load the deduped hybrid-GN artifact; measured logA shifts +2.84%/+1.87%
+LCDM and +32.7%/+1.53% nuLCDM, NOT the estimated ~3–4%). The only notebooks still
+carrying the overcount are the un-ported, SUPERSEDED candl pair
+`example/fisher/fisher_cmb_candl_{LCDM,nuLCDM}.ipynb` — reference material, do not
+re-execute. Measured
 consequences of the hybrid-GN choice for the m_ν wall, with σ_F flavors labelled:
 on matched Gauss–Newton denominators the truncation ratio moves 0.46 → 0.877 and
 the fiducial sits 0.29 → 1.58 σ_F above the wall (a large weakening), while the

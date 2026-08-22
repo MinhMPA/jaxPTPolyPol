@@ -130,15 +130,19 @@ Planck `.clik` likelihood trees
   inside `example/mcmc/scripts/build_cmb_fisher_block.py`, and their content is hashed
   into that script's `CMB_CONFIG_HASH`.
 
-**When you need them.** Only to *rebuild* the cached CMB Fisher block
-(`example/mcmc/cache/cmb_fisher_{lcdm,nulcdm}.npz`), which is what
-`example/mcmc/scripts/build_cmb_fisher_block.py` produces, and to run the two
-`example/fisher/fisher_cmb_candl_*.ipynb` notebooks that build a CMB Fisher matrix
-directly from the likelihoods.
+**When you need them.** Only to *rebuild* the cached CMB Fisher block:
 
-**When you do not.** Every notebook that *consumes* the cached block — including both
-joint PFS + BAO + CMB + BBN MCMC notebooks — loads the `.npz` artifact and never imports
-`candl`, `clipy`, or `candl_data`. `jaxptpolypol.cmb.load_candl_likelihood` imports
+```bash
+python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology lcdm
+python3 example/mcmc/scripts/build_cmb_fisher_block.py --cosmology nulcdm
+```
+
+which writes `example/mcmc/cache/cmb_fisher_{lcdm,nulcdm}.npz`.
+
+**When you do not.** Every notebook that *consumes* the cached block — both joint
+PFS + BAO + CMB + BBN MCMC notebooks and both `fisher_joint_PFS_BAO_CMB_*` Fisher
+notebooks — loads the `.npz` artifact and never imports `candl`, `clipy`, or
+`candl_data`. `jaxptpolypol.cmb.load_candl_likelihood` imports
 `candl` and `clipy` lazily, inside the function body, so `import jaxptpolypol` succeeds
 without any of it. That laziness is the reason these are optional rather than core
 dependencies.
