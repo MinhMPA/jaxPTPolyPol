@@ -1,6 +1,7 @@
 """Tier-3 validation: SAMPLED-c1 vs MARGINALIZED-c1 posteriors on the mock.
 
-The last outstanding c1 validation (CONTEXT.md c1 section): build two surrogate
+The last outstanding c1 validation (theory.md: Why c1 sits in the linear
+block): build two surrogate
 posteriors that differ ONLY in how the c1 bispectrum FoG counterterm is handled,
 under the SAME DESI DR1-reanalysis (2511.20757) priors, and confirm their
 COSMOLOGY posteriors are indistinguishable.

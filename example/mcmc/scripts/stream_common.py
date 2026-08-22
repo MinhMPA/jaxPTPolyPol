@@ -204,8 +204,8 @@ NULCDM_THEORY_CONFIG_HASH = hashlib.sha256(
 _COSMOLOGIES = ("lcdm", "nulcdm")
 
 #: c1 treatments: 'marginalized' (the base LCDM split, c1 in theta_lin) and
-#: 'sampled' (the Tier-3 split, c1 moved into theta_NL). See CONTEXT.md's c1
-#: section and build_taylor_templates_lcdm.py --c1-sampled.
+#: 'sampled' (the Tier-3 split, c1 moved into theta_NL). See theory.md: Why c1
+#: sits in the linear block, and build_taylor_templates_lcdm.py --c1-sampled.
 C1_TREATMENTS = ("marginalized", "sampled")
 
 
@@ -504,7 +504,7 @@ def cmb_fisher_path(cosmology, cache_dir=None):
     THE single place the artifact filename is constructed -- producer
     (``build_cmb_fisher_block.py``) and consumer (:func:`load_cmb_fisher_block`)
     both route through it, so a diagnostic/variant mode cannot tag one path and
-    miss another (the 2026-08-04 output-path lesson in CLAUDE.md).
+    miss another (the 2026-08-04 output-path lesson).
     """
     if cosmology not in _COSMOLOGIES:
         raise ValueError(

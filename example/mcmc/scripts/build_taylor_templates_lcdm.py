@@ -114,7 +114,8 @@ TEMPLATES_ONLY = "--templates-only" in sys.argv[1:]
 # the theory is exactly quadratic in c1, so the order-2 m0 surrogate carries the
 # c1^2 the marginalized (linearized) path drops. Distinct output filenames +
 # c1_treatment meta stamp; everything else (theory/grid/whitening machinery) is
-# identical to the marginalized build. See CONTEXT.md's c1 section.
+# identical to the marginalized build. See theory.md: Why c1 sits in the
+# linear block.
 C1_SAMPLED = "--c1-sampled" in sys.argv[1:]
 C1_TREATMENT = "sampled" if C1_SAMPLED else "marginalized"
 _C1_KEY = ('bk', 'ctr', 'c1')

@@ -791,7 +791,7 @@ def enforce_cmb_config_hash_pin(cosmology, cmb_config_hash, *, pinned):
     escape swallowed that refusal and returned 0. A build in a drifted
     environment therefore replaced a good production artifact with an unloadable
     one and reported success -- this repo's known silent-overwrite failure mode
-    (CLAUDE.md, 2026-08-04). Aborting before the write leaves the previous
+    (the 2026-08-04 output-path lesson). Aborting before the write leaves the previous
     artifact intact, which is the only outcome that cannot lose work.
     """
     if pinned is None:

@@ -156,9 +156,10 @@ def test_real_spec_loads():
 
 
 def test_real_spec_verbatim_anchor_rows():
-    """Rows recorded in CONTEXT.md from the primary PDF; if the reconciled
-    map contradicts one of these, the MAP governs -- update CONTEXT.md and
-    this test together in the same commit, quoting the paper."""
+    """Anchor rows transcribed from the primary PDF (arXiv:2511.20757 Table I);
+    if the reconciled map contradicts one of these, the MAP governs -- update
+    docs/design/desi-convention-map.md and this test together in the same
+    commit, quoting the paper."""
     spec = load_desi_prior_spec()
     c1 = spec.marginalized[("bk", "ctr", "c1")]
     assert c1.paper_mean == 0.0 and c1.paper_sigma == 5.0
@@ -964,7 +965,8 @@ def test_measure_on_non_b1_row_raises(tmp_path):
 
 
 def test_phase_gate_blocks_raw_measure(toy_spec_path):
-    """F2: real-data / nuLCDM phases refuse the raw measure (CONTEXT.md)."""
+    """F2: real-data / nuLCDM phases refuse the raw measure
+    (theory.md: The b1-sigma8 measure)."""
     for phase in ("real_data", "nulcdm"):
         with pytest.raises(SpecValidationError, match="measure"):
             load_desi_prior_spec(toy_spec_path, phase=phase)
