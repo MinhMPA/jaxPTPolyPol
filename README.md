@@ -110,12 +110,11 @@ that fail loudly if the pipeline drifts.
 
 ## Further reading
 
-- **`CONTEXT.md`** — domain glossary and decisions of record: what the linear vs sampled
-  parameter blocks are, how the analytic marginalization is defined, the c1 counterterm
-  treatment, and the CMB/prior methodology choices with their rationale.
+- **`docs/source/theory.md`** (the Theory page of the documentation) — what the linear
+  vs sampled parameter blocks are, how the analytic marginalization is defined, the c1
+  counterterm treatment, and the CMB/prior methodology choices with their rationale.
 - **`docs/design/perbin-compile-measurements.md`** — the running measurement record:
   benchmarks, validation gates, forecast results, and the evidence behind each decision.
 - **`docs/design/desi-convention-map.md`** — the parameter-convention map between this
   code and the DESI DR1-reanalysis EFT prior specification.
-- **`CLAUDE.md`** — conventions and hard-won lessons for anyone (human or agent) editing
-  this repository.
+

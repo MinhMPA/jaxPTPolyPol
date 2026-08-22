@@ -5,8 +5,8 @@ validated: each entry carries the verbatim paper value, the map factor (+
 affine offset), and the our-convention value; loading raises unless they
 reconcile. Layer-2 (theta_NL-dependent A_AP * A_amp rescaling, Table I
 footnote) is applied at runtime by make_desi_prior_fns. Convention-map
-provenance: docs/design/desi-convention-map.md. See CONTEXT.md
-"Stream-B decisions (grill session 2026-07-30)".
+provenance: docs/design/desi-convention-map.md. See the Theory page of the
+documentation ("Priors", docs/source/theory.md).
 
 Branch stream-b-sigmap (Amendment 1, 2026-07-31): the c0/c2/c4 counterterm
 rows carry an optional ``ctr_rotation: "multipole_to_tilde"`` token. The
@@ -67,8 +67,8 @@ class SampledRow:
     rescale: str = "none"
     #: b1 only -- which coordinate the flat prior is flat IN. "raw": flat in
     #: raw b1 (project default; differs from the paper's measure by the
-    #: cosmology-dependent weight prod_b sigma8(z_b) -- see CONTEXT.md
-    #: deviation 3). "b1sigma8": flat in y = b1*sigma8(z) on
+    #: cosmology-dependent weight prod_b sigma8(z_b) -- see the Theory page,
+    #: "The b1*sigma8 measure"). "b1sigma8": flat in y = b1*sigma8(z) on
     #: [paper_lower, paper_upper], the Table-I measure (adds the Jacobian
     #: sum_b log sigma8 and the bounds to log_prior_nl_fn).
     measure: str = "raw"
@@ -205,7 +205,8 @@ def load_desi_prior_spec(name_or_path="desi_dr1_reanalysis_2511_20757",
             f"phase={phase!r} requires the Table-I b1 measure: set the spec's "
             "b1 row to measure: b1sigma8 (raw-b1 flat differs from "
             "arXiv:2511.20757 by the prod_b sigma8(z_b) prior weight, which "
-            "lands on Sum m_nu in nuLCDM -- see CONTEXT.md deviation 3)")
+            "lands on Sum m_nu in nuLCDM -- see the Theory page, "
+            "'The b1*sigma8 measure')")
 
     return DesiPriorSpec(metadata=raw.get("metadata", {}),
                          marginalized=marginalized, sampled=sampled)
@@ -380,7 +381,8 @@ def make_desi_prior_fns(spec, *, split, knl_bins, sigma8_bins_fn,
 
     ``marginal_means`` / ``fiducial_lin_means`` (fiducial-centered policy)
     ----------------------------------------------------------------------
-    Policy 2026-08-04 (user decision, CONTEXT.md): in forecast runs the
+    Policy 2026-08-04 (user decision; see the Theory page,
+    "Fiducial-centered prior means"): in forecast runs the
     marginalized-nuisance (theta_lin) prior MEANS default to the per-bin
     FIDUCIAL values rather than the spec's Table-I means. This keyword selects
     which means ``prior_mean_fn`` returns; WIDTHS AND STRUCTURE
@@ -814,7 +816,7 @@ def b1sigma8_log_weights(theta_nl_samples, sigma8_bins_fn, *,
 
     Exact on the interior: the analytic theta_lin marginalization conditions
     on b1, so the measure change is a pure prior reweighting of theta_NL
-    (see docs: options report / CONTEXT.md deviation 3). Weights are one
+    (see the Theory page, "The b1*sigma8 measure"). Weights are one
     scalar per sample, a function of the cosmology block only (plus b1 for
     the bounds). Normalize downstream (softmax) before use with
     ``marginal_taylor.reweighted_moments``.

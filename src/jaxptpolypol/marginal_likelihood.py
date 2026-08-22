@@ -15,7 +15,8 @@ the Gaussian-prior integral over theta_lin is closed-form:
 The c1 bispectrum counterterm is genuinely (but negligibly) quadratic in the
 underlying ps_1loop_jax theory; the templates below interrogate the theory
 only through its value and slope at theta_lin = 0, so the marginal model is
-linear in c1 by construction -- exactly the 2511.20757 model. See CONTEXT.md.
+linear in c1 by construction -- exactly the 2511.20757 model. See the Theory
+page of the documentation, "Why c1 sits in the linear block".
 """
 
 from __future__ import annotations
