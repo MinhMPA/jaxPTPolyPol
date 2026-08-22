@@ -182,3 +182,12 @@ cython_debug/
 # stops NEW files in these subtrees. To add one deliberately: git add -f <path>
 docs/plans/
 docs/superpowers/
+
+# Agent-facing / internal working files: kept local, never published.
+# Untracked 2026-08-22 (`git rm --cached`), matching the docs/ decision --
+# current tree only, history retained. CONTEXT.md is the domain decision
+# record and CLAUDE.md/AGENTS.md are agent instructions; the public "why"
+# now lives in the ReadTheDocs site instead.
+CLAUDE.md
+CONTEXT.md
+AGENTS.md
