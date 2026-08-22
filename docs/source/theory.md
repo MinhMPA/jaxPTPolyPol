@@ -380,7 +380,12 @@ factors equal 1 at the fiducial cosmology, which is why a Fisher matrix evaluate
 fiducial sees only layer 1 and still agrees with the MCMC there. Not every parameter is
 rescaled: $P_{\rm shot}$, $a_0$, $a_2$, and $A_{\rm shot}$ carry no explicit factor,
 because their $1/\bar n$ and $1/\bar n^2$ normalisation already absorbs the AP volume
-dependence.
+dependence — exactly at the fiducial, and only approximately away from it. The absorption
+runs through $\bar n$, and this code uses the **fiducial** $\bar n$ as a static constant,
+so the implicit $A_{\rm AP}$ is reproduced only where $A_{\rm AP} = 1$. A Fisher matrix
+evaluated at the fiducial is therefore exact; the MCMC, which samples off-fiducial, carries
+a small residual mismatch. See the off-fiducial caveat in
+`docs/design/desi-convention-map.md`, which flags it for a future runtime refinement.
 
 ### The $b_1\sigma_8$ measure
 
@@ -458,8 +463,9 @@ degeneracy direction. Clipping the negative eigenvalue was the rejected alternat
 clipped eigenvalue is a repair, not a forecast, and it leaves real-data contamination in
 the directions it retains.
 
-One consequence is worth flagging. An internal prior that the `candl` implementation
-shares across four Planck likelihood terms gets counted once per term in any naive
+One consequence is worth flagging. An internal prior (`A_planck`, the overall Planck
+absolute calibration, $1.0000 \pm 0.0025$) that the `candl` implementation shares across
+four Planck likelihood terms gets counted once per term in any naive
 sum-of-terms Fisher matrix. The cached block subtracts that duplicate curvature after
 summation, so every notebook that loads the artifact inherits the correction — the joint
 MCMC notebooks and the `fisher_joint_PFS_BAO_CMB_*` Fisher notebooks alike. Two older

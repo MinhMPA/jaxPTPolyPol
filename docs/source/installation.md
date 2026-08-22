@@ -32,7 +32,7 @@ fail) to resolve it from an index.
 ## Step 2 — install the inference layer
 
 ```bash
-git clone <jaxPTPolyPol>
+git clone https://github.com/MinhMPA/jaxPTPolyPol.git
 cd jaxPTPolyPol
 git submodule update --init          # ext_data/bao_data (DESI BAO measurements)
 pip install -e ".[full]"

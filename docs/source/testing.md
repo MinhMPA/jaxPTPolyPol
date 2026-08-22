@@ -2,9 +2,9 @@
 
 Three layers guard this repository: a unit-test suite for the library, the companion
 repository's own suite for the model layer, and the example notebooks — which are
-integration tests whose committed outputs are the reference results. See
-{doc}`installation` if the suite will not run at all, and {doc}`usage` for what the
-notebooks actually do.
+integration tests whose committed outputs are the reference results. A fourth gate, the
+documentation build, runs in CI on every push. See {doc}`installation` if the suite will
+not run at all, and {doc}`usage` for what the notebooks actually do.
 
 ## The unit-test suite
 
@@ -60,6 +60,29 @@ pytest tests/ -v
 
 Run it whenever you touch the model layer, or when a jaxPTPolyPol tripwire fires and you
 suspect the theory rather than the inference code.
+
+## Building the docs
+
+This site is the CI gate that most often goes red on a documentation-only change, because
+it is built with warnings promoted to errors. Reproduce it exactly:
+
+```bash
+python -m pip install -r docs/requirements.txt
+python -m sphinx -W -b html docs/source docs/_build/html
+```
+
+`-W` is the whole point: a broken cross-reference, a heading not in any toctree, or a
+malformed directive fails the build rather than printing a note. Read the Docs applies the
+same rule through `fail_on_warning: true` in `.readthedocs.yaml`, so a green local build
+with `-W` is what predicts a green RTD build.
+
+Two habits keep it honest. Delete `docs/_build/` before a build you intend to trust —
+Sphinx caches per-document, so an incremental rebuild will not re-emit a warning for a
+document it did not re-read, and a cached build can pass where a clean one fails. And
+install from `docs/requirements.txt` rather than relying on whatever Sphinx is already in
+your environment: the pins there carry deliberate upper bounds, because Sphinx 9 tightened
+ambiguous Python cross-reference resolution and turned annotations that had been building
+cleanly into errors.
 
 ## Notebooks as integration tests
 

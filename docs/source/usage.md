@@ -239,7 +239,7 @@ specification and turn it into per-bin width dictionaries:
 desi_spec = load_desi_prior_spec()          # desi_dr1_reanalysis_2511_20757
 
 s8_keys = ("ombh2", "omch2", "logA", "ns", "h")
-_, _, sigma8_ref_bins = make_lcdm_rescaling_fns(
+sigma8_bins_fn, a_ap_bins_fn, sigma8_ref_bins = make_lcdm_rescaling_fns(
     pklin_emulator=pklin_emulator,
     cosmo_keys=s8_keys,
     cosmo_sizes=(1,) * len(s8_keys),
