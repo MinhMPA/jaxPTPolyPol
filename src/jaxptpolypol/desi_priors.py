@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 _RESCALE_TOKENS = ("none", "A_AP", "A_AP*A_amp", "A_AP*A_amp^2")
-_FACTOR_FORMULAS = (None, "knl_over_0p45_sq")
+_FACTOR_FORMULAS = (None, "knl_over_0p45_sq", "production_knl_rsd_sq")
 _MEAN_FORMULAS = (None, "coevolution_bGamma3")
 _CTR_ROTATIONS = (None, "multipole_to_tilde")
 _SAMPLED_RESCALE = ("none", "sigma8_sq")
@@ -140,6 +140,21 @@ def load_desi_prior_spec(name_or_path="desi_dr1_reanalysis_2511_20757",
             raise SpecValidationError(f"bad marginalized key {dotted!r}")
         row = MarginalRow(**entry)
         _validate_row(dotted, row)
+        if row.factor_formula == "production_knl_rsd_sq":
+            # The factor is DERIVED from the production bispectrum FoG scale,
+            # not a free literal: layer-1 factors must never bake in a value
+            # that can drift from the config that owns it (the k_nl_rsd
+            # 0.3-vs-0.45 incident). The spec metadata carries the scale; the
+            # loader refuses a factor that disagrees with it.
+            _knl = raw.get("metadata", {}).get("production_k_nl_rsd")
+            if _knl is None:
+                raise SpecValidationError(
+                    f"{dotted}: factor_formula production_knl_rsd_sq requires "
+                    "metadata.production_k_nl_rsd")
+            if not _close(row.factor, float(_knl) ** 2):
+                raise SpecValidationError(
+                    f"{dotted}: factor {row.factor} != "
+                    f"production_k_nl_rsd**2 = {float(_knl) ** 2}")
         marginalized[key] = row
 
     expected = set(LIN_SURVEY_KEYS)

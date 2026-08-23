@@ -77,7 +77,7 @@ marginalized:
     {paper_mean: 0.0, paper_sigma: 5.0, paper_units: "(Mpc/h)^2",
      paper_variable: "c1*A_AP*A_amp", factor: 0.2025, offset: 0.0,
      mean: 0.0, sigma: 1.0125, rescale: "A_AP*A_amp",
-     factor_formula: null, mean_formula: null}
+     factor_formula: "production_knl_rsd_sq", mean_formula: null}
   bk.stoch.B_shot:
     {paper_mean: 0.0, paper_sigma: 1.0, paper_units: "unit",
      paper_variable: "B_shot*A_AP*A_amp", factor: 1.0, offset: 1.0,
