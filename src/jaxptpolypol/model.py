@@ -263,8 +263,13 @@ class BispectrumTreeModel:
     Parameters
     ----------
     do_irres : bool
-        Whether to enable the IR-resummed bispectrum path. The upstream
-        implementation currently raises ``NotImplementedError`` for this mode.
+        Whether to enable the IR-resummed bispectrum path (default ``True``).
+        Upstream implements this: ``BispectrumTree`` builds the no-wiggle
+        spectrum via ``ir_resum.get_pk_nw_data`` and requires ``params['h']``,
+        which :func:`~jaxptpolypol.theory.make_joint_pk_bk_fn` supplies. The
+        flag moves only the bispectrum entries of a joint P+B vector (max
+        relative change 4.8e-3 on the 7-bin test configuration); the power
+        spectrum multipoles are bit-identical.
     do_AP : bool
         Whether the wrapped model should expect AP-remapped calls by default.
     rbao, ks, k_nl_rsd, kmin_fft, kmax_fft, nfft
@@ -273,7 +278,7 @@ class BispectrumTreeModel:
 
     def __init__(
         self,
-        do_irres: bool = False,
+        do_irres: bool = True,
         do_AP: bool = False,
         rbao: float = 110.0,
         ks: float = 0.2,

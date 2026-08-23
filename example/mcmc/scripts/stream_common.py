@@ -121,16 +121,23 @@ META = {
 #: guards the whitening. Dropping it (as an early review suggested) would weaken
 #: that guard.
 #:
+#: ``bk_do_irres`` IS hashed (added 2026-08-23): the bispectrum IR-resummation
+#: flag was flipped False -> True, which falsified the "nobody varies it"
+#: premise that justified excluding it. It moves the B entries of the theory
+#: vector, so a cache built under the old value must not load; hashing it makes
+#: that a hard failure instead of silent wrong physics.
+#:
 #: Deliberately NOT hashed -- the invariant model flags that live in
-#: ``build_taylor_templates_lcdm.py`` rather than here: ``do_irres=True``,
-#: ``do_AP=True``, ``ap=True`` (genuine template determinants, but hard-coded
-#: constants that nobody varies) and ``BB_POWER_MODEL='kaiser'`` (a COVARIANCE
+#: ``build_taylor_templates_lcdm.py`` rather than here: ``do_irres=True`` (the
+#: POWER-SPECTRUM flag), ``do_AP=True``, ``ap=True`` (genuine template
+#: determinants, but hard-coded constants that nobody varies) and ``BB_POWER_MODEL='kaiser'`` (a COVARIANCE
 #: choice -- it feeds the whitening, not the templates). None of them discriminate
 #: LCDM from nuLCDM, and the scope here is the single-source-of-truth constants
 #: defined in THIS module; pulling a build-script literal in would force a
 #: non-surgical move or duplicate a magic value that could silently drift.
 #: Templates are prior-independent, so no prior identifier belongs here either.
 _THEORY_CONFIG = {
+    "bk_do_irres": True,
     "V_bins": V_bins,
     "n_bar": n_bar,
     "knl_bins": knl_bins,

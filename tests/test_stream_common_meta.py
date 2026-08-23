@@ -293,6 +293,7 @@ def test_old_hash_cache_hard_fails_after_extension(tmp_path):
 #: ...}`` overriding three values), which is what makes them guard-distinguishable
 #: only through the three cosmology-dependent VALUES, never a missing key.
 _THEORY_CONFIG_KEYS = frozenset({
+    "bk_do_irres",
     "V_bins", "n_bar", "knl_bins", "z_bins", "k_grid", "k_nl_rsd",
     "cosmo_basis", "emulator", "fiducial", "n_gl", "num_mu", "num_phi",
     "background_mode",
