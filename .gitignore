@@ -191,3 +191,6 @@ docs/superpowers/
 CLAUDE.md
 CONTEXT.md
 AGENTS.md
+
+# scratch notebook, accidentally committed 84b88bd, untracked same day
+example/mcmc/_tier2_run.ipynb

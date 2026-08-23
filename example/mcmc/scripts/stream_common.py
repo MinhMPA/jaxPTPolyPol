@@ -76,10 +76,13 @@ N_GL = 16
 N_TRI = 264                # closed triangles on the [K_BK_MIN, K_BK_MAX] grid
 BACKGROUND_MODE = 'direct'
 #: Bispectrum IR resummation (flipped False -> True 2026-08-23, jaxptpolypol
-#: commit 7304e6a). THE single source of truth for the flag: it is hashed into
-#: _THEORY_CONFIG below AND passed explicitly (do_irres=BK_DO_IRRES) by every
-#: template/chain producer, so the stamped value IS the built value by
-#: construction -- never rely on the library default to keep them in sync.
+#: commit 7304e6a). Single source of truth for the flag: it is hashed into
+#: _THEORY_CONFIG below AND passed explicitly (do_irres=BK_DO_IRRES) by the
+#: three build/validation scripts (AST-pinned in tests), so for every stamped
+#: artifact the hashed value IS the built value. Notebooks construct the model
+#: on the library default; if that ever diverges from this constant, the
+#: theory-hash guard forces a rebuild and the notebooks' surrogate-identity
+#: assert (|lp0_surr - lp0| < 1e-6) fails loudly against it.
 BK_DO_IRRES = True
 
 PFS_EMULATOR = '/Users/nguyenmn/cosmopower-jax-for-pfs/cosmology/jense2024/jense_2023_camb_lcdm/networks/jense_2023_camb_lcdm_Pk_lin.npz'
@@ -137,11 +140,12 @@ META = {
 #: ENFORCE-IF-PRESENT (``theory_config_hash`` is in
 #: ``marginal_taylor._BACKWARD_COMPAT_META_KEYS``), so hashing alone hard-fails
 #: only caches that ALREADY STAMP the hash (the nuLCDM pair). Caches predating
-#: the key -- the committed LCDM/_c1s pairs -- would warn-and-load with stale
+#: the key -- the on-disk (untracked) LCDM/_c1s pairs -- would warn-and-load with stale
 #: non-resummed B templates. :func:`load_templates_and_whitening` therefore
 #: ESCALATES a missing templates-side hash to a hard exit; the notebooks carry
 #: the same explicit check. Rebuild stale caches with
-#: build_taylor_templates_lcdm.py.
+#: build_taylor_templates_lcdm.py. (The stale pairs are on-disk but UNTRACKED;
+#: only the CMB artifacts are committed.)
 #:
 #: Deliberately NOT hashed -- the invariant model flags that live in
 #: ``build_taylor_templates_lcdm.py`` rather than here: ``do_irres=True`` (the
@@ -342,7 +346,13 @@ def load_templates_and_whitening(templates_path, whitening_path, *,
 
     So the guard cannot fire on an old cache and cannot be silent on a real
     drift. Pass ``expect_meta`` / ``expect_template_meta`` to override either
-    side explicitly.
+    side explicitly -- NOTE: an ``expect_template_meta`` that does not name
+    ``theory_config_hash`` also DISABLES the escalation below (deliberate
+    escape hatch for knowingly loading a legacy cache; no tracked consumer
+    uses it). The whitening npz stamps the hash too (builds since 2026-08-23)
+    but the whitening-side expectation does not name it -- its enforcement
+    point is the build script's ``--templates-only`` era gate, since templates
+    and whitening from one full build always share an era.
     """
     if expect_template_meta is None:
         expect_template_meta = template_meta_for(treatment)
@@ -557,14 +567,24 @@ def cmb_fisher_path(cosmology, cache_dir=None):
 #: fiducial and CMB-side inputs (all separately guarded by CMB_CONFIG_HASH) --
 #: NOT on the PFS-side bispectrum flag. Adding ``bk_do_irres`` to
 #: _THEORY_CONFIG (2026-08-23) therefore changed the live hash without
-#: invalidating the committed CMB artifacts, which stamp the pre-flip era
-#: recorded here. Each entry must say WHY the era is CMB-equivalent; rebuild
-#: the artifacts (build_cmb_fisher_block.py) to retire an entry.
+#: invalidating the committed CMB artifacts, which stamp the pre-flip era.
+#:
+#: The predecessor is DERIVED AT IMPORT TIME (the pre-flip config was hashed
+#: without the ``bk_do_irres`` key), never frozen as a literal: if ANY other
+#: hashed entry drifts (fiducial, cosmo basis, emulator, grids...), the derived
+#: predecessor moves with it and the committed artifacts stop matching -- so
+#: the pin admits exactly one documented difference, not arbitrary staleness.
+#: A frozen-literal whitelist here would silently accept a CMB block centred
+#: on an outdated fiducial. Rebuild the artifacts (build_cmb_fisher_block.py)
+#: to retire the pin.
+def _pre_bk_do_irres_hash(config):
+    era = {k: v for k, v in config.items() if k != "bk_do_irres"}
+    return hashlib.sha256(repr(sorted(era.items())).encode()).hexdigest()
+
+
 _CMB_EQUIVALENT_THEORY_HASHES = {
-    # pre bk_do_irres (2026-08-23): differs from live only by the PFS-side
-    # bispectrum IR-resummation flag, which never enters the CMB physics.
-    "lcdm": frozenset({"903aeb06e1cca1c17c7bd6f5166f4fa7039f6907371b53788d45cb71083917c3"}),
-    "nulcdm": frozenset({"8f0f2e74332a4a80ffcede7edc471921fd6e8fcd0ed827717880ef03995adec6"}),
+    "lcdm": frozenset({_pre_bk_do_irres_hash(_THEORY_CONFIG)}),
+    "nulcdm": frozenset({_pre_bk_do_irres_hash(NULCDM_THEORY_CONFIG)}),
 }
 
 
@@ -576,9 +596,10 @@ def load_cmb_fisher_block(cosmology, cache_dir=None):
     the basis key tuple, the marginalized sigma(tau) recorded at build time, and
     the full META dict.
 
-    Four HARD guards, all ``ValueError`` (no backward-compat leniency -- unlike
-    the template stamps there is no legacy CMB cache to stay compatible with,
-    and each of these mismatches silently mis-assigns Fisher rows):
+    Four HARD guards, all ``ValueError`` (each of these mismatches silently
+    mis-assigns Fisher rows). One documented, self-retiring leniency exists on
+    the theory hash -- see :data:`_CMB_EQUIVALENT_THEORY_HASHES` -- admitting
+    exactly the pre-``bk_do_irres`` era the committed artifacts stamp:
 
     * ``cosmology`` -- an lcdm artifact must never load as nulcdm or vice versa
       (different native basis, different emulators);
@@ -587,7 +608,9 @@ def load_cmb_fisher_block(cosmology, cache_dir=None):
     * ``theory_config_hash`` -- :data:`THEORY_CONFIG_HASH` (lcdm) /
       :data:`NULCDM_THEORY_CONFIG_HASH` (nulcdm), so a CMB block built against a
       different production config cannot be summed with the PFS/BAO blocks.
-      Enforce-if-present, matching the template-guard convention.
+      Enforce-if-present, and the stored value may also match the DERIVED
+      pre-``bk_do_irres`` predecessor (the one difference that never enters
+      the CMB physics); any other era is refused.
     * ``cmb_config_hash`` -- :data:`CMB_CONFIG_HASH_LCDM` /
       :data:`CMB_CONFIG_HASH_NULCDM`. HARD-REQUIRED, with NO enforce-if-present
       grace: an artifact that carries no fingerprint is refused, and so is one

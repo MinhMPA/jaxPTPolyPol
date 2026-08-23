@@ -301,7 +301,8 @@ if TEMPLATES_ONLY and WHITENING_PATH.exists():
     # covariance/pb_fid from the other era and the fresh templates would pair
     # with stale whitening SILENTLY. Hard-require the era stamp to match.
     with np.load(WHITENING_PATH) as _wz_gate:
-        _stored_w = json.loads(str(_wz_gate["meta"].item()))
+        _stored_w = (json.loads(str(_wz_gate["meta"].item()))
+                     if "meta" in _wz_gate.files else {})
     _got_w = _stored_w.get("theory_config_hash")
     if _got_w != _THEORY_HASH_STAMP:
         sys.exit(

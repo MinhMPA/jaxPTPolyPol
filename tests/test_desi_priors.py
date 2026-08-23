@@ -1327,3 +1327,29 @@ def test_fiducial_mode_error_cases(toy_setup):
         _make_prior_fns(spec, split, marginal_means="fiducial",
                         fiducial_lin_means=jnp.zeros(split.n_lin + 1))
 
+
+
+def test_c1_factor_formula_validation_arms(tmp_path):
+    """The production_knl_rsd_sq formula's three failure arms all refuse
+    (2026-08-23; mutation-tested): missing metadata key, drifted metadata,
+    drifted factor. The committed yamls pass by construction."""
+    import importlib.resources
+    import yaml as _yaml
+    ref = (importlib.resources.files("jaxptpolypol.data") / "priors"
+           / "desi_dr1_reanalysis_2511_20757.yaml")
+    base = _yaml.safe_load(ref.read_text())
+
+    def _load_mutated(mutate):
+        raw = _yaml.safe_load(ref.read_text())
+        mutate(raw)
+        path = tmp_path / "mutated.yaml"
+        path.write_text(_yaml.safe_dump(raw))
+        return load_desi_prior_spec(str(path))
+
+    with pytest.raises(SpecValidationError, match="requires metadata"):
+        _load_mutated(lambda r: r["metadata"].pop("production_k_nl_rsd"))
+    with pytest.raises(SpecValidationError, match="factor 0.2025 !="):
+        _load_mutated(lambda r: r["metadata"].update(production_k_nl_rsd=0.3))
+    with pytest.raises(SpecValidationError, match="factor 0.09 !="):
+        _load_mutated(lambda r: r["marginalized"]["bk.ctr.c1"].update(
+            factor=0.09, sigma=0.45))

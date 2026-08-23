@@ -430,7 +430,13 @@ tt = build_taylor_templates(
 )
 save_taylor_templates(tt, "cache/taylor_templates_lcdm.npz", meta=META)
 
-tt = load_taylor_templates("cache/taylor_templates_lcdm.npz", expect_meta=META)
+from stream_common import THEORY_CONFIG_HASH, template_meta_for
+
+tt = load_taylor_templates("cache/taylor_templates_lcdm.npz",
+                           expect_meta=template_meta_for("marginalized"))
+stored_hash = tt.build_diagnostics["meta"].get("theory_config_hash")
+if stored_hash != THEORY_CONFIG_HASH:
+    raise RuntimeError("stale templates -- rebuild via build_taylor_templates_lcdm.py")
 log_post_surr = make_marginal_log_posterior_taylor(
     tt,
     bin_data=bin_data,
@@ -455,14 +461,19 @@ samples_w, diagnostics = run_nuts(
 )
 ```
 
-`META` is the theory-configuration stamp, defined once in
-`example/mcmc/scripts/stream_common.py` so the build script and every consuming notebook
-share a single source of truth.
+`template_meta_for("marginalized")` is the full production stamp — the grid keys plus
+`c1_treatment` and `theory_config_hash` — defined once in
+`example/mcmc/scripts/stream_common.py` and stamped verbatim by the build script. The
+bare `META` dict is only the 11 grid keys: it names no theory identifier, so an
+expectation built from it checks nothing about the theory configuration.
 
 `run_nuts` returns post-warmup samples with shape `(chains, draws, n_nl)` in *whitened*
 coordinates; map them back with `jaxptpolypol.sampler.samples_to_physical`. Pass
-`expect_meta` to `load_taylor_templates` every time — it is the guard that refuses a cache
-built against a different theory configuration.
+`expect_meta=template_meta_for(...)` to `load_taylor_templates` every time, and check the
+stored `theory_config_hash` explicitly as above: the comparison refuses a cache built
+against a *different* theory configuration, and the explicit check refuses one whose
+stamp predates the hash entirely (pre-2026-08-23 caches, whose bispectrum templates are
+not IR-resummed).
 
 For a smoke run, sample the exact per-bin `log_post` with `run_rwmh_python` instead: it is
 the ground-truth path and needs no cached artifact, at the cost of seconds per step.
@@ -489,7 +500,7 @@ from jaxptpolypol.joint_forecast import (
     embed_fisher, make_forecast_joint_log_post, make_gaussian_fisher_loglike,
 )
 
-CMB_BLOCK = load_cmb_fisher_block("lcdm")     # hard cosmology / basis / config-hash guards
+CMB_BLOCK = load_cmb_fisher_block("lcdm")     # hard guards; one dated era-pin (see docstring)
 assert CMB_BLOCK["shared_keys"] == SHARED_KEYS_CMB_LCDM   # ('ombh2',...,'h','tau')
 
 N_NL, TAU_FID = split.n_nl, 0.0561

@@ -177,9 +177,11 @@ point in parameter space.
 
 Do not update the recorded number to match the new output. Find out what moved.
 
-1. **Cached artifacts.** `load_taylor_templates(..., expect_meta=META)` and
-   `load_cmb_fisher_block(...)` carry hard guards on the theory-configuration stamp and,
-   for the CMB block, a content-derived config hash. If one of those raised, the artifact
+1. **Cached artifacts.** `load_taylor_templates(..., expect_meta=template_meta_for(...))`
+   plus the explicit stored-hash check, and `load_cmb_fisher_block(...)`, carry hard
+   guards on the theory-configuration stamp and, for the CMB block, a content-derived
+   config hash. (The bare `META` dict is not a theory-config guard — it names only the
+   grid keys.) If one of those raised, the artifact
    was built against a different configuration — rebuild it rather than loosening the
    guard.
 2. **The configuration cell.** $k$ grid and range, triangle range, `k_nl_rsd`, per-bin

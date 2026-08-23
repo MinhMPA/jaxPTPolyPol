@@ -551,28 +551,50 @@ def test_bk_do_irres_is_wired_not_duplicated():
     """The hashed bk_do_irres value IS the constant every producer passes.
 
     Guards the 2026-08-23 fix: _THEORY_CONFIG must read BK_DO_IRRES (not
-    restate a literal), and all three template/chain producers must pass
-    do_irres=BK_DO_IRRES explicitly to BispectrumTreeModel -- otherwise the
+    restate a literal), and every script under scripts/ that constructs
+    BispectrumTreeModel -- by ANY syntactic form (bare name, attribute,
+    import alias) -- must pass do_irres=BK_DO_IRRES explicitly. Otherwise the
     stamped value and the built value are independent literals that can
-    silently diverge (the defect class the hash entry exists to prevent)."""
+    silently diverge (the defect class the hash entry exists to prevent).
+    Files are DISCOVERED by scanning, not enumerated, so a new producer
+    cannot slip in unwired; attribute/alias forms are matched so a compliant
+    sibling call cannot mask a non-compliant one."""
     import ast as _ast
     assert stream_common._THEORY_CONFIG["bk_do_irres"] is stream_common.BK_DO_IRRES
     scripts_dir = pathlib.Path(stream_common.__file__).parent
-    for script in ("build_taylor_templates_lcdm.py", "damh_exact_chain_lcdm.py",
-                   "taylor_surrogate_validation.py"):
-        tree = _ast.parse((scripts_dir / script).read_text())
-        calls = [n for n in _ast.walk(tree)
-                 if isinstance(n, _ast.Call)
-                 and getattr(n.func, "id", "") == "BispectrumTreeModel"]
-        assert calls, f"{script}: no BispectrumTreeModel call found"
+
+    def _constructs_btm(call):
+        f = call.func
+        name = getattr(f, "id", None) or getattr(f, "attr", None)
+        return name == "BispectrumTreeModel"
+
+    def _alias_names(tree):
+        names = set()
+        for n in _ast.walk(tree):
+            if isinstance(n, (_ast.Import, _ast.ImportFrom)):
+                for a in n.names:
+                    if a.name.split(".")[-1] == "BispectrumTreeModel" and a.asname:
+                        names.add(a.asname)
+        return names
+
+    seen_any = False
+    for path in sorted(scripts_dir.glob("*.py")):
+        tree = _ast.parse(path.read_text())
+        aliases = _alias_names(tree)
+        calls = [n for n in _ast.walk(tree) if isinstance(n, _ast.Call)
+                 and (_constructs_btm(n)
+                      or getattr(n.func, "id", None) in aliases
+                      or getattr(n.func, "attr", None) in aliases)]
         for call in calls:
+            seen_any = True
             kw = {k.arg: k.value for k in call.keywords}
             assert "do_irres" in kw, (
-                f"{script}: BispectrumTreeModel call relies on the library "
+                f"{path.name}: BispectrumTreeModel call relies on the library "
                 "default for do_irres; it must pass do_irres=BK_DO_IRRES")
             assert (isinstance(kw["do_irres"], _ast.Name)
                     and kw["do_irres"].id == "BK_DO_IRRES"), (
-                f"{script}: do_irres must be the shared BK_DO_IRRES constant")
+                f"{path.name}: do_irres must be the shared BK_DO_IRRES constant")
+    assert seen_any, "no BispectrumTreeModel construction found under scripts/"
 
 
 def test_missing_template_hash_hard_exits(tmp_path):
@@ -630,3 +652,41 @@ def test_committed_cmb_artifacts_load_end_to_end():
         blk = stream_common.load_cmb_fisher_block(cosmology, cache_dir=cache)
         assert blk["F_shared"].shape[0] == len(blk["shared_keys"])
         assert blk["sigma_tau"] > 0
+
+
+def test_cmb_predecessor_pin_is_derived_not_frozen(tmp_path, monkeypatch):
+    """C1 regression: the pre-bk_do_irres pin must move with every OTHER hashed
+    entry. A frozen-literal whitelist would keep admitting the committed
+    artifact after e.g. a FIDUCIAL edit -- summing a CMB block centred on an
+    outdated fiducial into the joint posterior with no error. Mutating any
+    non-bk_do_irres field must therefore make the loader REJECT an artifact
+    stamped with the current predecessor hash."""
+    import json as _json
+    cache = pathlib.Path(stream_common.__file__).parents[1] / "cache"
+    src = cache / "cmb_fisher_lcdm.npz"
+    if not src.exists():
+        pytest.skip("committed CMB artifact not present")
+    # sanity: with the pristine config the artifact loads
+    stream_common.load_cmb_fisher_block("lcdm", cache_dir=cache)
+    # drift one non-bk_do_irres entry (a fiducial edit) and recompute the pins
+    drifted_cfg = {**stream_common._THEORY_CONFIG,
+                   "fiducial": (("drifted", 1.0),)}
+    monkeypatch.setattr(stream_common, "THEORY_CONFIG_HASH",
+                        _hash_config(drifted_cfg))
+    monkeypatch.setattr(
+        stream_common, "_CMB_EQUIVALENT_THEORY_HASHES",
+        {"lcdm": frozenset({stream_common._pre_bk_do_irres_hash(drifted_cfg)}),
+         "nulcdm": stream_common._CMB_EQUIVALENT_THEORY_HASHES["nulcdm"]})
+    with pytest.raises(ValueError, match="not in accepted set"):
+        stream_common.load_cmb_fisher_block("lcdm", cache_dir=cache)
+
+
+def test_production_knl_rsd_metadata_matches_stream_config():
+    """m4: the yaml's production_k_nl_rsd (which the c1 layer-1 factor is
+    validated against) must equal the ACTUAL production K_NL_RSD -- this is
+    the link that makes the 0.3-vs-0.45 incident detectable end to end."""
+    from jaxptpolypol.desi_priors import load_desi_prior_spec
+    for name in ("desi_dr1_reanalysis_2511_20757",
+                 "desi_dr1_reanalysis_2511_20757_b1s8"):
+        spec = load_desi_prior_spec(name)
+        assert spec.metadata["production_k_nl_rsd"] == stream_common.K_NL_RSD

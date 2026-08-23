@@ -272,10 +272,13 @@ class BispectrumTreeModel:
         spectrum multipoles are bit-identical.
     do_AP : bool
         Whether the wrapped model should expect AP-remapped calls by default.
-        Note: jaxptpolypol's own theory closures always pass explicit
-        ``(alpha_perp, alpha_para)`` per call, which overrides this flag on the
-        evaluation path -- every production call site sets ``do_AP=True`` for
-        clarity, but the default is inert there.
+        ``do_AP`` is consulted only when the caller passes no alphas: the
+        jaxptpolypol closures pass explicit ``(alpha_perp, alpha_para)`` when
+        built with ``ap=True`` (upstream then remaps regardless of this flag)
+        and ``None`` when built with ``ap=False`` -- in which case a
+        ``do_AP=True`` model RAISES (upstream requires both alphas). Keep
+        ``do_AP`` matched to the closure's ``ap``; every production site uses
+        ``do_AP=True`` with ``ap=True``.
     rbao, ks, k_nl_rsd, kmin_fft, kmax_fft, nfft
         Static configuration forwarded to ``BispectrumTree``.
     """
