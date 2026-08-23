@@ -1,0 +1,52 @@
+{
+ "templates_only": false,
+ "cosmology": "lcdm",
+ "c1_treatment": "marginalized",
+ "lin_keys_per_bin": 11,
+ "wall_s": {
+  "setup": 1.8,
+  "fisher_whitening": 243.4,
+  "template_build": 4064.4,
+  "total": 4309.7
+ },
+ "peak_rss_gb": {
+  "setup: models + fiducials": 0.15,
+  "data vector + Fisher + whitening": 98.2,
+  "taylor-template build": 45.57
+ },
+ "overall_peak_rss_gb": 98.2,
+ "H_sym_err": [
+  2.1287316954608363e-16,
+  9.178748063805732e-17,
+  1.0875775693389144e-16,
+  1.2709537141695803e-16,
+  1.0516576420572428e-16,
+  1.0416746728743873e-16,
+  8.907676826511719e-17
+ ],
+ "chunk_J": 4,
+ "chunk_H": 2,
+ "n_nl": 26,
+ "n_lin": 77,
+ "block_len": 375,
+ "n_tri": 264,
+ "meta": {
+  "n_bins": 7,
+  "n_k": 37,
+  "n_tri": 264,
+  "n_gl": 16,
+  "num_mu": 65,
+  "num_phi": 65,
+  "k_min": 0.02,
+  "k_max": 0.2,
+  "k_bk_max": 0.08,
+  "k_nl_rsd": 0.45,
+  "order2_m0": true,
+  "c1_treatment": "marginalized",
+  "theory_config_hash": "bf1d041cc641663f08f51c91918de86565b83c94ffe8d9265045c52663b61fff",
+  "z_bins": "(0.7, 0.9, 1.1, 1.3, 1.5, 1.8, 2.2)",
+  "knl_bins": "(0.52, 0.65, 0.82, 1.02, 1.29, 1.82, 2.88)",
+  "n_bar": "(0.000306, 0.000961, 0.000975, 0.000654, 0.00034, 0.000202, 0.000351)",
+  "V_bins": "(590000000.0, 790000000.0, 960000000.0, 1090000000.0, 1190000000.0, 2580000000.0, 2710000000.0)"
+ }
+}

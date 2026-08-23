@@ -194,3 +194,15 @@ AGENTS.md
 
 # scratch notebook, accidentally committed 84b88bd, untracked same day
 example/mcmc/_tier2_run.ipynb
+
+# Agent working directory (SDD workspaces, review reports, wip backups) -- scratch.
+.superpowers/
+
+# Regenerable bulk in example/mcmc/cache/: rebuild via scripts/build_taylor_templates_lcdm.py
+# (templates/whitening) or the chain drivers. The pre-commit hook blocks >10 MB anyway;
+# ignoring them stops a broad `git add` from sweeping ~300 MB into the index.
+# NOTE: gitignore does NOT untrack -- damh_chain_w.npy (4.5 MB) was tracked before this
+# rule and stays tracked. Small JSON evidence artifacts are deliberately NOT ignored.
+example/mcmc/cache/taylor_templates_*.npz
+example/mcmc/cache/taylor_whitening_*.npz
+example/mcmc/cache/*_chain_w.npy
