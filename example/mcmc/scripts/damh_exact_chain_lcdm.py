@@ -79,7 +79,7 @@ jax.config.update("jax_persistent_cache_min_compile_time_secs", 10)
 import jax.numpy as jnp
 
 from stream_common import (
-    BACKGROUND_MODE, DEFAULT_BAO_DATA_DIR, K_NL_RSD, N_GL, NUM_MU, NUM_PHI,
+    BACKGROUND_MODE, BK_DO_IRRES, DEFAULT_BAO_DATA_DIR, K_NL_RSD, N_GL, NUM_MU, NUM_PHI,
     PFS_EMULATOR, build_bao, build_fiducial_surveys, build_kgrid_and_blocks,
     build_split, load_templates_and_whitening, n_zbins, z_bins,
 )
@@ -186,7 +186,8 @@ nl_prior_entries = [
 
 pklin_emulator = CosmoEmulator(probe='custom_log', emulator_path=PFS_EMULATOR)
 ps1loop_model = PS1LoopModel(do_irres=True)
-bispectrum_model = BispectrumTreeModel(do_AP=True, k_nl_rsd=K_NL_RSD)
+bispectrum_model = BispectrumTreeModel(
+    do_irres=BK_DO_IRRES, do_AP=True, k_nl_rsd=K_NL_RSD)
 
 cosmo_dict, cosmo, surveys, joint_survey_keys = build_fiducial_surveys()
 n_cosmo_params = sum(cosmo.param_sizes)

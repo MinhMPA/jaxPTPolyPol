@@ -65,7 +65,11 @@ from blackjax.diagnostics import (
 
 from ps_1loop_jax import background as bg
 
-from stream_common import load_templates_and_whitening
+from stream_common import (
+    DEFAULT_BAO_DATA_DIR, FIDUCIAL, K_BK_MAX, K_BK_MIN, K_PK_MAX, K_PK_MIN,
+    META, MNU_FIXED, N_K, SHARED_KEYS, knl_bins, load_templates_and_whitening,
+    n_bar, n_zbins, z_bins,
+)
 
 from jaxptpolypol import (
     make_constant_prior_fns,
@@ -90,34 +94,14 @@ from jaxptpolypol.theory import build_bispectrum_triangles_from_k_grid
 _T0 = time.perf_counter()
 
 # ---------------------------------------------------------------------------
-# Configuration -- copied VERBATIM from taylor_surrogate_validation.py.
+# Configuration -- imported from stream_common (2026-08-23; this script was the
+# one driver that re-declared the production constants as literals, which is
+# the drift class the single-source-of-truth rule exists to prevent).
 # ---------------------------------------------------------------------------
 
-FIDUCIAL = {
-    'ombh2': 0.02242, 'omch2': 0.11933, 'logA': 3.047,
-    'ns': 0.9665, 'h': 0.6766, 'tau': 0.0561,
-}
-MNU_FIXED = 0.06
+BAO_DATA_DIR = DEFAULT_BAO_DATA_DIR
 
-z_bins   = (0.7,  0.9,  1.1,  1.3,  1.5,  1.8,  2.2)
-knl_bins = (0.52, 0.65, 0.82, 1.02, 1.29, 1.82, 2.88)
-n_bar    = (3.06e-4, 9.61e-4, 9.75e-4, 6.54e-4, 3.40e-4, 2.02e-4, 3.51e-4)
-n_zbins  = len(z_bins)
-
-K_PK_MIN, K_PK_MAX, N_K = 0.02, 0.20, 37
-K_BK_MIN, K_BK_MAX = 0.02, 0.08
-
-BAO_DATA_DIR = "../../ext_data/bao_data/desi_bao_dr2"
-
-SHARED_KEYS = ('ombh2', 'omch2', 'logA', 'ns', 'h')
 LOGA_I, NS_I = 2, 3               # positions of logA, ns within SHARED_KEYS
-
-META = {
-    "n_bins": 7, "n_k": 37, "n_tri": 264, "n_gl": 16,
-    "num_mu": 65, "num_phi": 65,
-    "k_min": 0.02, "k_max": 0.20, "k_bk_max": 0.08, "k_nl_rsd": 0.45,
-    "order2_m0": True,
-}
 
 # NUTS parameters.
 NUTS_SEED = 20260731

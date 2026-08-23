@@ -67,7 +67,7 @@ from jax.scipy.linalg import inv
 from ps_1loop_jax import background as bg
 
 from stream_common import (
-    BACKGROUND_MODE, DEFAULT_BAO_DATA_DIR, FIDUCIAL, FIXED_COSMO, K_BK_MAX,
+    BACKGROUND_MODE, BK_DO_IRRES, DEFAULT_BAO_DATA_DIR, FIDUCIAL, FIXED_COSMO, K_BK_MAX,
     K_BK_MIN, K_NL_RSD, K_PK_MAX, K_PK_MIN, META, MNU_FIXED, N_GL, N_K,
     NULCDM_EMULATOR, NULCDM_FIDUCIAL, NUM_MU, NUM_PHI, PFS_EMULATOR, V_bins,
     knl_bins, meta_for, n_bar, n_zbins, template_meta_for, z_bins,
@@ -253,11 +253,20 @@ CHUNK_J, CHUNK_H = 4, 2
 # stamp; they live on the WHITENING stamp (marginalized mode), where they are
 # informational to consumers (marginal_taylor.compare_meta case 3).
 TEMPLATE_META = template_meta_for(C1_TREATMENT, cosmology=COSMOLOGY)
+# Since 2026-08-23 the whitening stamp ALSO carries theory_config_hash: the
+# whitening's covariance depends on the same theory config as the templates,
+# and stamping both is what lets the --templates-only gate below detect a
+# whitening npz left over from a DIFFERENT theory era (e.g. the bispectrum
+# IR-resummation flip). Consumers that expect only meta_for() treat the extra
+# key as informational (compare_meta case 3), so old consumers keep working.
+_THEORY_HASH_STAMP = TEMPLATE_META["theory_config_hash"]
 if C1_SAMPLED:
-    WHITENING_META = meta_for(C1_TREATMENT, cosmology=COSMOLOGY)
+    WHITENING_META = {**meta_for(C1_TREATMENT, cosmology=COSMOLOGY),
+                      "theory_config_hash": _THEORY_HASH_STAMP}
 else:
     WHITENING_META = {
         **meta_for(C1_TREATMENT, cosmology=COSMOLOGY),
+        "theory_config_hash": _THEORY_HASH_STAMP,
         "prior_spec": "eft_eq12_2405_02252",
         "cosmo_priors": COSMO_PRIORS,
     }
@@ -285,6 +294,22 @@ if TEMPLATES_ONLY and not WHITENING_PATH.exists():
     print(f"WARNING: --templates-only but {WHITENING_PATH} does not exist; "
           "the validation script will need it -- run the full build later.",
           flush=True)
+if TEMPLATES_ONLY and WHITENING_PATH.exists():
+    # --templates-only reuses the existing whitening npz. That is only sound if
+    # it was built under the CURRENT theory config -- after a physics flip
+    # (e.g. bispectrum IR resummation, 2026-08-23) an old whitening carries a
+    # covariance/pb_fid from the other era and the fresh templates would pair
+    # with stale whitening SILENTLY. Hard-require the era stamp to match.
+    with np.load(WHITENING_PATH) as _wz_gate:
+        _stored_w = json.loads(str(_wz_gate["meta"].item()))
+    _got_w = _stored_w.get("theory_config_hash")
+    if _got_w != _THEORY_HASH_STAMP:
+        sys.exit(
+            f"--templates-only refused: {WHITENING_PATH} stamps "
+            f"theory_config_hash {_got_w!r} but the current config is "
+            f"{_THEORY_HASH_STAMP!r}. The whitening npz predates (or"
+            " postdates) the current theory config; run a FULL build so the"
+            " templates and whitening come from the same era.")
 
 # ---------------------------------------------------------------------------
 # Stage 1: emulator, models, fiducial parameters -- copied VERBATIM from the
@@ -296,7 +321,8 @@ t_stage1 = time.perf_counter()
 
 pklin_emulator = CosmoEmulator(probe='custom_log', emulator_path=EMULATOR_PATH)
 ps1loop_model = PS1LoopModel(do_irres=True)
-bispectrum_model = BispectrumTreeModel(do_AP=True, k_nl_rsd=K_NL_RSD)
+bispectrum_model = BispectrumTreeModel(
+    do_irres=BK_DO_IRRES, do_AP=True, k_nl_rsd=K_NL_RSD)
 
 cosmo_dict = {
     'ombh2': FIDUCIAL['ombh2'], 'omch2': FIDUCIAL['omch2'],

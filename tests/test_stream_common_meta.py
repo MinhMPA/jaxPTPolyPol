@@ -96,12 +96,19 @@ def test_rebuilt_cache_extra_keys_still_load(tmp_path):
 
 
 def test_legacy_stamp_predating_the_identifiers_still_loads(tmp_path):
-    """COMPATIBILITY: the committed on-disk caches stamp only the plain 11-key
-    META -- no theory_config_hash, no c1_treatment. Naming those keys by default
-    must warn, never error, or the tracked artifacts become unloadable."""
-    tpath, wpath = _write_pair(tmp_path, dict(stream_common.META),
-                               dict(stream_common.META))
-    with pytest.warns(UserWarning, match="theory_config_hash"):
+    """COMPATIBILITY, rescoped 2026-08-23: a legacy stamp missing the
+    non-physics identifiers (c1_treatment, z_bins, ...) still warns-and-loads
+    -- but a stamp missing ``theory_config_hash`` now HARD-EXITS
+    (``test_missing_template_hash_hard_exits``): after the bispectrum
+    IR-resummation flip, a hash-less cache is a pre-flip cache with
+    non-IR-resummed B templates, and warn-and-load was exactly the
+    silent-wrong-physics hole. Legacy tolerance survives for every identifier
+    EXCEPT the physics fingerprint."""
+    legacy = {**dict(stream_common.META),
+              "theory_config_hash": stream_common.THEORY_CONFIG_HASH}
+    assert "c1_treatment" not in legacy      # still a legacy stamp for the rest
+    tpath, wpath = _write_pair(tmp_path, legacy, dict(stream_common.META))
+    with pytest.warns(UserWarning, match="c1_treatment"):
         tt, _ = stream_common.load_templates_and_whitening(tpath, wpath)
     assert tt.order2_m0 is False
 
@@ -264,11 +271,13 @@ def test_old_hash_cache_hard_fails_after_extension(tmp_path):
     """TRANSITION (enforce-if-present): a template cache stamped with the
     PRE-extension theory_config_hash (the old 6-tuple sha256) is rejected with a
     hard ``ValueError`` under the new richer hash -- a genuinely stale cache must
-    not silently load. This bites ONLY a cache that actually carried the old hash;
-    the committed on-disk caches predate the key entirely and take the
-    warn-and-load path (see
-    ``test_legacy_stamp_predating_the_identifiers_still_loads``), which is why the
-    smoke tripwire is unaffected by the hash-value change."""
+    not silently load. Scope (updated 2026-08-23): this mismatch case bites any
+    TEMPLATE cache that stamps a stale hash. A template cache that LACKS the key
+    entirely is caught one layer up -- ``load_templates_and_whitening`` escalates
+    the missing templates-side hash to a hard exit (see
+    ``test_missing_template_hash_hard_exits``) -- and the committed CMB
+    artifacts, which stamp the pre-``bk_do_irres`` hash, load only through the
+    dated ``_CMB_EQUIVALENT_THEORY_HASHES`` pin."""
     old_hash = hashlib.sha256(repr((
         stream_common.V_bins, stream_common.n_bar, stream_common.knl_bins,
         stream_common.z_bins,
@@ -536,3 +545,88 @@ def test_cmb_config_hash_pins_are_declared():
         assert hasattr(stream_common, name), (
             f"stream_common must declare {name}; load_cmb_fisher_block "
             "hard-requires it.")
+
+
+def test_bk_do_irres_is_wired_not_duplicated():
+    """The hashed bk_do_irres value IS the constant every producer passes.
+
+    Guards the 2026-08-23 fix: _THEORY_CONFIG must read BK_DO_IRRES (not
+    restate a literal), and all three template/chain producers must pass
+    do_irres=BK_DO_IRRES explicitly to BispectrumTreeModel -- otherwise the
+    stamped value and the built value are independent literals that can
+    silently diverge (the defect class the hash entry exists to prevent)."""
+    import ast as _ast
+    assert stream_common._THEORY_CONFIG["bk_do_irres"] is stream_common.BK_DO_IRRES
+    scripts_dir = pathlib.Path(stream_common.__file__).parent
+    for script in ("build_taylor_templates_lcdm.py", "damh_exact_chain_lcdm.py",
+                   "taylor_surrogate_validation.py"):
+        tree = _ast.parse((scripts_dir / script).read_text())
+        calls = [n for n in _ast.walk(tree)
+                 if isinstance(n, _ast.Call)
+                 and getattr(n.func, "id", "") == "BispectrumTreeModel"]
+        assert calls, f"{script}: no BispectrumTreeModel call found"
+        for call in calls:
+            kw = {k.arg: k.value for k in call.keywords}
+            assert "do_irres" in kw, (
+                f"{script}: BispectrumTreeModel call relies on the library "
+                "default for do_irres; it must pass do_irres=BK_DO_IRRES")
+            assert (isinstance(kw["do_irres"], _ast.Name)
+                    and kw["do_irres"].id == "BK_DO_IRRES"), (
+                f"{script}: do_irres must be the shared BK_DO_IRRES constant")
+
+
+def test_missing_template_hash_hard_exits(tmp_path):
+    """ESCALATION (2026-08-23): a templates npz whose stamp LACKS
+    theory_config_hash must hard-exit load_templates_and_whitening, not
+    warn-and-load -- a pre-flip cache carries non-IR-resummed B templates."""
+    stamped = {k: v for k, v in TEMPLATE_META_SHAPE.items()
+               if k != "theory_config_hash"}
+    assert "theory_config_hash" not in stamped
+    tpath, wpath = _write_pair(tmp_path, stamped, WHITENING_META_SHAPE)
+    with pytest.raises(SystemExit) as ei:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            stream_common.load_templates_and_whitening(tpath, wpath)
+    assert "no theory_config_hash" in str(ei.value)
+
+
+def test_cmb_loader_accepts_the_pinned_predecessor_era(tmp_path):
+    """The committed CMB artifacts stamp the pre-bk_do_irres theory hash; the
+    dated _CMB_EQUIVALENT_THEORY_HASHES pin must admit exactly that era and
+    nothing else."""
+    for cosmology in ("lcdm", "nulcdm"):
+        eq = stream_common._CMB_EQUIVALENT_THEORY_HASHES[cosmology]
+        assert len(eq) == 1        # one predecessor era, retired on rebuild
+        live = (stream_common.THEORY_CONFIG_HASH if cosmology == "lcdm"
+                else stream_common.NULCDM_THEORY_CONFIG_HASH)
+        assert live not in eq      # the pin is strictly historical
+    # a garbage hash is still rejected (uses the real committed artifact,
+    # re-stamped, so the test exercises the full loader path)
+    import json as _json
+    src = (pathlib.Path(stream_common.__file__).parents[1]
+           / "cache" / "cmb_fisher_lcdm.npz")
+    if not src.exists():
+        pytest.skip("committed CMB artifact not present")
+    with np.load(src, allow_pickle=False) as z:
+        arrays = {k: z[k] for k in z.files}
+        meta = _json.loads(str(z["meta_json"]))
+    assert meta["theory_config_hash"] in (
+        stream_common._CMB_EQUIVALENT_THEORY_HASHES["lcdm"])
+    meta["theory_config_hash"] = "0" * 64
+    arrays["meta_json"] = np.asarray(_json.dumps(meta))
+    np.savez(tmp_path / "cmb_fisher_lcdm.npz", **arrays)
+    with pytest.raises(ValueError, match="not in accepted set"):
+        stream_common.load_cmb_fisher_block("lcdm", cache_dir=tmp_path)
+
+
+def test_committed_cmb_artifacts_load_end_to_end():
+    """Regression for the 7304e6a collateral: adding bk_do_irres to the theory
+    hash must NOT brick the two committed CMB Fisher artifacts (the CMB block
+    does not depend on the bispectrum flag; the equivalence pin encodes that)."""
+    cache = pathlib.Path(stream_common.__file__).parents[1] / "cache"
+    for cosmology in ("lcdm", "nulcdm"):
+        if not (cache / f"cmb_fisher_{cosmology}.npz").exists():
+            pytest.skip("committed CMB artifacts not present")
+        blk = stream_common.load_cmb_fisher_block(cosmology, cache_dir=cache)
+        assert blk["F_shared"].shape[0] == len(blk["shared_keys"])
+        assert blk["sigma_tau"] > 0

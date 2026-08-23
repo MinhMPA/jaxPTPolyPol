@@ -73,7 +73,14 @@ K_BK_MIN, K_BK_MAX = 0.02, 0.08
 K_NL_RSD = 0.45
 NUM_MU = NUM_PHI = 65
 N_GL = 16
+N_TRI = 264                # closed triangles on the [K_BK_MIN, K_BK_MAX] grid
 BACKGROUND_MODE = 'direct'
+#: Bispectrum IR resummation (flipped False -> True 2026-08-23, jaxptpolypol
+#: commit 7304e6a). THE single source of truth for the flag: it is hashed into
+#: _THEORY_CONFIG below AND passed explicitly (do_irres=BK_DO_IRRES) by every
+#: template/chain producer, so the stamped value IS the built value by
+#: construction -- never rely on the library default to keep them in sync.
+BK_DO_IRRES = True
 
 PFS_EMULATOR = '/Users/nguyenmn/cosmopower-jax-for-pfs/cosmology/jense2024/jense_2023_camb_lcdm/networks/jense_2023_camb_lcdm_Pk_lin.npz'
 DEFAULT_BAO_DATA_DIR = "../../ext_data/bao_data/desi_bao_dr2"  # chdir-sensitive
@@ -82,9 +89,10 @@ SHARED_KEYS = ('ombh2', 'omch2', 'logA', 'ns', 'h')   # sampled cosmo (nl block)
 FIXED_COSMO = (5, 6, 7, 8)  # packed-cosmo indices held fixed (z, A_b, eta_b, logT_AGN)
 
 META = {
-    "n_bins": 7, "n_k": 37, "n_tri": 264, "n_gl": 16,
-    "num_mu": 65, "num_phi": 65,
-    "k_min": 0.02, "k_max": 0.20, "k_bk_max": 0.08, "k_nl_rsd": 0.45,
+    "n_bins": n_zbins, "n_k": N_K, "n_tri": N_TRI, "n_gl": N_GL,
+    "num_mu": NUM_MU, "num_phi": NUM_PHI,
+    "k_min": K_PK_MIN, "k_max": K_PK_MAX, "k_bk_max": K_BK_MAX,
+    "k_nl_rsd": K_NL_RSD,
     "order2_m0": True,
 }
 
@@ -124,8 +132,16 @@ META = {
 #: ``bk_do_irres`` IS hashed (added 2026-08-23): the bispectrum IR-resummation
 #: flag was flipped False -> True, which falsified the "nobody varies it"
 #: premise that justified excluding it. It moves the B entries of the theory
-#: vector, so a cache built under the old value must not load; hashing it makes
-#: that a hard failure instead of silent wrong physics.
+#: vector, so a cache built under the old value must not load. PRECISION on how
+#: that rejection actually happens (audited 2026-08-23): the library guard is
+#: ENFORCE-IF-PRESENT (``theory_config_hash`` is in
+#: ``marginal_taylor._BACKWARD_COMPAT_META_KEYS``), so hashing alone hard-fails
+#: only caches that ALREADY STAMP the hash (the nuLCDM pair). Caches predating
+#: the key -- the committed LCDM/_c1s pairs -- would warn-and-load with stale
+#: non-resummed B templates. :func:`load_templates_and_whitening` therefore
+#: ESCALATES a missing templates-side hash to a hard exit; the notebooks carry
+#: the same explicit check. Rebuild stale caches with
+#: build_taylor_templates_lcdm.py.
 #:
 #: Deliberately NOT hashed -- the invariant model flags that live in
 #: ``build_taylor_templates_lcdm.py`` rather than here: ``do_irres=True`` (the
@@ -137,7 +153,7 @@ META = {
 #: non-surgical move or duplicate a magic value that could silently drift.
 #: Templates are prior-independent, so no prior identifier belongs here either.
 _THEORY_CONFIG = {
-    "bk_do_irres": True,
+    "bk_do_irres": BK_DO_IRRES,
     "V_bins": V_bins,
     "n_bar": n_bar,
     "knl_bins": knl_bins,
@@ -316,8 +332,10 @@ def load_templates_and_whitening(templates_path, whitening_path, *,
 
     1. stored value differs from expected -> **hard failure** (genuine config
        drift, or a marginalized/sampled cache mix-up);
-    2. stored stamp LACKS the key -> warning, loads anyway (the on-disk caches
-       predate these keys; rebuilding stamps them);
+    2. stored stamp LACKS the key -> warning at the library layer -- but THIS
+       loader escalates a missing templates-side ``theory_config_hash`` to a
+       hard exit (2026-08-23: pre-flip caches predate the key and carry
+       non-IR-resummed B templates; other missing keys still warn-and-load);
     3. stored stamp carries a key the expectation does not name (e.g. the
        whitening npz's ``prior_spec``/``cosmo_priors``) -> warning, not
        staleness. A rebuilt cache with extra keys must still load.
@@ -331,6 +349,20 @@ def load_templates_and_whitening(templates_path, whitening_path, *,
     if expect_meta is None:
         expect_meta = meta_for(treatment)
     tt = load_taylor_templates(templates_path, expect_meta=expect_template_meta)
+    # ESCALATION (2026-08-23): the library rule above tolerates a stored stamp
+    # that LACKS ``theory_config_hash`` (backward compat). After the bispectrum
+    # IR-resummation flip that grace is exactly the silent-wrong-physics hole --
+    # every pre-flip cache predates the key and carries non-resummed B
+    # templates. If the expectation names the hash, the stored stamp must too.
+    if "theory_config_hash" in expect_template_meta:
+        _stored_t = tt.build_diagnostics["meta"]
+        if "theory_config_hash" not in _stored_t:
+            sys.exit(
+                f"Stale Taylor templates: {templates_path} carries no "
+                "theory_config_hash stamp, so it predates the current theory "
+                "config (bispectrum IR resummation flipped ON 2026-08-23) and "
+                "its B templates are NOT IR-resummed. Rebuild with "
+                "build_taylor_templates_lcdm.py.")
     wz = np.load(whitening_path)
     stored_meta = json.loads(str(wz["meta"].item()))
     try:
@@ -520,6 +552,22 @@ def cmb_fisher_path(cosmology, cache_dir=None):
     return base / f"cmb_fisher_{cosmology}.npz"
 
 
+#: Theory-config ERAS accepted by :func:`load_cmb_fisher_block` IN ADDITION to
+#: the live hash. The CMB Fisher block depends only on the cosmo basis,
+#: fiducial and CMB-side inputs (all separately guarded by CMB_CONFIG_HASH) --
+#: NOT on the PFS-side bispectrum flag. Adding ``bk_do_irres`` to
+#: _THEORY_CONFIG (2026-08-23) therefore changed the live hash without
+#: invalidating the committed CMB artifacts, which stamp the pre-flip era
+#: recorded here. Each entry must say WHY the era is CMB-equivalent; rebuild
+#: the artifacts (build_cmb_fisher_block.py) to retire an entry.
+_CMB_EQUIVALENT_THEORY_HASHES = {
+    # pre bk_do_irres (2026-08-23): differs from live only by the PFS-side
+    # bispectrum IR-resummation flag, which never enters the CMB physics.
+    "lcdm": frozenset({"903aeb06e1cca1c17c7bd6f5166f4fa7039f6907371b53788d45cb71083917c3"}),
+    "nulcdm": frozenset({"8f0f2e74332a4a80ffcede7edc471921fd6e8fcd0ed827717880ef03995adec6"}),
+}
+
+
 def load_cmb_fisher_block(cosmology, cache_dir=None):
     """Load the precomputed fiducial-centered CMB Fisher block with META guards.
 
@@ -567,10 +615,11 @@ def load_cmb_fisher_block(cosmology, cache_dir=None):
         expected_hash = (THEORY_CONFIG_HASH if cosmology == "lcdm"
                          else NULCDM_THEORY_CONFIG_HASH)
         got = meta.get("theory_config_hash")
-        if got is not None and got != expected_hash:
+        accepted = {expected_hash} | _CMB_EQUIVALENT_THEORY_HASHES[cosmology]
+        if got is not None and got not in accepted:
             raise ValueError(
-                f"artifact theory_config_hash {got} != expected "
-                f"{expected_hash} ({path})")
+                f"artifact theory_config_hash {got} not in accepted set "
+                f"{sorted(accepted)} ({path})")
         expected_cmb_hash = (CMB_CONFIG_HASH_LCDM if cosmology == "lcdm"
                              else CMB_CONFIG_HASH_NULCDM)
         got_cmb = meta.get("cmb_config_hash")
