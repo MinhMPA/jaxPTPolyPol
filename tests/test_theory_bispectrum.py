@@ -526,3 +526,31 @@ def test_make_gaussian_joint_covariance_fn_multibin_uses_kaiser_for_bb():
     )
 
     np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+
+
+def test_bispectrum_irres_default_on_and_values_pinned():
+    """Characterization pin for the do_irres flip (2026-08-23, commit 7304e6a).
+
+    The flip moved the joint-vector B entries by up to 4.8e-3 and broke ZERO
+    numerical tests -- nothing in the suite pinned B tightly enough to notice
+    IR resummation switching on. This test closes that gap: it pins (a) the
+    default itself, (b) three tree-B values under do_irres=True on a synthetic
+    wiggly spectrum (values recorded at the flip; rtol 1e-8 is ~1000x tighter
+    than the on/off separation of ~1e-5 here), and (c) that the flag is not
+    inert. A silent revert of the default, or any change to the IR-resummed
+    bispectrum path, fails loudly."""
+    k = np.geomspace(1e-4, 10.0, 1024)
+    pk_data = {"k": k, "pk": k**-1.5 * (1.0 + 0.08 * np.sin(18.0 * k))}
+    params = {"f": 0.55, "h": 0.6766,
+              "bias": {"b1": 1.9, "b2": -0.3, "bG2": 0.1}, "ctr": {"c1": 0.0}}
+    triangles = [(0.05, 0.05, 0.05), (0.05, 0.08, 0.10), (0.06, 0.06, 0.10)]
+    pinned_on = [1.1260991996e+05, 6.0287000959e+04, 7.8958027655e+04]
+
+    model = BispectrumTreeModel(k_nl_rsd=0.45)      # rely on the default
+    assert model.do_irres is True                    # (a) the default itself
+    model_off = BispectrumTreeModel(do_irres=False, k_nl_rsd=0.45)
+    for tri, pin in zip(triangles, pinned_on):
+        on = float(model.model.get_bk_tree(*tri, 0.3, 0.7, pk_data, params))
+        off = float(model_off.model.get_bk_tree(*tri, 0.3, 0.7, pk_data, params))
+        assert on == pytest.approx(pin, rel=1e-8)    # (b) pinned values
+        assert on != off                             # (c) the flag acts
