@@ -271,6 +271,13 @@ else:
         "cosmo_priors": COSMO_PRIORS,
     }
 
+#: Post-flip (2026-08-23, do_irres=True) LCDM cosmo Fisher sigmas -- the live
+#: config-drift gate. Pinned 2026-08-23 from the bootstrap rebuild (s1 log;
+#: tier2 pre-flip delta was max rel 2.03e-4, the do_irres physics change).
+SIG_FISHER_LCDM_REF = (
+    0.00047593905640853234, 0.003147992566163979, 0.04680952791742042,
+    0.025500167552351714, 0.003625186448285401)
+
 CACHE = pathlib.Path("cache")
 _SUFFIX = "_c1s" if C1_SAMPLED else ""
 # COSMOLOGY tags templates/whitening (lcdm -> the legacy names byte-for-byte).
@@ -555,22 +562,40 @@ if not TEMPLATES_ONLY:
     print("sig_fisher (cosmo):", np.array2string(sig_fisher, precision=6),
           flush=True)
 
-    # Tripwire: the reference chain/tilt artifacts (cache/tier2_*) were built
-    # with this exact configuration. If the rebuilt Fisher sigmas disagree,
-    # the config has drifted and every gate comparison would be invalid.
-    # LCDM-only: tier2_result.json holds the 5-entry LCDM cosmo sig_fisher; the
-    # nuLCDM cosmo block is 6-wide, so the comparison is not defined there (a
-    # nuLCDM reference does not exist yet).
+    # Tripwire, rescoped 2026-08-23. The tier2 reference (cache/tier2_result
+    # .json, recorded 2026-07-28) predates the bispectrum IR-resummation flip
+    # (do_irres False -> True): the flip moves the B entries of the theory
+    # vector (max ~4.8e-3 rel) and hence the Fisher sigmas by ~2e-4, so the
+    # tier2 comparison is now a DATED PHYSICS-CHANGE RECORD, not a config-
+    # identity check. tier2_result.json itself is a historical artifact of
+    # the pre-flip run and is deliberately NOT rewritten. The live drift
+    # guard is SIG_FISHER_LCDM_REF below: None on the bootstrap rebuild
+    # (this run RECORDS the post-flip sigmas into the summary JSON; pin them
+    # here immediately after), then a hard 1e-4 gate for every later build.
+    # LCDM-only: the nuLCDM cosmo block is 6-wide, no reference exists.
     _t2 = CACHE / "tier2_result.json"
     if COSMOLOGY == "lcdm" and _t2.exists():
         ref = np.asarray(json.loads(_t2.read_text())["sig_fisher"])
         rel = float(np.max(np.abs(sig_fisher - ref) / ref))
-        print(f"sig_fisher vs tier2 reference: max rel diff {rel:.2e}",
-              flush=True)
-        if rel > 1e-4:
-            sys.exit("ABORT: rebuilt Fisher sigmas disagree with the tier2 "
-                     "reference beyond 1e-4 -- config drift; gates would be "
-                     "invalid.")
+        print(f"sig_fisher vs tier2 (PRE-FLIP) reference: max rel diff "
+              f"{rel:.2e} -- expected ~2e-4 from the 2026-08-23 do_irres "
+              "flip; this line is the dated record, not a gate.", flush=True)
+    if COSMOLOGY == "lcdm":
+        if SIG_FISHER_LCDM_REF is None:
+            print("BOOTSTRAP: no post-flip sig_fisher pin yet; this build "
+                  "records it. Pin the summary JSON's sig_fisher as "
+                  "SIG_FISHER_LCDM_REF before committing.", flush=True)
+            print("sig_fisher (full precision):",
+                  [float(s) for s in sig_fisher], flush=True)
+        else:
+            _pin = np.asarray(SIG_FISHER_LCDM_REF)
+            _rel_pin = float(np.max(np.abs(sig_fisher - _pin) / _pin))
+            print(f"sig_fisher vs post-flip pin: max rel diff {_rel_pin:.2e}",
+                  flush=True)
+            if _rel_pin > 1e-4:
+                sys.exit("ABORT: rebuilt Fisher sigmas disagree with the "
+                         "post-flip SIG_FISHER_LCDM_REF beyond 1e-4 -- "
+                         "config drift; gates would be invalid.")
 
     # -- Per-bin data / covariance blocks + marginalized-block priors
     #    (notebook cell "Combined likelihood") --

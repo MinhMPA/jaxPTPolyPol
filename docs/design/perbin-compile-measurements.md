@@ -1078,6 +1078,7 @@ outputs:
 | reported basis | ombh2, omch2, logA, ns, h, tau | + mnu (tau at 5, mnu at 6) |
 | sampler | NUTS on the Taylor surrogate, 4 x 5000 draws, 1000 warmup, `NUTS_SEED = 20260731` | RWMH on the Taylor surrogate, 4 x 200000 draws, 20000 burn, `RWMH_SEED = 20260806` |
 | `log_post_joint(theta0)` tripwire | **-167.752302** | **-173.635756** |
+| — re-recorded 2026-08-23 after the bispectrum IR-resummation flip (templates rebuilt, notebooks re-executed) | **-167.750608** | **-173.634058** |
 | `chi2_prof(fiducial)` | 1.231e-23 | 1.193e-23 |
 | `cond(cov_joint)` | 2.045e+08 | 2.046e+08 (`cond(cov_nl_prior)` 1.209e+07) |
 

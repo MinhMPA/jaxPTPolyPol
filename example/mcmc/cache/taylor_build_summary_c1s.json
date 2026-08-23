@@ -1,27 +1,28 @@
 {
  "templates_only": false,
+ "cosmology": "lcdm",
  "c1_treatment": "sampled",
  "lin_keys_per_bin": 10,
  "wall_s": {
-  "setup": 3.9,
-  "fisher_whitening": 204.5,
-  "template_build": 3663.8,
-  "total": 3872.3
+  "setup": 1.7,
+  "fisher_whitening": 225.9,
+  "template_build": 5834.7,
+  "total": 6062.4
  },
  "peak_rss_gb": {
-  "setup: models + fiducials": 0.33,
-  "data vector + Fisher + whitening": 96.27,
-  "taylor-template build": 36.01
+  "setup: models + fiducials": 0.15,
+  "data vector + Fisher + whitening": 98.32,
+  "taylor-template build": 46.9
  },
- "overall_peak_rss_gb": 96.27,
+ "overall_peak_rss_gb": 98.32,
  "H_sym_err": [
-  1.0030994669145992e-16,
-  6.485162418917408e-17,
-  8.724566089231176e-17,
-  1.0546682378442243e-16,
-  7.210499820997161e-17,
-  7.308550327187585e-17,
-  5.811422983038296e-17
+  2.1287316954608363e-16,
+  9.178748063805732e-17,
+  1.0875775693389144e-16,
+  1.2709537141695803e-16,
+  1.0516576420572428e-16,
+  1.0416746728743873e-16,
+  8.907676826511719e-17
  ],
  "chunk_J": 4,
  "chunk_H": 2,
@@ -41,6 +42,11 @@
   "k_bk_max": 0.08,
   "k_nl_rsd": 0.45,
   "order2_m0": true,
-  "c1_treatment": "sampled"
+  "c1_treatment": "sampled",
+  "theory_config_hash": "bf1d041cc641663f08f51c91918de86565b83c94ffe8d9265045c52663b61fff",
+  "z_bins": "(0.7, 0.9, 1.1, 1.3, 1.5, 1.8, 2.2)",
+  "knl_bins": "(0.52, 0.65, 0.82, 1.02, 1.29, 1.82, 2.88)",
+  "n_bar": "(0.000306, 0.000961, 0.000975, 0.000654, 0.00034, 0.000202, 0.000351)",
+  "V_bins": "(590000000.0, 790000000.0, 960000000.0, 1090000000.0, 1190000000.0, 2580000000.0, 2710000000.0)"
  }
 }

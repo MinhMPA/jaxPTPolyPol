@@ -131,24 +131,23 @@ the smoke and production branches. For example,
 `example/mcmc/mcmc_joint_PFS_BAO_CMB_BBN_LCDM.ipynb` pins:
 
 ```text
-log_post_joint(theta0) = -167.752302
-chi2_prof(fiducial)    = 1.231e-23
+log_post_joint(theta0) = -167.750608
+chi2_prof(fiducial)    = 1.082e-23
 ```
 
-and the $\nu\Lambda$CDM production run pins `log_post(x0) = -173.635756` with
-`chi2_prof(fiducial) = 1.193e-23`.
+and the $\nu\Lambda$CDM production run pins `log_post(x0) = -173.634058` with
+`chi2_prof(fiducial) = 1.169e-23`.
 
-```{admonition} These recorded values predate the bispectrum IR-resummation flip
-:class: warning
-On 2026-08-23 the bispectrum default changed to IR-resummed
-(`BispectrumTreeModel(do_irres=True)`), which moves the bispectrum entries of the
-theory vector by up to $\sim 5\times 10^{-3}$ relative. The recorded `log_post`
-values above were produced under the previous default and will shift when the
-Taylor template caches are rebuilt and the notebooks re-executed; until then the
-cache guards fail loudly on the stale templates rather than silently reproducing
-these numbers. The exactness identities below are unaffected — they hold under
-either default. Re-record the pinned values in the same commit as the
-re-execution, per the procedure at the end of this page.
+```{admonition} Re-recorded 2026-08-23 — bispectrum IR-resummation flip
+:class: note
+These values were re-recorded, in the same commit as the notebook re-execution,
+after the bispectrum default changed to IR-resummed
+(`BispectrumTreeModel(do_irres=True)`). The flip moves the bispectrum entries of
+the theory vector by up to $\sim 5\times 10^{-3}$ relative, which shifted the
+log-posterior pins by $\sim 2\times 10^{-3}$ (previous values: `-167.752302` /
+`-173.635756`). The Taylor template caches were rebuilt first, the surrogate
+re-validated (tilt, chain, and importance-sampling gates), and all four joint
+notebooks re-executed on the fresh caches.
 ```
 
 **Exactness identities.** These assert a mathematical property rather than a recorded
