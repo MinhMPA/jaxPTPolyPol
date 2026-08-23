@@ -1417,7 +1417,8 @@ runtime dependency:
 |---|---|---|
 | artifact | `example/mcmc/cache/cmb_fisher_lcdm.npz` | `example/mcmc/cache/cmb_fisher_nulcdm.npz` |
 | `CMB_CONFIG_HASH` (pinned in `stream_common`, HARD-REQUIRED by `load_cmb_fisher_block`) | `97f8695acb8a0543...` | `e89efa399fe35590...` |
-| `theory_config_hash` | `903aeb06e1cca1c1...` | `8f0f2e74332a4a80...` |
+| `theory_config_hash` (stamped at build, 2026-08-07 era) | `903aeb06e1cca1c1...` | `8f0f2e74332a4a80...` |
+| — accepted post-`bk_do_irres` (2026-08-23) via the dated `_CMB_EQUIVALENT_THEORY_HASHES` pin in `stream_common`; live hashes are now `bf1d041cc641663f...` / `a345e3e3338f2c90...` (the flag never enters the CMB physics) | | |
 | method | hybrid GN (highl, Planck lensing, ACT DR6 lensing) + observed Hessian (lowl TT, lowl EE) | same |
 | shared-prior dedupe | `A_planck` sigma 0.0025, curvature 160000, count 4, subtracted 3 x 160000 = 480000 after summation | same (packed index 27) |
 | G1b `sigma_tau` | 0.007089623562031232 | 0.007376499170236379 |
@@ -2046,7 +2047,10 @@ provenance" in the "Joint PFS+BAO+CMB+BBN MCMC forecasts (2026-08-07)" section
 above — same `CMB_CONFIG_HASH` pins, same hybrid GN/Hessian `method.per_term`,
 same `A_planck` dedupe. `load_cmb_fisher_block` raises by design if an artifact
 is missing or its hash does not match the `stream_common` pin; there is no
-fallback path.
+fallback path. (2026-08-23: the `bk_do_irres` extension of `_THEORY_CONFIG`
+changed the live theory hash without changing any CMB input; the committed
+artifacts keep loading through the dated `_CMB_EQUIVALENT_THEORY_HASHES` pin,
+which a rebuild retires.)
 
 **Both artifacts are now TRACKED in git** (added 2026-08-08). They were
 untracked and not gitignored while four notebooks — the two ported Fisher

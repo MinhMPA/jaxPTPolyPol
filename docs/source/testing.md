@@ -138,6 +138,19 @@ chi2_prof(fiducial)    = 1.231e-23
 and the $\nu\Lambda$CDM production run pins `log_post(x0) = -173.635756` with
 `chi2_prof(fiducial) = 1.193e-23`.
 
+```{admonition} These recorded values predate the bispectrum IR-resummation flip
+:class: warning
+On 2026-08-23 the bispectrum default changed to IR-resummed
+(`BispectrumTreeModel(do_irres=True)`), which moves the bispectrum entries of the
+theory vector by up to $\sim 5\times 10^{-3}$ relative. The recorded `log_post`
+values above were produced under the previous default and will shift when the
+Taylor template caches are rebuilt and the notebooks re-executed; until then the
+cache guards fail loudly on the stale templates rather than silently reproducing
+these numbers. The exactness identities below are unaffected — they hold under
+either default. Re-record the pinned values in the same commit as the
+re-execution, per the procedure at the end of this page.
+```
+
 **Exactness identities.** These assert a mathematical property rather than a recorded
 value, so they cannot go stale:
 

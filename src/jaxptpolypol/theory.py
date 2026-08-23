@@ -674,8 +674,10 @@ def make_multipole_projector(ells, n_gl=16):
 
         The 1-loop RSD model produces integrands with polynomial degree
         up to ~12 in μ (from Z-kernel terms like f³μ⁴ × L₄(μ)).
-        ``n_gl >= 8`` is required for exact integration of these terms;
-        ``n_gl = 16`` provides a safe margin.
+        ``n_gl >= 7`` is required for exact integration of these terms at
+        ``ells=(0, 2, 4)`` (the guard below enforces
+        ``n_gl >= (max_ell + 10) // 2``); ``n_gl = 16`` provides a safe
+        margin.
 
         **Note on accuracy with IR resummation**: when ``do_irres=True``,
         the integrand also contains the BAO damping factor
