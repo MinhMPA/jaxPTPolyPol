@@ -117,6 +117,32 @@ def test_credible_intervals_rejects_missing_variable():
                            var_names=["b"], levels=(0.68,))
 
 
+def test_credible_intervals_accepts_flat_1d_column_with_chain_axis_none():
+    """The joint-MCMC notebooks' calling convention: a flat 1-D column
+    (e.g. ``cosmo_flat[:, n]``) with ``chain_axis=None, draw_axis=0``.
+
+    Every other ``credible_intervals`` test above passes a 2-D
+    ``(chain, draw)`` array under the default ``chain_axis=0`` -- none
+    exercises this 1-D pattern, which is exactly why a runtime-fatal
+    ``ValueError`` (the default requires >=2 dimensions) shipped in the
+    notebooks with a green test suite.
+    """
+    rng = np.random.default_rng(5)
+    draws = rng.normal(size=40000)
+
+    # The old (buggy) notebook call omitted chain_axis -- confirm it still
+    # raises, so this test cannot pass for the wrong reason.
+    with pytest.raises(ValueError, match="at least 2 dimensions"):
+        credible_intervals({"a": draws}, var_names=["a"], levels=(0.68,),
+                           draw_axis=0)
+
+    table = credible_intervals({"a": draws}, var_names=["a"], levels=(0.68,),
+                               chain_axis=None, draw_axis=0)
+    lo, hi = table["a"][0.68]
+    frac = float(np.mean((draws >= lo) & (draws <= hi)))
+    assert frac == pytest.approx(0.68, abs=0.02)
+
+
 def _new_collections(ax, before):
     """Collections added to ax by the most recent draw call."""
     return ax.collections[before:]
