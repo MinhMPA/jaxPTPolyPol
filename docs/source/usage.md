@@ -639,7 +639,8 @@ plot_contours(F_derived, derived_fid, np.array([j, i]), cls=[0.68, 0.95],
 
 ci = credible_intervals(                                                # diagonal panels
     {name: derived_flat[:, n] for n, name in enumerate(DERIVED_NAMES)},
-    var_names=list(DERIVED_NAMES), levels=(0.68, 0.95), draw_axis=0)
+    var_names=list(DERIVED_NAMES), levels=(0.68, 0.95),
+    chain_axis=None, draw_axis=0)
 ```
 
 `credible_intervals` pools all chains before computing each interval, so its result is
