@@ -8,8 +8,48 @@ import numpy as np
 import warnings
 
 from jax.scipy.stats import norm
+from scipy.stats import chi2
 
-__all__ = ["plot_contours", "plot_Gaussian", "triangle_plot"]
+__all__ = [
+    "credible_level_nstd",
+    "plot_contours",
+    "plot_Gaussian",
+    "triangle_plot",
+]
+
+
+def credible_level_nstd(mass: float, *, ndim: int = 2) -> float:
+    """Sigma-multiplier of the ellipse enclosing ``mass`` of the probability.
+
+    THE conversion both the Fisher ellipses and the chain contours use, so the
+    two overlays are guaranteed to mean the same thing.
+
+    Parameters
+    ----------
+    mass : float
+        Probability mass to enclose, strictly between 0 and 1 (e.g. ``0.68``).
+    ndim : int
+        Dimensionality the mass refers to. ``1`` for a per-parameter interval
+        (a corner plot's DIAGONAL panels), ``2`` for a joint credible region
+        (the OFF-DIAGONAL panels).
+
+    Notes
+    -----
+    The distinction is not cosmetic. For a 2-D Gaussian the 1-sigma ellipse
+    encloses only 39.35% of the probability and the 2-sigma ellipse 86.47%, so
+    a contour advertised as "68%" must be drawn at 1.5096 sigma, not 1 sigma.
+    Mixing the conventions between a chain contour and a Fisher ellipse makes
+    the posterior look ~1.5x wider than the forecast for no physical reason.
+    """
+    mass = float(mass)
+    if not 0.0 < mass < 1.0:
+        raise ValueError(
+            f"mass must be strictly between 0 and 1, got {mass!r}.")
+    if ndim == 1:
+        return float(norm.ppf(0.5 * (1.0 + mass)))
+    if ndim == 2:
+        return float(np.sqrt(chi2.ppf(mass, df=2)))
+    raise ValueError(f"ndim must be 1 or 2, got {ndim!r}.")
 
 
 def _covariance_from_fisher(fisher, *, rcond: float = 1e-12) -> np.ndarray:
@@ -74,6 +114,7 @@ def plot_contours(
     inds,
     cls=None,
     ax=None,
+    level_kind="sigma1d",
     **kwargs,
 ):
     """Plot 2-d Fisher ellipses for a pair of parameters.
@@ -87,11 +128,28 @@ def plot_contours(
     inds : array-like, shape (2,)
         Indices of the two parameters to plot.
     cls : array-like, optional
-        Confidence levels.  Default ``[0.6827, 0.9545]`` (1 and 2 sigma).
+        Contour levels.  Default ``[0.6827, 0.9545]``.  Interpreted according
+        to ``level_kind``.
+    level_kind : {"sigma1d", "mass2d"}, optional
+        How to read ``cls``.  ``"sigma1d"`` (default, and the historical
+        behaviour) treats each entry as a 1-D probability mass and draws the
+        ellipse at the matching sigma multiple -- so the default draws the
+        1-sigma and 2-sigma ellipses, which enclose 39.35% and 86.47% of the
+        2-D probability.  ``"mass2d"`` treats each entry as the 2-D
+        probability mass to enclose, so ``cls=[0.68, 0.95]`` draws genuine 68%
+        and 95% joint credible ellipses (at 1.5096 and 2.4477 sigma).
+        Use ``"mass2d"`` whenever the ellipses are overlaid on chain contours
+        from ``chain_analysis.plot_credible_contours``, which always means
+        2-D mass -- mixing the two makes the chain look ~1.5x wider than the
+        forecast for no physical reason.
     ax : matplotlib Axes, optional
     **kwargs
         Passed to ``matplotlib.patches.Ellipse``.
     """
+    if level_kind not in ("sigma1d", "mass2d"):
+        raise ValueError(
+            f"level_kind must be 'sigma1d' or 'mass2d', got {level_kind!r}.")
+
     import matplotlib.pyplot as plt
     from matplotlib.patches import Ellipse
 
@@ -120,7 +178,11 @@ def plot_contours(
         return
     vals = np.asarray(vals, dtype=float)
     theta = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
-    nstds = norm.ppf(0.5 * (1 + np.asarray(cls)))
+    _ndim = 1 if level_kind == "sigma1d" else 2
+    nstds = np.array(
+        [credible_level_nstd(c, ndim=_ndim) for c in np.atleast_1d(cls)],
+        dtype=float,
+    )
 
     if ax is None:
         ax = plt.gca()
