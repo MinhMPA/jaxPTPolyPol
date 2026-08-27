@@ -45,6 +45,8 @@ __all__ = [
     "plot_trace_packed",
     "plot_corner",
     "plot_corner_packed",
+    "plot_credible_contours",
+    "credible_intervals",
 ]
 
 
@@ -1120,3 +1122,146 @@ def plot_corner_packed(
         max_points_per_chain=max_points_per_chain,
         random_seed=random_seed,
     )
+
+
+def _validate_levels(levels) -> list[float]:
+    """Ascending, de-duplicated, strictly-in-(0,1) probability masses."""
+    values = [float(v) for v in levels]
+    if not values:
+        raise ValueError("levels must be non-empty.")
+    for v in values:
+        if not 0.0 < v < 1.0:
+            raise ValueError(
+                f"levels must be strictly between 0 and 1, got {v!r}.")
+    # ArviZ requires ascending hdi_probs and raises otherwise.
+    return sorted(set(values))
+
+
+def plot_credible_contours(
+    x,
+    y,
+    *,
+    ax=None,
+    levels=(0.68, 0.95),
+    colors=None,
+    linestyles=("-", "--"),
+    linewidths=1.6,
+    fill=False,
+    fill_alpha=0.25,
+    **contour_kwargs,
+):
+    """Draw 2-D credible-region contours for a pair of chain variables.
+
+    Contours enclose ``levels`` of the JOINT (2-D) posterior mass, computed by
+    ArviZ's highest-density KDE (``arviz.plot_kde(..., hdi_probs=...)``). This
+    is the same convention as ``plotting.plot_contours(..., level_kind=
+    "mass2d")``, so the two may be overlaid directly. It is NOT the same as
+    that function's DEFAULT, which draws 1-sigma/2-sigma ellipses enclosing
+    39.35%/86.47% -- overlaying these contours on default ellipses makes the
+    chain look ~1.5x wider than the forecast for no physical reason.
+
+    Parameters
+    ----------
+    x, y : array-like
+        Samples for the two parameters. Either ``(chain, draw)`` or already
+        flattened; both are pooled before the KDE. Shapes must match.
+    ax : matplotlib Axes, optional
+        Target axis; defaults to the current axis.
+    levels : sequence of float, optional
+        Probability masses to enclose. Default ``(0.68, 0.95)``. Sorted
+        ascending internally (ArviZ requires it).
+    colors : str or sequence, optional
+        Contour colour(s), passed through to matplotlib.
+    linestyles, linewidths : optional
+        Per-level line styling.
+    fill : bool, optional
+        If True, also shade the regions (``contourf``) at ``fill_alpha``.
+    **contour_kwargs
+        Forwarded to ``arviz.plot_kde``'s ``contour_kwargs``.
+
+    Returns
+    -------
+    matplotlib Axes
+        The axis drawn on, for chaining.
+    """
+    az = _require_arviz()
+    plt = _require_matplotlib()
+
+    probs = _validate_levels(levels)
+    xa = np.asarray(x, dtype=float)
+    ya = np.asarray(y, dtype=float)
+    if xa.shape != ya.shape:
+        raise ValueError(
+            f"x and y must have the same shape, got {xa.shape} and {ya.shape}.")
+
+    if ax is None:
+        ax = plt.gca()
+
+    kwargs = dict(contour_kwargs)
+    if colors is not None:
+        kwargs["colors"] = colors
+    if linestyles is not None:
+        kwargs["linestyles"] = list(linestyles)[: len(probs)]
+    if linewidths is not None:
+        kwargs["linewidths"] = linewidths
+
+    az.plot_kde(
+        xa.reshape(-1),
+        ya.reshape(-1),
+        contour=True,
+        hdi_probs=probs,
+        contour_kwargs=kwargs,
+        contourf_kwargs={"alpha": fill_alpha if fill else 0.0},
+        ax=ax,
+    )
+    return ax
+
+
+def credible_intervals(
+    samples: Mapping[str, Any] | Any,
+    *,
+    var_names: Sequence[str],
+    levels=(0.68, 0.95),
+    chain_axis: int | None = 0,
+    draw_axis: int = 1,
+) -> dict[str, dict[float, tuple[float, float]]]:
+    """Highest-density credible intervals per variable, per level.
+
+    These are 1-D intervals -- the corner plot's DIAGONAL panels. Note the
+    asymmetry with the off-diagonals: the 68% 1-D interval is the 1-sigma
+    interval, whereas the 68% 2-D contour sits at 1.5096 sigma.
+
+    ``chain_axis``/``draw_axis`` default to ``0``/``1``, i.e. each variable's
+    samples are expected as ``(n_chains, n_draws)`` -- the convention used
+    throughout this module's ``_packed`` helpers. Chain and draw are pooled
+    into one flat array before calling ``arviz.hdi`` (a bare 2-D array is
+    read by ArviZ as ``(draw, shape)``, not ``(chain, draw)``).
+
+    Returns
+    -------
+    dict
+        ``{var_name: {level: (lower, upper)}}`` with plain floats.
+    """
+    az = _require_arviz()
+    sample_map = _as_mapping(samples, name="samples")
+    probs = _validate_levels(levels)
+
+    out: dict[str, dict[float, tuple[float, float]]] = {}
+    for name in var_names:
+        if name not in sample_map:
+            raise KeyError(f"Variable {name!r} not found in samples.")
+        arr = _as_scalar_chain_draw(
+            sample_map[name],
+            chain_axis=chain_axis,
+            draw_axis=draw_axis,
+            var_name=name,
+        )
+        per_level: dict[float, tuple[float, float]] = {}
+        for p in probs:
+            # az.hdi interprets a bare 2-D array as (draw, shape), not
+            # (chain, draw) -- pool chain and draw into one flat 1-D array
+            # so the interval is computed over all combined draws.
+            bounds = np.asarray(az.hdi(arr.reshape(-1), hdi_prob=p)).reshape(-1)
+            per_level[p] = (float(bounds[0]), float(bounds[1]))
+        out[name] = per_level
+    return out
