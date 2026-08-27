@@ -115,3 +115,75 @@ def test_credible_intervals_rejects_missing_variable():
     with pytest.raises(KeyError, match="not found"):
         credible_intervals({"a": rng.normal(size=(2, 100))},
                            var_names=["b"], levels=(0.68,))
+
+
+def _new_collections(ax, before):
+    """Collections added to ax by the most recent draw call."""
+    return ax.collections[before:]
+
+
+def test_plot_credible_contours_fill_false_is_fully_transparent():
+    """fill=False must not leave any opaque fill band on the axis."""
+    x, y = _correlated_normal()
+    fig, ax = plt.subplots()
+    try:
+        before = len(ax.collections)
+        plot_credible_contours(x, y, ax=ax, levels=(0.68, 0.95), fill=False)
+        new = _new_collections(ax, before)
+        fill_cs = new[0]
+        alphas = fill_cs.get_facecolor()[:, 3]
+        assert np.all(alphas == 0.0), f"expected all-transparent fill, got {alphas}"
+    finally:
+        plt.close(fig)
+
+
+def test_plot_credible_contours_fill_true_uses_fill_alpha():
+    """fill=True must render the fill bands at fill_alpha, not opaque."""
+    x, y = _correlated_normal()
+    fig, ax = plt.subplots()
+    try:
+        before = len(ax.collections)
+        plot_credible_contours(
+            x, y, ax=ax, levels=(0.68, 0.95), fill=True, fill_alpha=0.4
+        )
+        new = _new_collections(ax, before)
+        fill_cs = new[0]
+        alphas = fill_cs.get_facecolor()[:, 3]
+        assert np.allclose(alphas, 0.4), f"expected alpha=0.4 fill, got {alphas}"
+    finally:
+        plt.close(fig)
+
+
+def test_plot_credible_contours_applies_linestyles_and_linewidths():
+    """Requested per-level linestyles/linewidths must land on the drawn lines."""
+    x, y = _correlated_normal()
+    fig, ax = plt.subplots()
+    try:
+        before = len(ax.collections)
+        plot_credible_contours(
+            x, y, ax=ax, levels=(0.68, 0.95),
+            linestyles=("-", ":"), linewidths=(1.0, 4.0),
+        )
+        new = _new_collections(ax, before)
+        line_cs = new[-1]
+        widths = np.asarray(line_cs.get_linewidth())
+        assert 1.0 in widths and 4.0 in widths, f"got linewidths {widths}"
+        styles = line_cs.get_linestyle()
+        assert len(set(str(s) for s in styles)) > 1, f"expected varied linestyles, got {styles}"
+    finally:
+        plt.close(fig)
+
+
+def test_plot_credible_contours_applies_colors():
+    """A requested contour colour must land on the drawn contour lines."""
+    x, y = _correlated_normal()
+    fig, ax = plt.subplots()
+    try:
+        before = len(ax.collections)
+        plot_credible_contours(x, y, ax=ax, levels=(0.68, 0.95), colors="red")
+        new = _new_collections(ax, before)
+        line_cs = new[-1]
+        edgecolors = np.asarray(line_cs.get_edgecolor())
+        assert np.allclose(edgecolors[:, :3], [1.0, 0.0, 0.0]), f"got {edgecolors}"
+    finally:
+        plt.close(fig)

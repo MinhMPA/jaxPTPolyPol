@@ -1160,6 +1160,27 @@ def plot_credible_contours(
     39.35%/86.47% -- overlaying these contours on default ellipses makes the
     chain look ~1.5x wider than the forecast for no physical reason.
 
+    Two ArviZ quirks (0.23.4) are worked around here, not fixed upstream:
+
+    - ``arviz.plot_kde``'s matplotlib backend calls ``contourf`` and then,
+      whenever ``fill_last`` is falsy (its default), unconditionally
+      overwrites the resulting facecolor alphas to ``[0, 1, 1, ...]`` --
+      clobbering whatever alpha ``contourf_kwargs`` requested. We pass
+      ``fill_last=True`` to suppress that override and control the fill
+      alpha ourselves via ``contourf_kwargs["alpha"]``.
+    - ArviZ's kwarg dealiaser maps the plural matplotlib-``contour``
+      parameter names ``linestyles``/``linewidths`` onto the singular
+      ``Collection``-artist aliases ``linestyle``/``linewidth``, which
+      ``ax.contour()`` does not accept -- they are silently dropped with a
+      ``UserWarning``. So ``linestyles``/``linewidths`` are never forwarded
+      through ``contour_kwargs``; instead we apply them directly to the
+      returned line-contour artist via its ``set_linewidths``/
+      ``set_linestyles`` methods after the draw call. (If you pass
+      ``linestyle``/``linewidth``/``linestyles``/``linewidths`` yourself
+      inside ``**contour_kwargs``, they hit the same ArviZ bug and are
+      dropped -- use the explicit ``linestyles``/``linewidths`` parameters
+      instead.)
+
     Parameters
     ----------
     x, y : array-like
@@ -1173,11 +1194,18 @@ def plot_credible_contours(
     colors : str or sequence, optional
         Contour colour(s), passed through to matplotlib.
     linestyles, linewidths : optional
-        Per-level line styling.
+        Per-level line styling, applied directly to the drawn contour lines
+        (cycled if shorter than the number of drawn levels).
     fill : bool, optional
         If True, also shade the regions (``contourf``) at ``fill_alpha``.
+        If False (default), the fill is fully transparent (alpha 0).
+    fill_alpha : float, optional
+        Uniform facecolor alpha applied to every fill band when
+        ``fill=True``.
     **contour_kwargs
-        Forwarded to ``arviz.plot_kde``'s ``contour_kwargs``.
+        Forwarded to ``arviz.plot_kde``'s ``contour_kwargs`` (e.g. ``colors``
+        set via the dedicated parameter above). See the caveat above about
+        ``linestyle(s)``/``linewidth(s)`` passed this way.
 
     Returns
     -------
@@ -1200,11 +1228,8 @@ def plot_credible_contours(
     kwargs = dict(contour_kwargs)
     if colors is not None:
         kwargs["colors"] = colors
-    if linestyles is not None:
-        kwargs["linestyles"] = list(linestyles)[: len(probs)]
-    if linewidths is not None:
-        kwargs["linewidths"] = linewidths
 
+    n_before = len(ax.collections)
     az.plot_kde(
         xa.reshape(-1),
         ya.reshape(-1),
@@ -1212,8 +1237,28 @@ def plot_credible_contours(
         hdi_probs=probs,
         contour_kwargs=kwargs,
         contourf_kwargs={"alpha": fill_alpha if fill else 0.0},
+        # See docstring: without this, ArviZ forces facecolor alpha to
+        # [0, 1, 1, ...] after contourf, making fill/fill_alpha no-ops.
+        fill_last=True,
         ax=ax,
     )
+
+    # az.plot_kde(contour=True) draws exactly two new artists, in this
+    # order: the filled contourf QuadContourSet, then the line-contour
+    # QuadContourSet. Slicing from n_before (rather than assuming indices
+    # 0/1) keeps this correct when overlaid on an axis that already has
+    # artists on it -- e.g. Fisher ellipses from plot_contours.
+    new_collections = ax.collections[n_before:]
+    if len(new_collections) >= 2:
+        line_cs = new_collections[-1]
+        if linewidths is not None:
+            line_cs.set_linewidths(linewidths)
+        if linestyles is not None:
+            n_levels = len(line_cs.get_linewidth())
+            styles = list(linestyles)
+            line_cs.set_linestyles(
+                [styles[i % len(styles)] for i in range(n_levels)]
+            )
     return ax
 
 
@@ -1233,9 +1278,14 @@ def credible_intervals(
 
     ``chain_axis``/``draw_axis`` default to ``0``/``1``, i.e. each variable's
     samples are expected as ``(n_chains, n_draws)`` -- the convention used
-    throughout this module's ``_packed`` helpers. Chain and draw are pooled
-    into one flat array before calling ``arviz.hdi`` (a bare 2-D array is
-    read by ArviZ as ``(draw, shape)``, not ``(chain, draw)``).
+    throughout this module's ``_packed`` helpers. They are used ONLY to
+    validate/reshape the input via ``_as_scalar_chain_draw`` (which requires
+    strictly 2-D data); the two axes are then pooled into one flat array
+    before calling ``arviz.hdi`` (a bare 2-D array is read by ArviZ as
+    ``(draw, shape)``, not ``(chain, draw)``). Because chain and draw are
+    pooled, swapping ``chain_axis``/``draw_axis`` (e.g. ``0``/``1`` vs.
+    ``1``/``0`` on a square input) returns the IDENTICAL interval -- axis
+    order affects only the up-front shape check, never the returned bounds.
 
     Returns
     -------
