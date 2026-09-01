@@ -121,24 +121,63 @@ file genuinely must be committed, `git commit --no-verify` bypasses the hook.
 
 ## Tripwires
 
-A tripwire is a hard, exact assertion embedded in a notebook or script — a number that
-cannot drift silently. There are two kinds.
+A tripwire is an assertion embedded in a notebook or script that stops a silent drift.
+There are two kinds: recorded values, which reproduce to a stated tolerance, and
+identities, which are exact by construction.
 
-**Exact log-posterior values.** Each production notebook records the log-posterior at the
-fiducial in its configuration cell and asserts it. These are deterministic functions of
-the configuration and the cached artifacts, not of the chain, so they hold identically in
-the smoke and production branches. For example,
-`example/mcmc/mcmc_joint_PFS_BAO_CMB_BBN_LCDM.ipynb` pins:
+**Recorded log-posterior values.** Each production notebook records the log-posterior at
+the fiducial in its configuration cell. These are functions of the configuration and the
+cached artifacts, not of the chain, so they hold in both the smoke and production
+branches. For example, `example/mcmc/mcmc_joint_PFS_BAO_CMB_BBN_LCDM.ipynb` records:
 
 ```text
-log_post_joint(theta0) = -167.750608
-chi2_prof(fiducial)    = 1.082e-23
+log_post_joint(theta0) ~= -167.7510    (reproducible to ~1e-5 relative)
+chi2_prof(fiducial)     < 1e-10        (exact identity, measured ~1e-23)
 ```
 
-and the $\nu\Lambda$CDM production run pins `log_post(x0) = -173.634058` with
-`chi2_prof(fiducial) = 1.169e-23`.
+and the $\nu\Lambda$CDM production run records `log_post(x0) ~= -173.6341` with the same
+`chi2_prof` identity.
 
-```{admonition} Re-recorded 2026-08-23 — bispectrum IR-resummation flip
+```{admonition} These are recorded values, not exact assertions
+:class: important
+The absolute log-posterior reproduces only to **~1e-5 relative** (~2e-3 absolute), not
+bit-exactly. Measured 2026-08-28: re-executing
+`mcmc_joint_PFS_BAO_BBN_ns_LCDM.ipynb` with unchanged code, unchanged caches and the
+committed seed moved `log_post(x0)` from `-167.750608` to `-167.751956`. The cause is
+floating-point reduction order in the BLAS/XLA reductions, which depends on machine
+load, not on anything in the repository — the emulator was verified bit-deterministic
+across processes and the Taylor cache hash was unchanged. Because NUTS is chaotic in
+its input, a shift that small changes the trajectory even at a fixed seed, moving the
+sampled sigmas by a few tenths of a percent (Fisher sigmas, being deterministic linear
+algebra, were bit-identical).
+
+**The executable tripwires are the identities, and they are exact.** Those did not
+move and are what actually guard the pipeline:
+
+- `abs(lp0_surr - lp0) < 1e-6` — the surrogate is exact at its expansion point
+  (measured 1.7e-13 across the drift)
+- `np.isclose(lp0_joint, log_post_surr(x0), atol=1e-10)`
+- `np.isclose(lp0_joint_w, lp0_joint, atol=1e-10)` — affine reparametrisation only
+- `chi2_prof(fiducial) < 1e-10` — noiseless-mock exactness
+
+Treat a recorded value that moves by more than ~1e-2 as a real regression worth
+diagnosing; a move at the 1e-3 level with all identities still passing is
+reproduction noise. Re-record silently drifted values only alongside a statement of
+which category the move falls into.
+```
+
+**Cached production chains.** The four joint MCMC notebooks cache their production
+chains under `example/mcmc/cache/joint_*_chain_<fingerprint>.npz` (untracked), via
+`jaxptpolypol.sampler.run_chain_cached`. The fingerprint is *semantic*: it includes
+`round(lp0, 2)` — the exact log-posterior at the fiducial, recomputed live on every
+run — plus the seed, chain lengths, prior variant, sampled dimension and theory-config
+hash. It is embedded in the **filename**, so any change to the posterior or the sampler
+resolves to a different file and triggers fresh sampling; a stale chain can never be
+loaded, and smoke/production runs coexist. Delete the file to force a re-sample. The
+recorded-value and identity tripwires above always run live — only the sampling call
+itself is skipped on a cache hit.
+
+```{admonition} Provenance: re-recorded 2026-08-23 — bispectrum IR-resummation flip
 :class: note
 These values were re-recorded, in the same commit as the notebook re-execution,
 after the bispectrum default changed to IR-resummed

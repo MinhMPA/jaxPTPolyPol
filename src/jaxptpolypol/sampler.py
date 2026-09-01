@@ -10,6 +10,10 @@ Requires
 blackjax >= 1.0
 """
 
+import hashlib
+import json
+import pathlib
+
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -28,6 +32,11 @@ __all__ = [
     "run_rwmh_python",
     "run_damh_python",
     "samples_to_physical",
+    "chain_cache_key",
+    "chain_cache_path",
+    "save_chain_cache",
+    "load_chain_cache",
+    "run_chain_cached",
 ]
 
 _DEFAULT_SCAN_CHUNK = 128
@@ -1321,3 +1330,123 @@ def samples_to_physical(samples, to_physical):
     flat = samples.reshape(-1, shape[-1])
     physical = jax.vmap(to_physical)(flat)
     return physical.reshape(shape)
+
+
+# ---------------------------------------------------------------------------
+# Production-chain caching (2026-09-01).
+#
+# The joint MCMC notebooks sample live on every execution, so a purely
+# cosmetic plotting change used to cost a full ~15 min re-sample per notebook.
+# These helpers cache (samples, diagnostics) keyed by a SEMANTIC fingerprint.
+#
+# The safety design differs deliberately from the Taylor-cache guard: instead
+# of enforce-on-load, the fingerprint is embedded in the FILENAME
+# (``<tag>_chain_<key12>.npz``), so a changed config resolves to a different
+# path and is a cache MISS -- fresh sampling -- never a warn-and-load of stale
+# draws (the bk_do_irres lesson) and never a diagnostic run overwriting a
+# production artifact (the 2026-08-04 output-path lesson; different configs
+# coexist as different files). The full canonical config is additionally
+# stored inside the file and re-verified at load, so a hand-built or renamed
+# path hard-fails on mismatch rather than loading.
+#
+# Fingerprint recommendation for posterior chains: include the sampler
+# settings (seed, lengths, chains), the prior variant, the sampled dimension,
+# the theory-config hash -- and ``round(lp0, 2)``, the live-computed exact
+# log-posterior at the fiducial. lp0 depends on every ingredient of the
+# posterior (theory, data, covariance, priors, external blocks), so anything
+# that moves the target moves the fingerprint even when no named switch
+# changed; 2 decimals absorb the documented ~1e-3 cross-environment
+# reproducibility of the absolute value (docs/source/testing.md).
+# ---------------------------------------------------------------------------
+
+_CHAIN_CACHE_SCALARS = (str, int, float, bool, type(None))
+
+
+def _canonical_chain_config(config):
+    """Canonical JSON string of a chain-cache fingerprint config.
+
+    A flat mapping of scalars only; any other value raises ``TypeError``
+    because it could not round-trip as a stable fingerprint.
+    """
+    items = {}
+    for key, val in dict(config).items():
+        if not isinstance(key, str):
+            raise TypeError(f"config keys must be str, got {type(key).__name__}")
+        if not isinstance(val, _CHAIN_CACHE_SCALARS):
+            raise TypeError(
+                f"chain-cache config value for {key!r} must be a scalar "
+                f"(str/int/float/bool/None), got {type(val).__name__}")
+        items[key] = val
+    return json.dumps(items, sort_keys=True)
+
+
+def chain_cache_key(config):
+    """sha256 hex digest of the canonical config."""
+    return hashlib.sha256(_canonical_chain_config(config).encode()).hexdigest()
+
+
+def chain_cache_path(cache_dir, tag, config):
+    """Cache path with the fingerprint embedded in the filename.
+
+    Different configs resolve to different files, so a config change is a
+    cache miss (fresh sampling), never a silent reuse, and smoke/production
+    runs coexist.
+    """
+    return pathlib.Path(cache_dir) / f"{tag}_chain_{chain_cache_key(config)[:12]}.npz"
+
+
+def save_chain_cache(path, samples, *, config, diagnostics=None):
+    """Persist ``(samples, diagnostics)`` with the canonical config stamped."""
+    payload = {
+        "samples": np.asarray(samples),
+        "__config_json": np.asarray(_canonical_chain_config(config)),
+    }
+    for key, val in (diagnostics or {}).items():
+        payload[f"diag__{key}"] = np.asarray(val)
+    path = pathlib.Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(path, **payload)
+
+
+def load_chain_cache(path, *, config):
+    """``(samples, diagnostics)`` if ``path`` exists and matches ``config``.
+
+    Returns ``None`` when the file is absent (the caller samples). A present
+    file whose stored config differs raises -- possible only for a path not
+    produced by :func:`chain_cache_path`, since the fingerprint is in the
+    filename there.
+    """
+    path = pathlib.Path(path)
+    if not path.exists():
+        return None
+    with np.load(path, allow_pickle=False) as z:
+        stored = z["__config_json"].item()
+        expected = _canonical_chain_config(config)
+        if stored != expected:
+            raise RuntimeError(
+                f"chain cache {path} was written under a different config.\n"
+                f"  stored:   {stored}\n  expected: {expected}\n"
+                "Delete the file to re-sample.")
+        samples = np.array(z["samples"])
+        diagnostics = {k[len("diag__"):]: np.array(z[k])
+                       for k in z.files if k.startswith("diag__")}
+    return samples, diagnostics
+
+
+def run_chain_cached(sampler_fn, *args, cache_path, cache_config, **kwargs):
+    """Load a cached chain, or run ``sampler_fn`` and cache its result.
+
+    Only the sampling call is ever skipped: every assertion and tripwire a
+    caller evaluates before or after this call stays on the live path.
+    """
+    cached = load_chain_cache(cache_path, config=cache_config)
+    if cached is not None:
+        print(f"[chain cache] loaded {pathlib.Path(cache_path).name} "
+              f"shape {tuple(cached[0].shape)}; delete the file to re-sample.")
+        return cached
+    samples, diagnostics = sampler_fn(*args, **kwargs)
+    save_chain_cache(cache_path, samples, config=cache_config,
+                     diagnostics=diagnostics)
+    print(f"[chain cache] wrote {pathlib.Path(cache_path).name}")
+    return samples, diagnostics
+

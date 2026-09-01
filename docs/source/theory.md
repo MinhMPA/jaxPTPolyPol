@@ -516,3 +516,15 @@ described above, not a bug.
 Both sides finish by projecting to derived parameters
 $(\Omega_m, \sigma_8, H_0\,[, \Sigma m_\nu])$ through the same map
 ({doc}`api/derived`), so the reported constraints are directly comparable.
+
+Credible regions in the corner plots enclose 68% and 95% of the **joint** 2-D
+posterior mass ($\Delta\chi^2 = 2.279$ and $5.991$ for two parameters, i.e.
+$1.510\,\sigma$ and $2.448\,\sigma$). The 1-D intervals quoted on the diagonal enclose
+the same masses in one dimension ($0.994\,\sigma$ and $1.960\,\sigma$ — approximately
+$1\sigma$ and $2\sigma$). The two differ because probability mass in the tails of a
+2-D Gaussian grows with the area of the annulus, so a fixed $\sigma$ multiple captures
+less mass in two dimensions than in one. Overlaying a chain's 2-D HDI contour
+(`chain_analysis.plot_credible_contours`) on a Fisher ellipse drawn with the wrong
+convention overstates the joint region's width by up to $\sim 1.5\times$ at the 68%
+level and $\sim 1.2\times$ at 95% — see {doc}`usage` for the `level_kind="mass2d"`
+calling convention that keeps the two sides consistent.

@@ -601,3 +601,57 @@ chunking keeps peak memory bounded on a chain of hundreds of thousands of sample
 Read the resulting table with {doc}`theory`'s methodology rule in hand: widths and
 correlations are the quantitative gates, and mean-level agreement should be checked
 against the mode, not the raw chain mean.
+
+### Credible contours: 1-D and 2-D are different numbers
+
+The corner plots above mix two conventions, and confusing them is the most common way
+to make a posterior look wrong:
+
+- **Diagonal panels** show a 1-D marginal. Its 68% interval sits at $0.9945\,\sigma$ —
+  for practical purposes, the $1\sigma$ interval.
+- **Off-diagonal panels** show a 2-D joint region. Its 68% contour sits at
+  $1.5096\,\sigma$, not $1\sigma$ — a $1\sigma$ *ellipse* encloses only 39.35% of the
+  2-D mass, and a $2\sigma$ ellipse only 86.47%.
+
+`jaxptpolypol.plotting.credible_level_nstd(mass, ndim=...)` is the single conversion
+both sides use:
+
+```python
+from jaxptpolypol.plotting import credible_level_nstd
+
+credible_level_nstd(0.68, ndim=1)   # 0.9945  -- diagonal panels
+credible_level_nstd(0.68, ndim=2)   # 1.5096  -- off-diagonal panels
+```
+
+The derived-parameter corner just above overlays chain contours on Fisher ellipses this
+way: both must mean 2-D mass, so the Fisher side is drawn with `level_kind="mass2d"`
+explicitly, matching `plot_credible_contours`'s HDI convention.
+
+```python
+from jaxptpolypol.chain_analysis import credible_intervals, plot_credible_contours
+from jaxptpolypol.plotting import plot_contours
+
+j, i = 0, 1   # any off-diagonal panel of the corner above
+plot_credible_contours(derived_flat[:, j], derived_flat[:, i], ax=ax,
+                        levels=(0.68, 0.95), colors="royalblue")       # chain, 2-D HDI
+plot_contours(F_derived, derived_fid, np.array([j, i]), cls=[0.68, 0.95],
+              level_kind="mass2d", ax=ax, color="crimson", ls="--")     # Fisher, matched
+
+ci = credible_intervals(                                                # diagonal panels
+    {name: derived_flat[:, n] for n, name in enumerate(DERIVED_NAMES)},
+    var_names=list(DERIVED_NAMES), levels=(0.68, 0.95),
+    chain_axis=None, draw_axis=0)
+```
+
+`credible_intervals` pools all chains before computing each interval, so its result is
+axis-order-invariant; `chain_axis`/`draw_axis` only drive the up-front shape validation.
+
+```{warning}
+`plot_contours`'s **default** is `level_kind="sigma1d"` with `cls=[0.6827, 0.9545]`,
+which draws $1\sigma$/$2\sigma$ ellipses enclosing 39.35%/86.47% of the 2-D
+probability, not 68%/95%. The default is retained because every committed notebook
+figure was produced with it, and a regression test pins it. Pass
+`level_kind="mass2d"` for genuine 68%/95% joint credible ellipses, and never overlay
+the two conventions in one panel — doing so overstates the joint region's width by up
+to ~1.5x at the 68% level and ~1.2x at 95%.
+```

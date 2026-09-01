@@ -28,6 +28,7 @@ full = [
     "cosmopower-jax",
     "ps_1loop_jax",
     "quadax",
+    "arviz",
     "matplotlib",
     "numdifftools",
 ]
