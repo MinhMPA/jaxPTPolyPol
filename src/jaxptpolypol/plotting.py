@@ -221,6 +221,7 @@ def plot_Gaussian(
     ind,
     cl=0.9545,
     ax=None,
+    density=False,
     **kwargs,
 ):
     """Plot 1-d marginalized Gaussian for a single parameter.
@@ -236,6 +237,14 @@ def plot_Gaussian(
     cl : float
         Confidence level for the x-axis range.
     ax : matplotlib Axes, optional
+    density : bool, optional
+        If True, draw the normalized pdf (peak ``1/(sigma*sqrt(2*pi))``) so the
+        curve overlays a ``density=True`` histogram at the correct height.
+        Default False keeps the historical unnormalized peak-1 curve, so every
+        existing figure is unchanged -- but overlaying THAT on a density
+        histogram makes the curve look flat (e.g. ~800x too short for
+        sigma ~ 5e-4): pass ``density=True`` whenever a density histogram
+        shares the axis.
     **kwargs
         Passed to ``ax.plot``.
     """
@@ -261,6 +270,8 @@ def plot_Gaussian(
     x = np.linspace(mu - halfspan, mu + halfspan, 100)
     if sigma > 0.0:
         y = np.exp(-0.5 * ((x - mu) / sigma) ** 2)
+        if density:
+            y = y / (sigma * np.sqrt(2.0 * np.pi))
     else:
         y = np.zeros_like(x)
         y[len(y) // 2] = 1.0

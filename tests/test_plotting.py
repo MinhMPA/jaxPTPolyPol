@@ -126,3 +126,35 @@ def test_plot_contours_rejects_unknown_level_kind():
                           level_kind="nonsense", ax=ax)
     finally:
         plt.close(fig)
+
+
+def test_plot_gaussian_default_peak_is_one_backward_compat():
+    """PIN: the default stays the historical unnormalized peak-1 curve, so no
+    existing figure changes."""
+    fisher = np.diag([4.0])
+    pos = np.array([0.0])
+    fig, ax = plt.subplots()
+    try:
+        plot_Gaussian(fisher, pos, 0, ax=ax)
+        y = ax.lines[-1].get_ydata()
+        assert float(np.max(y)) == pytest.approx(1.0, abs=1e-3)  # even x-grid misses the exact peak by ~5e-4
+    finally:
+        plt.close(fig)
+
+
+def test_plot_gaussian_density_true_is_normalized_pdf():
+    """density=True must draw the actual pdf: peak 1/(sigma*sqrt(2*pi)) and
+    ~0.9973 of unit area inside the plotted +/-3 sigma window -- so it overlays
+    a density=True histogram at the right height (the flat-diagonal bug)."""
+    fisher = np.diag([4.0])            # sigma = 0.5
+    pos = np.array([0.0])
+    fig, ax = plt.subplots()
+    try:
+        plot_Gaussian(fisher, pos, 0, ax=ax, density=True)
+        line = ax.lines[-1]
+        x, y = line.get_xdata(), line.get_ydata()
+        expected_peak = 1.0 / (0.5 * np.sqrt(2.0 * np.pi))
+        assert float(np.max(y)) == pytest.approx(expected_peak, rel=1e-3)  # same grid effect
+        assert float(np.trapz(y, x)) == pytest.approx(0.9973, abs=2e-3)
+    finally:
+        plt.close(fig)

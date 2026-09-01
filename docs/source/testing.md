@@ -166,6 +166,17 @@ reproduction noise. Re-record silently drifted values only alongside a statement
 which category the move falls into.
 ```
 
+**Cached production chains.** The four joint MCMC notebooks cache their production
+chains under `example/mcmc/cache/joint_*_chain_<fingerprint>.npz` (untracked), via
+`jaxptpolypol.sampler.run_chain_cached`. The fingerprint is *semantic*: it includes
+`round(lp0, 2)` — the exact log-posterior at the fiducial, recomputed live on every
+run — plus the seed, chain lengths, prior variant, sampled dimension and theory-config
+hash. It is embedded in the **filename**, so any change to the posterior or the sampler
+resolves to a different file and triggers fresh sampling; a stale chain can never be
+loaded, and smoke/production runs coexist. Delete the file to force a re-sample. The
+recorded-value and identity tripwires above always run live — only the sampling call
+itself is skipped on a cache hit.
+
 ```{admonition} Provenance: re-recorded 2026-08-23 — bispectrum IR-resummation flip
 :class: note
 These values were re-recorded, in the same commit as the notebook re-execution,
