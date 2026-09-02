@@ -17,114 +17,6 @@ import numpy as np
 __all__ = ["CosmoEmulator", "PS1LoopModel", "BispectrumTreeModel"]
 
 
-def _contains_tracer(*values) -> bool:
-    """Return ``True`` when any leaf is currently being traced by JAX."""
-    return any(
-        isinstance(leaf, jax.core.Tracer)
-        for value in values
-        for leaf in jax.tree_util.tree_leaves(value)
-    )
-
-
-def _triangle_closure_tolerance(k1_np, k2_np, k3_np) -> float:
-    """Match the triangle-builder closure tolerance on concrete arrays."""
-    scale = float(max(np.max(k1_np), np.max(k2_np), np.max(k3_np), 1.0))
-    return 10.0 * np.finfo(np.float64).eps * scale
-
-
-def _validate_triangle_eager(k1, k2, k3) -> None:
-    """Raise the upstream triangle-geometry errors on concrete arrays."""
-    k1_np, k2_np, k3_np = np.broadcast_arrays(
-        np.asarray(k1, dtype=float),
-        np.asarray(k2, dtype=float),
-        np.asarray(k3, dtype=float),
-    )
-
-    if np.any(k1_np <= 0) or np.any(k2_np <= 0) or np.any(k3_np <= 0):
-        raise ValueError("All triangle side lengths must be strictly positive.")
-
-    tol = _triangle_closure_tolerance(k1_np, k2_np, k3_np)
-    valid = (
-        (k1_np + k2_np >= k3_np - tol)
-        & (k1_np + k3_np >= k2_np - tol)
-        & (k2_np + k3_np >= k1_np - tol)
-    )
-    if not np.all(valid):
-        raise ValueError("Input wavenumbers do not satisfy the triangle inequality.")
-
-
-def _validate_triangle_jax_safe(_, k1, k2, k3) -> None:
-    """Preserve eager validation while allowing traced triangle arrays under ``jit``."""
-    if _contains_tracer(k1, k2, k3):
-        jax.debug.callback(_validate_triangle_eager, k1, k2, k3)
-        return
-    _validate_triangle_eager(k1, k2, k3)
-
-
-def _needs_ndens_jax_safe(_, stoch) -> bool:
-    """Require ``ndens`` whenever stochastic amplitudes may be traced at runtime."""
-
-    def _value_needs_ndens(value) -> bool:
-        if value is None:
-            return False
-        if _contains_tracer(value):
-            return True
-        return bool(np.any(np.asarray(value) != 0.0))
-
-    return any(_value_needs_ndens(value) for value in stoch.values())
-
-
-def _get_ndens_jax_safe(_, params, stoch):
-    """Mirror the upstream logic without converting traced stochastic values to NumPy."""
-    has_explicit_stoch = (
-        "stoch" in params
-        or "P_shot" in params
-        or "Pshot" in params
-        or "B_shot" in params
-        or "Bshot" in params
-        or "A_shot" in params
-        or "Ashot" in params
-    )
-    if not has_explicit_stoch:
-        return None
-    if "ndens" in params:
-        return jnp.asarray(params["ndens"], dtype=float)
-    if _needs_ndens_jax_safe(None, stoch):
-        raise KeyError("params['ndens'] is required when bispectrum stochasticity is enabled.")
-    return None
-
-
-def _get_bk_shot_jax_safe(_, params):
-    """Return bispectrum shot noise without Python branching on traced values."""
-    stoch = params.get("stoch", {})
-
-    if "B_shot" in stoch:
-        bshot = stoch["B_shot"]
-    elif "Bshot" in stoch:
-        bshot = stoch["Bshot"]
-    elif "Bshot" in params:
-        bshot = params["Bshot"]
-    else:
-        bshot = 0.0
-
-    bshot_arr = jnp.asarray(bshot, dtype=float)
-    if _contains_tracer(bshot_arr):
-        if "ndens" not in params:
-            raise KeyError(
-                "params['ndens'] is required when bispectrum shot noise is enabled."
-            )
-        ndens = jnp.asarray(params["ndens"], dtype=float)
-        return jnp.where(bshot_arr == 0.0, 0.0, bshot_arr / ndens**2)
-
-    if float(np.asarray(bshot_arr)) == 0.0:
-        return 0.0
-
-    if "ndens" not in params:
-        raise KeyError("params['ndens'] is required when bispectrum shot noise is enabled.")
-
-    return bshot_arr / jnp.asarray(params["ndens"], dtype=float) ** 2
-
-
 # ---------------------------------------------------------------------------
 # Emulator wrapper
 # ---------------------------------------------------------------------------
@@ -317,19 +209,11 @@ class BispectrumTreeModel:
         if "k_nl_rsd" in init_sig.parameters:
             init_kwargs["k_nl_rsd"] = k_nl_rsd
         self.model = BispectrumTree(**init_kwargs)
-        self.model._validate_triangle = _validate_triangle_jax_safe.__get__(
-            self.model, type(self.model)
-        )
-        self.model._needs_ndens = _needs_ndens_jax_safe.__get__(
-            self.model, type(self.model)
-        )
-        self.model._get_ndens = _get_ndens_jax_safe.__get__(
-            self.model, type(self.model)
-        )
-        if hasattr(self.model, "_get_bk_shot"):
-            self.model._get_bk_shot = _get_bk_shot_jax_safe.__get__(
-                self.model, type(self.model)
-            )
+        # The jax-safe shims that used to be monkey-patched here
+        # (_validate_triangle/_get_ndens, plus the round-off closure
+        # tolerance) moved upstream into ps_1loop_jax.bs_tree (PR #5,
+        # jit-safe-validation): the bare class is now trace-safe with
+        # identical semantics, so no instance patching is needed.
 
     def get_bk0(
         self,

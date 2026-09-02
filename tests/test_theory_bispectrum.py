@@ -13,7 +13,19 @@ from jaxptpolypol.covariance import (
     gaussian_bispectrum_covariance,
     gaussian_joint_covariance_multibin,
 )
-from jaxptpolypol.model import BispectrumTreeModel, _validate_triangle_eager
+from ps_1loop_jax.bs_tree import BispectrumTree
+
+from jaxptpolypol.model import BispectrumTreeModel
+
+# Validation (including the round-off closure tolerance) now lives upstream in
+# ps_1loop_jax.bs_tree; these tests pin that contract through the bare class.
+if not hasattr(BispectrumTree, "_validate_triangle_eager"):  # pragma: no cover
+    pytest.skip(
+        "ps_1loop_jax predates the upstream jit-safe validation fix "
+        "(ps_1loop_jax-for-pfs PR #5); update it to run these tests.",
+        allow_module_level=True,
+    )
+_validate_triangle_eager = BispectrumTree()._validate_triangle_eager
 from jaxptpolypol.params import (
     CosmoParams,
     FullShapeSurveyParams,
@@ -554,3 +566,34 @@ def test_bispectrum_irres_default_on_and_values_pinned():
         off = float(model_off.model.get_bk_tree(*tri, 0.3, 0.7, pk_data, params))
         assert on == pytest.approx(pin, rel=1e-8)    # (b) pinned values
         assert on != off                             # (c) the flag acts
+
+
+def test_model_wrappers_are_registered_pytrees():
+    """All three wrappers must stay registered JAX pytrees, as the module
+    docstring promises ("passed through jax.jit boundaries as static
+    arguments").
+
+    Regression guard: a shim-removal edit once silently deleted
+    CosmoEmulator's @register_pytree_node_class decorator and the entire
+    suite still passed, because nothing exercised the registration.
+
+    Discriminator, chosen so no instance has to be constructed (CosmoEmulator
+    needs emulator files, PS1LoopModel builds PT matrices): an UNREGISTERED
+    class flattens to itself as a single opaque leaf, whereas a REGISTERED one
+    makes JAX dispatch into the class's own tree_flatten -- which, on a bare
+    object.__new__ instance, raises from inside that method. Either outcome
+    other than "flattened to a bare leaf" proves registration.
+    """
+    import jax
+    from jaxptpolypol.model import CosmoEmulator, PS1LoopModel, BispectrumTreeModel
+
+    for cls in (CosmoEmulator, PS1LoopModel, BispectrumTreeModel):
+        obj = object.__new__(cls)
+        try:
+            leaves, _ = jax.tree_util.tree_flatten(obj)
+        except Exception:
+            continue  # JAX dispatched into cls.tree_flatten => registered
+        assert leaves != [obj], (
+            f"{cls.__name__} flattened as an opaque leaf -- it is NOT a "
+            "registered pytree (missing @jax.tree_util.register_pytree_node_class?)"
+        )
