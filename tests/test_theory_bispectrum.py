@@ -597,3 +597,25 @@ def test_model_wrappers_are_registered_pytrees():
             f"{cls.__name__} flattened as an opaque leaf -- it is NOT a "
             "registered pytree (missing @jax.tree_util.register_pytree_node_class?)"
         )
+
+
+def test_missing_upstream_capability_raises_actionable_importerror(monkeypatch):
+    """The guard must fail fast at construction, not deep inside a run.
+
+    Against an older ps_1loop_jax the symptoms are a ValueError on grid-edge
+    triangles or a TracerArrayConversionError under jit -- both surfacing only
+    after a notebook has spent minutes building emulators. Simulate the old
+    package by emptying FEATURES and require a named, actionable error.
+    """
+    import ps_1loop_jax
+    from jaxptpolypol import model as model_mod
+
+    monkeypatch.setattr(ps_1loop_jax, "FEATURES", frozenset(), raising=False)
+    with pytest.raises(ImportError, match="bs_tree_jit_safe_validation"):
+        model_mod._require_jit_safe_bs_tree()
+
+
+def test_capability_guard_passes_against_current_upstream():
+    from jaxptpolypol import model as model_mod
+
+    model_mod._require_jit_safe_bs_tree()  # must not raise

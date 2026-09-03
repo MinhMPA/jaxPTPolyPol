@@ -14,7 +14,37 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+import ps_1loop_jax
+
 __all__ = ["CosmoEmulator", "PS1LoopModel", "BispectrumTreeModel"]
+
+
+def _require_jit_safe_bs_tree() -> None:
+    """Fail fast if ps_1loop_jax predates its trace-safe bispectrum validation.
+
+    This package no longer monkey-patches jax-safe shims onto BispectrumTree;
+    it relies on upstream ps_1loop_jax >= 0.4.0, where _validate_triangle and
+    _get_ndens tolerate traced inputs and triangle closure is accepted to
+    10*eps*scale. Against an older upstream the failure is silent until deep
+    in a run: eager calls raise on grid-edge triangles (4 of the 264
+    production triangles close only to ~1e-17), and jax.jit over traced
+    `triangles` raises TracerArrayConversionError -- after a notebook has
+    already spent minutes building emulators.
+
+    Gated on the capability flag rather than a version comparison: both repos
+    are used as editable installs, where importlib.metadata reports a stale
+    pyproject value, and upstream's version has regressed historically
+    (0.3.0 -> 0.1.0 via a merge). The flag states what the code can do.
+    """
+    features = getattr(ps_1loop_jax, "FEATURES", frozenset())
+    if "bs_tree_jit_safe_validation" not in features:
+        raise ImportError(
+            "jaxPTPolyPol requires ps_1loop_jax with trace-safe bispectrum "
+            "validation (>= 0.4.0), but the installed ps_1loop_jax does not "
+            "advertise 'bs_tree_jit_safe_validation'. Update ps_1loop_jax "
+            "(ps_1loop_jax-for-pfs PR #5 / tag v0.4.0). Without it, jax.jit "
+            "over the bispectrum fails and grid-edge triangles raise."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +238,7 @@ class BispectrumTreeModel:
         }
         if "k_nl_rsd" in init_sig.parameters:
             init_kwargs["k_nl_rsd"] = k_nl_rsd
+        _require_jit_safe_bs_tree()
         self.model = BispectrumTree(**init_kwargs)
         # The jax-safe shims that used to be monkey-patched here
         # (_validate_triangle/_get_ndens, plus the round-off closure
