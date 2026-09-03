@@ -26,7 +26,9 @@ full = [
     # which reads the Planck .clik likelihoods through it.
     "clipy-like",
     "cosmopower-jax",
-    "ps_1loop_jax",
+    "ps_1loop_jax>=0.4.0",  # trace-safe bispectrum validation; the real gate
+                        # is the FEATURES flag checked in model.py --
+                        # editable installs report a stale version.
     "quadax",
     "arviz",
     "matplotlib",
