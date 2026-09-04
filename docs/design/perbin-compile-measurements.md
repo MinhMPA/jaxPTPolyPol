@@ -2019,7 +2019,9 @@ that claim:
 
 * The search was for the **prefixed** forms `0.1457`, `0.0986`, `< 0.1275`,
   `< 0.0788`. The bare strings `0.1275`, `0.0788` and `0.0986` also occur in
-  unrelated tracked files (a `b1` sigma in `fisher_multibin_nuLCDM_AP.ipynb`, the
+  unrelated tracked files (a `b1` sigma in `fisher_multibin_nuLCDM_AP.ipynb` [retired
+  2026-09-04 as redundant with `fisher_multibin_nuLCDM_AP_PB.ipynb`, which reports the
+  P-only column alongside P+B and P+B+BAO], the
   `nulcdm_gate_spec_means*.json` chain summaries, `.remember` logs) — coincidental
   substrings, none of them a stale upper limit.
 * The tool was **`command grep -rIn`** over the working tree with `.git`
